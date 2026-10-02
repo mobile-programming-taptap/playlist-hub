@@ -42,16 +42,16 @@ SEEDS = [
     ('Thinking Out Loud', 'Ed Sheeran', 'en', 'calm,warm,acoustic,rain', 'lp-EO5I60KA'),
     ('Someone Like You', 'Adele', 'en', 'calm,sad,ballad,rain,night', 'hLQl3WQQoQ0'),
     ('Make You Feel My Love', 'Adele', 'en', 'calm,warm,ballad,rain', '0put0_a--Ng'),
-    ('River Flows in You', 'Yiruma', 'none', 'calm,piano,instrumental,study,rain,night', ''),
-    ('Kiss the Rain', 'Yiruma', 'none', 'calm,piano,instrumental,study,rain,night', ''),
+    ('River Flows in You', 'Yiruma', 'none', 'calm,piano,instrumental,study,rain,night', '7maJOI3QMu0'),
+    ('Kiss the Rain', 'Yiruma', 'none', 'calm,piano,instrumental,study,rain,night', 'imGaOIm5HOk'),
     ('May Be', 'Yiruma', 'none', 'calm,piano,instrumental,study,night', ''),
     ('Love Me', 'Yiruma', 'none', 'calm,piano,instrumental,study,night', ''),
     ('Comptine d’un autre été: L’après-midi', 'Yann Tiersen', 'none', 'calm,piano,instrumental,study,rain', ''),
-    ('Nuvole bianche', 'Ludovico Einaudi', 'none', 'calm,piano,instrumental,study,night', ''),
+    ('Nuvole bianche', 'Ludovico Einaudi', 'none', 'calm,piano,instrumental,study,night', 'PhXEL2FRSag'),
     ('Una mattina', 'Ludovico Einaudi', 'none', 'calm,piano,instrumental,study,rain', ''),
     ('Divenire', 'Ludovico Einaudi', 'none', 'calm,piano,instrumental,study,night', ''),
     ('Experience', 'Ludovico Einaudi', 'none', 'energetic,piano,instrumental,study,drive', ''),
-    ('One Summer’s Day', 'Joe Hisaishi', 'none', 'calm,piano,instrumental,study,rain', ''),
+    ('One Summer’s Day', 'Joe Hisaishi', 'none', 'calm,piano,instrumental,study,rain', 'TK1Ij_-mank'),
     ('Summer', 'Joe Hisaishi', 'none', 'bright,piano,instrumental,study,drive', ''),
 ]
 ALIASES = {'Spring Day': ['봄날'], 'Palette': ['팔레트'], 'Through the Night': ['밤편지'],
@@ -80,18 +80,18 @@ def main():
     seen = {(t['seedTitle'], t['seedArtist']): t for t in existing}
     result = []
     for title, artist, language, tags, video in SEEDS:
-        if (title, artist) in seen and correct_title(seen[(title, artist)]['title'], title):
-            result.append(seen[(title, artist)])
-            continue
         titles = [title] + ALIASES.get(title, [])
         query = '(' + ' OR '.join(f'recording:"{name}"' for name in titles) + f') AND artist:"{artist}"'
         try:
-            data = fetch('https://musicbrainz.org/ws/2/recording/?' + urllib.parse.urlencode({'query': query, 'fmt': 'json', 'limit': 10}))
+            if (title, artist) in seen:
+                # Preserve recording IDs when refreshing saved catalogue facts.
+                recording = fetch('https://musicbrainz.org/ws/2/recording/' + seen[(title, artist)]['id'] + '?inc=artist-credits&fmt=json')
+                data = {'recordings': [recording]}
+            else:
+                data = fetch('https://musicbrainz.org/ws/2/recording/?' + urllib.parse.urlencode({'query': query, 'fmt': 'json', 'limit': 10}))
             candidates = [r for r in data.get('recordings', []) if correct_title(r['title'], title) and not r.get('video') and not any(word in r.get('disambiguation', '').lower() for word in ('live', 'remix', 'instrumental', 'karaoke', 'cover', 'atmos')) and normalized(artist) in normalized(' '.join(a.get('name', '') for a in r.get('artist-credit', []) if isinstance(a, dict)))]
             if not candidates:
-                print('NEEDS REVIEW:', title, artist, flush=True)
-                time.sleep(1.1)
-                continue
+                raise ValueError('Recording needs review: ' + title + ' / ' + artist)
             recording = candidates[0]
             # YouTube oEmbed is used only to validate a hand-picked playback link.
             # Its title, author and thumbnail are never stored or used for recommendations.
@@ -103,12 +103,13 @@ def main():
                     video = ''
             track = dict(id=recording['id'], title=recording['title'], artist=''.join(a.get('name', '') + a.get('joinphrase', '') for a in recording['artist-credit'] if isinstance(a, dict)), language=language, tags=tags.split(','), youtubeVideoId=video, source='MusicBrainz', sourceUrl=f'https://musicbrainz.org/recording/{recording["id"]}', license='CC0-1.0', licenseReference='https://musicbrainz.org/doc/About/Data_License', tagsSource='TapTap editorial sample', aiUseAllowed=True, checkedAt=datetime.datetime.now(datetime.timezone.utc).isoformat(), seedTitle=title, seedArtist=artist)
             result.append(track)
-            destination.write_text(json.dumps(result, ensure_ascii=False, indent=2) + '\n')
             print('VERIFIED:', track['title'], '/', track['artist'], flush=True)
         except Exception as error:
-            print('FAILED:', title, type(error).__name__, flush=True)
+            raise RuntimeError('Verification failed for ' + title + '; previous catalogue remains unchanged') from error
         time.sleep(1.1)
-    destination.write_text(json.dumps(result, ensure_ascii=False, indent=2) + '\n')
+    temporary = destination.with_suffix('.json.tmp')
+    temporary.write_text(json.dumps(result, ensure_ascii=False, indent=2) + '\n')
+    temporary.replace(destination)
     print(f'{len(result)} verified recordings saved.', flush=True)
 
 
