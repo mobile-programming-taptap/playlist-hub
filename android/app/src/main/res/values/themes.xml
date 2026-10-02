@@ -1,9 +1,12 @@
-<resources xmlns:tools="http://schemas.android.com/tools">
-    <!-- Base application theme. -->
-    <style name="Base.Theme.TapTap" parent="Theme.Material3.DayNight.NoActionBar">
-        <!-- Customize your light theme here. -->
-        <!-- <item name="colorPrimary">@color/my_light_primary</item> -->
+<resources>
+    <style name="Theme.TapTap" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/accent</item><item name="colorOnPrimary">@color/on_accent</item>
+        <item name="colorSecondary">@color/accent</item><item name="colorSurface">@color/surface</item>
+        <item name="colorOnSurface">@color/ink</item><item name="android:colorBackground">@color/background</item>
+        <item name="android:windowLightStatusBar">true</item><item name="android:fontFamily">sans</item>
+        <item name="android:navigationBarColor">@color/background</item>
     </style>
-
-    <style name="Theme.TapTap" parent="Base.Theme.TapTap" />
+    <style name="TapTap.Outlined" parent="Widget.Material3.Button.OutlinedButton">
+        <item name="android:minHeight">48dp</item><item name="cornerRadius">16dp</item>
+    </style>
 </resources>
