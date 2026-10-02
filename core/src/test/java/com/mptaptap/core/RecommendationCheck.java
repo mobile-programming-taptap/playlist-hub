@@ -32,6 +32,12 @@ public final class RecommendationCheck {
         feedback.put(tracks.get(8).id, 1);
         assert Recommender.recommend(tracks, conditions, feedback, "basic").tracks.get(0).track.id.equals(tracks.get(8).id);
         assert Recommender.parse("신나는 곡은 빼고 잔잔한 곡").excludedTags.contains("energetic");
+        assert Recommender.parse("가사 없는 곡은 빼고").excludedTags.contains("instrumental");
+        Recommender.Result vocals = Recommender.recommend(tracks, Recommender.parse("no instrumental"), feedback, "basic");
+        assert vocals.tracks.size() == 3;
+        assert vocals.tracks.stream().allMatch(p -> !p.track.language.equals("none"));
+        assert Recommender.parse("K pop").tags.equals(Arrays.asList("kpop"));
+        assert Recommender.recommend(tracks, Recommender.parse("일본어 노래"), feedback, "basic").tracks.isEmpty();
         tracks.get(0).source = "Spotify";
         assert Recommender.recommend(tracks, conditions, feedback, "basic").tracks.stream().noneMatch(p -> p.track.id.equals(tracks.get(0).id));
         boolean rejected = false;
@@ -39,6 +45,6 @@ public final class RecommendationCheck {
         assert rejected;
         conditions.language = "fr";
         try { Recommender.validate(conditions); throw new AssertionError("Unknown language accepted"); } catch (IllegalArgumentException expected) { }
-        System.out.println("PASS: real catalogue boundary, 8 picks, instrumental filter, dislike exclusion/undo, like ranking, negation and input validation.");
+        System.out.println("PASS: catalogue source boundary, 8 picks, vocal/unsupported language filters, dislike exclusion/undo, like ranking, negation and input validation.");
     }
 }

@@ -26,8 +26,8 @@ public final class Recommender {
             {"sad", "감성적인", "슬픈|슬프|우울|이별|감성|sad"},
             {"acoustic", "어쿠스틱", "어쿠스틱|acoustic"},
             {"ballad", "발라드", "발라드|ballad"},
-            {"kpop", "K-pop", "케이팝|k.?pop|아이돌"},
-            {"pop", "팝", "(?<![a-z-])pop|팝송|팝 음악"},
+            {"kpop", "K-pop", "케이팝|k[ -]?pop|아이돌"},
+            {"pop", "팝", "(?<!k[ -])(?<![a-z-])pop|팝송|팝 음악"},
             {"rock", "록", "락|록|rock"},
             {"piano", "피아노", "피아노|piano"},
             {"instrumental", "가사 없는", "가사\\s*없는|가사\\s*없이|보컬\\s*없는|연주곡|instrumental|no vocals"},
@@ -77,9 +77,8 @@ public final class Recommender {
             while (matcher.find()) {
                 String tail = input.substring(matcher.end(), Math.min(input.length(), matcher.end() + 15));
                 String head = input.substring(Math.max(0, matcher.start() - 4), matcher.start());
-                boolean negative = !word.getKey().equals("instrumental") &&
-                    (tail.matches("^[은는을를가이\\s]*(?:음악|노래|곡|건)?[은는을를\\s]*(?:빼|제외|말고|싫|아니|없).*" )
-                    || head.matches(".*(?:no |not )$"));
+                boolean negative = tail.matches("^[은는을를가이\\s]*(?:음악|노래|곡|건)?[은는을를\\s]*(?:빼|제외|말고|싫|아니|없).*" )
+                    || head.matches(".*(?:no |not )$");
                 List<String> target = negative ? c.excludedTags : c.tags;
                 if (!target.contains(word.getKey())) target.add(word.getKey());
             }
@@ -87,6 +86,7 @@ public final class Recommender {
         c.tags.removeAll(c.excludedTags);
         if (input.matches(".*(한국어|한국 노래|한국곡|korean).*")) c.language = "ko";
         else if (input.matches(".*(영어|영미|english).*")) c.language = "en";
+        else if (input.matches(".*(일본어|일본 노래|중국어|스페인어|프랑스어|불어|독일어|j.?pop|japanese|chinese|spanish|french|german).*")) c.language = "unsupported";
         if (c.tags.contains("instrumental")) c.language = "none";
         return c;
     }
@@ -94,7 +94,7 @@ public final class Recommender {
     public static Conditions validate(Conditions c) {
         if (c == null || c.tags == null || c.excludedTags == null || c.language == null
                 || !LABELS.keySet().containsAll(c.tags) || !LABELS.keySet().containsAll(c.excludedTags)
-                || !Arrays.asList("", "ko", "en", "none").contains(c.language))
+                || !Arrays.asList("", "ko", "en", "none", "unsupported").contains(c.language))
             throw new IllegalArgumentException("추천 조건을 해석하지 못했습니다.");
         c.tags = new ArrayList<>(new LinkedHashSet<>(c.tags));
         c.excludedTags = new ArrayList<>(new LinkedHashSet<>(c.excludedTags));
@@ -145,6 +145,7 @@ public final class Recommender {
             picks.add(new Pick(track, reason));
         }
         String notice = picks.size() < 7 ? "조건에 맞는 곡이 " + picks.size() + "곡이에요. 조건을 줄이면 더 많은 곡을 찾을 수 있어요." : "";
+        if (c.language.equals("unsupported")) notice = "요청한 언어의 곡이 현재 카탈로그에 없어 0곡을 찾았어요. 언어 조건을 줄여 다시 추천받아 보세요.";
         if (c.tags.isEmpty() && c.language.isEmpty()) notice = "구체적인 분위기나 장르를 더하면 요청에 맞춰 추천할 수 있어요.";
         return new Result(picks, c, mode, notice);
     }

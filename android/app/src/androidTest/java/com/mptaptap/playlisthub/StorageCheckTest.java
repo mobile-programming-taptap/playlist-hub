@@ -12,6 +12,44 @@ import static org.junit.Assert.*;
 
 @RunWith(AndroidJUnit4.class)
 public class StorageCheckTest {
+    @Test public void invalidServerSessionCanReconnect() throws Exception {
+        Context context=InstrumentationRegistry.getInstrumentation().getTargetContext();
+        if(android.os.Build.VERSION.SDK_INT>=37) InstrumentationRegistry.getInstrumentation().getUiAutomation()
+            .grantRuntimePermission(context.getPackageName(),android.Manifest.permission.ACCESS_LOCAL_NETWORK);
+        java.util.concurrent.ExecutorService worker=java.util.concurrent.Executors.newSingleThreadExecutor();
+        try(java.net.ServerSocket server=new java.net.ServerSocket(0,3,java.net.InetAddress.getByName("127.0.0.1"))){
+            server.setSoTimeout(5000);
+            String base="http://127.0.0.1:"+server.getLocalPort();
+            android.content.SharedPreferences credentials=context.getSharedPreferences("server_credentials",Context.MODE_PRIVATE);
+            credentials.edit().putString(base,"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").commit();
+            String fresh="BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
+            java.util.concurrent.Future<?> replies=worker.submit(()->{
+                try{
+                    for(int i=0;i<3;i++)try(java.net.Socket socket=server.accept()){
+                        socket.setSoTimeout(5000);
+                        java.io.BufferedReader input=new java.io.BufferedReader(new java.io.InputStreamReader(socket.getInputStream(),java.nio.charset.StandardCharsets.UTF_8));
+                        String request=input.readLine();
+                        assertTrue(request.contains(i==0?"/me/feedback":i==1?"/health":"/sessions"));
+                        while(!input.readLine().isEmpty()){}
+                        String body=i==0?"{\"message\":\"앱을 다시 연결해 주세요.\"}":i==1?"{\"status\":\"ok\"}":"{\"token\":\""+fresh+"\"}";
+                        byte[] bytes=body.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                        String header="HTTP/1.1 "+(i==0?"401 Unauthorized":i==1?"200 OK":"201 Created")+"\r\nContent-Type: application/json\r\nContent-Length: "+bytes.length+"\r\nConnection: close\r\n\r\n";
+                        socket.getOutputStream().write(header.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                        socket.getOutputStream().write(bytes);socket.getOutputStream().flush();
+                    }
+                }catch(Exception error){throw new RuntimeException(error);}
+            });
+            try{
+                try{new ApiClient(context,base).object("GET","/me/feedback",null);fail("Invalid session accepted");}
+                catch(IllegalStateException expected){assertEquals("앱을 다시 연결해 주세요.",expected.getMessage());}
+                assertFalse(credentials.contains(base));
+                new ApiClient(context,base).connect();
+                assertEquals(fresh,credentials.getString(base,""));
+                replies.get(10,java.util.concurrent.TimeUnit.SECONDS);
+            }finally{credentials.edit().remove(base).commit();}
+        }finally{worker.shutdownNow();}
+    }
+
     @Test public void duplicateSaveReactionUndoAndRestart() throws Exception {
         Context context=InstrumentationRegistry.getInstrumentation().getTargetContext();
         String name="storage-check.db";context.deleteDatabase(name);

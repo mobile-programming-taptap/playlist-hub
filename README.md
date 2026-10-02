@@ -4,7 +4,7 @@ Java Android 음악 추천·플레이리스트 앱. 2026-10-03 최신 [노션 �
 
 ## 실행
 
-Android Studio에서 `android/`를 연다. `core/`, `catalog/`는 같은 상위 폴더에 두어야 한다. Android 7.0 이상에서 설치 가능하다. 첫 실행은 키 없이 사용할 수 있는 **기본 추천**이다. 40곡의 검증된 카탈로그로 조건을 해석하고 반응·목록을 기기의 SQLite에 보관한다. 앱 삭제 시 기기 데이터도 삭제된다.
+Android Studio에서 `android/`를 연다. `core/`, `catalog/`는 같은 상위 폴더에 두어야 한다. Android 7.0 이상에서 설치 가능하다. 첫 실행은 키 없이 사용할 수 있는 **기본 추천**이다. 40곡의 검증된 카탈로그와 공식 재생 링크로 조건을 해석하고 반응·목록을 기기의 SQLite에 보관한다. 앱 삭제 시 기기 데이터도 삭제된다.
 
 ```sh
 cd android
@@ -62,7 +62,7 @@ cd ../android
 ./gradlew :app:lintDebug :app:connectedDebugAndroidTest --no-configuration-cache
 ```
 
-추천 조건·반응·출처 경계는 `RecommendationCheck`의 실행 가능한 assertion 검사로 확인한다. 서버 통신 검사는 사용자 소유권, 중복 저장, 재시작 보관, OpenAI JSON 계약과 호출 상한을 확인한다. Android 저장 검사는 별도 테스트 DB에서 중복 저장·반응 변경·취소·재열기 후 보관을 확인한다. 테스트 DB는 종료 시 삭제한다. 기기 검사는 에뮬레이터가 필요하며 Gradle이 검사 후 대상 앱을 제거할 수 있으므로 시연 전에 디버그 APK를 다시 설치한다.
+추천 조건·반응·출처 경계는 `RecommendationCheck`의 실행 가능한 assertion 검사로 확인한다. 서버 통신 검사는 사용자 소유권, 중복 저장, 재시작 보관, OpenAI JSON 계약과 호출 상한을 확인한다. Android 검사는 별도 테스트 DB에서 중복 저장·반응 변경·취소·재열기 후 보관을 확인하며, 무효가 된 서버 세션으로 재연결하는 경로도 실제 HTTP 응답으로 검사한다. 테스트 DB는 종료 시 삭제한다. 기기 검사는 에뮬레이터가 필요하며 Gradle이 검사 후 대상 앱을 제거할 수 있으므로 시연 전에 디버그 APK를 다시 설치한다.
 
 공유 가능한 APK: `android/app/build/outputs/apk/debug/app-debug.apk`.
 실행 가능한 서버: `backend/build/libs/taptap-backend.jar`.
