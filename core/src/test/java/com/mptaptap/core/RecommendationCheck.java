@@ -20,6 +20,11 @@ public final class RecommendationCheck {
             tracks.add(t);
         }
         Map<String, Integer> feedback = new HashMap<>();
+        Track invalid = new Track();
+        invalid.id = "------------------------------------"; invalid.title = "Invalid"; invalid.artist = "Artist";
+        invalid.source = "MusicBrainz"; invalid.license = "CC0-1.0"; invalid.aiUseAllowed = true;
+        invalid.sourceUrl = "https://musicbrainz.org/recording/" + invalid.id;
+        assert !invalid.usable() : "Malformed recording ID must not be treated as a verified source";
         Recommender.Conditions conditions = Recommender.parse("공부할 때 가사 없는 잔잔한 피아노 음악");
         Recommender.Result result = Recommender.recommend(tracks, conditions, feedback, "basic");
         assert result.tracks.size() == 8;

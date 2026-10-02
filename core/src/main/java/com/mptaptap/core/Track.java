@@ -19,7 +19,7 @@ public class Track {
     public boolean aiUseAllowed;
 
     public boolean usable() {
-        return id.matches("[a-f0-9-]{36}") && !title.trim().isEmpty() && !artist.trim().isEmpty()
+        return id.matches("[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}") && !title.trim().isEmpty() && !artist.trim().isEmpty()
                 && "MusicBrainz".equals(source) && "CC0-1.0".equals(license) && aiUseAllowed
                 && sourceUrl.equals("https://musicbrainz.org/recording/" + id)
                 && (youtubeVideoId.isEmpty() || youtubeVideoId.matches("[A-Za-z0-9_-]{11}"));
