@@ -1,7 +1,9 @@
-<resources xmlns:tools="http://schemas.android.com/tools">
-    <!-- Base application theme. -->
-    <style name="Base.Theme.TapTap" parent="Theme.Material3.DayNight.NoActionBar">
-        <!-- Customize your dark theme here. -->
-        <!-- <item name="colorPrimary">@color/my_dark_primary</item> -->
+<resources>
+    <style name="Theme.TapTap" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/accent</item><item name="colorOnPrimary">@color/on_accent</item>
+        <item name="colorSecondary">@color/accent</item><item name="colorSurface">@color/surface</item>
+        <item name="colorOnSurface">@color/ink</item><item name="android:colorBackground">@color/background</item>
+        <item name="android:windowLightStatusBar">false</item><item name="android:fontFamily">sans</item>
+        <item name="android:navigationBarColor">@color/background</item>
     </style>
 </resources>

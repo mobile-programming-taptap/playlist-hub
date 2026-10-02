@@ -1,3 +1,5 @@
 <resources>
     <string name="app_name">TapTap</string>
+    <string name="home_title">오늘의 기분,\n음악으로 들어볼까요?</string>
+    <string name="home_empty">한 곡씩 들어보고,\n좋아하는 음악을 모아보세요.\n\n카드를 넘기는 것만으로는\n좋아요·싫어요를 남기지 않아요.</string>
 </resources>

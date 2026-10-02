@@ -25,6 +25,7 @@ android {
             }
         }
     }
+    sourceSets.getByName("main").assets.srcDir("../../catalog")
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
@@ -32,6 +33,8 @@ android {
 }
 
 dependencies {
+    implementation(project(":core"))
+    implementation("androidx.viewpager2:viewpager2:1.0.0")
     implementation(libs.activity.ktx)
     implementation(libs.appcompat)
     implementation(libs.constraintlayout)
