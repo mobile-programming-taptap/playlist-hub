@@ -60,6 +60,10 @@ final class ApiClient {
             int code = connection.getResponseCode(); InputStream stream = code >= 400 ? connection.getErrorStream() : connection.getInputStream();
             String content = stream == null ? "" : read(stream);
             if (code < 200 || code >= 300) {
+                if (code == 401) {
+                    token = "";
+                    if (!credentials.edit().remove(base).commit()) throw new IllegalStateException("연결 정보를 초기화하지 못했어요. 다시 시도해 주세요.");
+                }
                 String message = code == 401 ? "서버 연결 정보가 만료되었어요. 설정에서 연결을 확인해 주세요." : "서버 요청에 실패했어요. 잠시 후 다시 시도해 주세요.";
                 try { message = new JSONObject(content).optString("message", message); } catch (Exception ignored) { }
                 throw new IllegalStateException(message);
