@@ -4,17 +4,17 @@
 <style>html,body{margin:0;background:#15121d;color:white;font:14px sans-serif}#player{width:100%;height:100vh;min-height:200px}iframe{border:0}p{padding:16px}</style>
 <title>TapTap: 영상 연결 중…</title></head><body><div id="player"></div>
 <script>
-let player;
+let player, waiting=true;
 function status(text){document.title='TapTap: '+text;}
 window.onYouTubeIframeAPIReady=function(){
     player=new YT.Player('player',{videoId:'__VIDEO__',width:'100%',height:'100%',
         playerVars:{origin:'__ORIGIN__',playsinline:1},events:{
-        onReady:()=>status('플레이어의 재생 버튼을 눌러주세요.'),
+        onReady:()=>{waiting=false;status('플레이어의 재생 버튼을 눌러주세요.');},
         onStateChange:e=>status(({'-1':'재생 대기',0:'재생 종료',1:'재생 중',2:'일시정지',3:'버퍼링',5:'재생 버튼을 눌러주세요.'})[e.data]||'영상 준비 중'),
-        onError:e=>status('재생할 수 없어요 ('+e.data+'). 외부에서 열어보세요.'),
+        onError:e=>{waiting=false;status('재생할 수 없어요 ('+e.data+'). 외부에서 열어보세요.');},
         onAutoplayBlocked:()=>status('플레이어의 재생 버튼을 눌러주세요.')
     }});
 };
-setTimeout(()=>{if(!player)status('연결이 지연되고 있어요. 외부에서도 열 수 있어요.');},15000);
-</script><script src="https://www.youtube.com/iframe_api" onerror="status('YouTube 연결에 실패했어요. 외부에서 열어보세요.')"></script>
+setTimeout(()=>{if(waiting)status('연결이 지연되고 있어요. 외부에서도 열 수 있어요.');},15000);
+</script><script src="https://www.youtube.com/iframe_api" onerror="waiting=false;status('YouTube 연결에 실패했어요. 외부에서 열어보세요.')"></script>
 </body></html>
