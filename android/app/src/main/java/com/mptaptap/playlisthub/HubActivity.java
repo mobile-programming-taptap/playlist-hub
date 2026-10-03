@@ -308,7 +308,7 @@ public final class HubActivity extends AppCompatActivity {
     }
     private int timelineSeconds(JSONObject imported,JSONObject edit) {
         int seconds;try{seconds=Integer.parseInt(edit.optString("seconds"));}catch(NumberFormatException error){throw new IllegalArgumentException("시작 시간을 초 단위로 입력하거나 곡을 제외해 주세요.");}
-        int duration=imported.optInt("durationSeconds",-1);if(seconds<0||seconds>(duration>=0?duration:21600))throw new IllegalArgumentException("시작 시간이 영상 범위를 벗어났어요. 시간을 수정하거나 곡을 제외해 주세요.");return seconds;
+        int duration=imported.optInt("durationSeconds",-1);if(seconds<0||seconds>(duration>0?duration:21600))throw new IllegalArgumentException("시작 시간이 영상 범위를 벗어났어요. 시간을 수정하거나 곡을 제외해 주세요.");return seconds;
     }
 
     private void review() {

@@ -35,6 +35,7 @@ public final class VideoTimeline {
         if(description==null||description.length()>MAX_DESCRIPTION_CHARS||durationSeconds< -1
                 ||videoId==null||(!videoId.isEmpty()&&!videoId.matches("[A-Za-z0-9_-]{11}")))
             throw new IllegalArgumentException("영상 ID와 설명 길이를 확인해 주세요.");
+        if(durationSeconds==0)durationSeconds=-1;
         Result result=new Result(); Map<Integer,Entry> times=new HashMap<>(); Map<String,Entry> songs=new HashMap<>();
         int lineNumber=0, previous=-1;
         for(String row:description.split("\\r\\n|\\r|\\n",-1)) {

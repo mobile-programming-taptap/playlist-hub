@@ -17,6 +17,19 @@ public final class ImportMatchCheck {
         assert first.sourceUrl.equals("https://www.youtube.com/watch?v=12345678901&t=0s");
         assert !timeline.entries.get(1).needsReview&&timeline.entries.get(1).title.equals("Blueming")&&timeline.entries.get(1).artist.equals("IU");
         assert last.seconds==3723&&last.endSeconds==4000&&last.title.equals("봄날")&&last.artist.equals("방탄소년단")&&!last.needsReview;
+        String unknownLength="00:00 Intro by Artist\n01:00 Song by Artist\n02:00 Ending by Artist";
+        for(int duration:new int[]{0,-1}) {
+            VideoTimeline.Result unknown=VideoTimeline.parse(unknownLength,"12345678901",duration);
+            assert unknown.entries.stream().noneMatch(entry->entry.needsReview);
+            assert unknown.entries.get(0).seconds==0&&unknown.entries.get(0).endSeconds==60;
+            assert unknown.entries.get(1).seconds==60&&unknown.entries.get(1).endSeconds==120;
+            assert unknown.entries.get(2).endSeconds==-1 : "An unknown video length must not invent the last segment end";
+        }
+        VideoTimeline.Result known=VideoTimeline.parse(unknownLength,"12345678901",60);
+        assert known.entries.get(0).endSeconds==60&&!known.entries.get(0).needsReview;
+        assert known.entries.get(1).reviewReasons.contains("영상 길이 밖의 시간")&&known.entries.get(1).endSeconds==-1;
+        assert known.entries.get(2).reviewReasons.contains("영상 길이 밖의 시간");
+        expectInvalid(()->VideoTimeline.parse(unknownLength,"12345678901",-2));
         timeline=VideoTimeline.parse("０１：０２　Artist–Title\n01 : 03 Artist | Title Two\n1. 01:04 Song without artist\n01:05", "");
         assert timeline.entries.size()==4&&timeline.entries.get(0).seconds==62;
         assert timeline.entries.get(0).title.equals("Title")&&timeline.entries.get(0).sourceRow.startsWith("０１：０２");

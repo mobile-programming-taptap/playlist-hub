@@ -17,6 +17,8 @@ import java.util.regex.Pattern;
 public final class Recommender {
     public static final Map<String, String> LABELS = new LinkedHashMap<>();
     private static final Map<String, String> WORDS = new LinkedHashMap<>();
+    static final List<String> GENRES = List.of("acoustic", "ballad", "kpop", "pop", "rock", "piano",
+            "jazz", "classical", "hiphop", "rnb", "edm", "blues", "metal", "unsupported_genre");
     static {
         String[][] vocabulary = {
             {"calm", "잔잔한", "잔잔|차분|편안|조용|calm|relax|chill"},
@@ -30,6 +32,13 @@ public final class Recommender {
             {"pop", "팝", "(?<!k[ -])(?<![a-z-])pop|(?<![가-힣a-z-])팝(?=$|\\s|[.,!?]|송|음악|[은는을를으도가이만])"},
             {"rock", "록", "락|록|rock"},
             {"piano", "피아노", "피아노|piano"},
+            {"jazz", "재즈", "재즈|(?<![a-z])jazz(?![a-z])"},
+            {"classical", "클래식", "클래식|고전\\s*음악|(?<![a-z])classical(?![a-z])"},
+            {"hiphop", "힙합", "힙합|(?<![a-z])hip[ -]?hop(?![a-z])"},
+            {"rnb", "R&B", "알앤비|알엔비|(?<![a-z])r\\s*(?:&|and|n)\\s*b(?![a-z])"},
+            {"edm", "전자 음악", "일렉트로닉|일렉트로니카|전자\\s*음악|(?<![a-z])(?:edm|electronic)(?![a-z])"},
+            {"blues", "블루스", "블루스|(?<![a-z])blues(?![a-z])"},
+            {"metal", "메탈", "메탈|헤비메탈|(?<![a-z])(?:heavy[ -]?)?metal(?![a-z])"},
             {"instrumental", "가사 없는", "가사\\s*없는|가사\\s*없이|보컬\\s*없는|연주곡|instrumental|no vocals"},
             {"study", "공부할 때", "공부|집중|작업|독서|study|focus"},
             {"rain", "비 오는 날", "비\\s*오는|비\\s*올|빗소리|rain"},
@@ -41,6 +50,7 @@ public final class Recommender {
             LABELS.put(word[0], word[1]);
             WORDS.put(word[0], word[2]);
         }
+        LABELS.put("unsupported_genre", "현재 지원하지 않는 장르");
     }
 
     public static final class Conditions {
@@ -67,6 +77,19 @@ public final class Recommender {
 
     private Recommender() {}
 
+    /** ponytail: dictionary and fixed wording only; extend for verified requests, leave additional meaning to the interpreter. */
+    public static boolean isKnownConditionRequest(String request) {
+        Conditions c=parse(request);
+        if(c.tags.isEmpty()&&c.excludedTags.isEmpty())return false;
+        String remaining=Normalizer.normalize(request,Normalizer.Form.NFKC).toLowerCase(Locale.ROOT);
+        for(String word:WORDS.values())remaining=remaining.replaceAll(word," ");
+        return remaining.matches("(?s)(?:[\\p{Z}\\s.,!?·/]|처음부터|새로\\s*시작|조건\\s*초기화|음악|노래|곡|장르|송"
+                +"|추천(?:해\\s*줘|해\\s*주세요|해주세요|해)?|으로|로|바꿔\\s*(?:줘|주세요)|듣고\\s*싶어"
+                +"|빼고|빼|제외하고|제외|말고|[은는을를가이도만와과]"
+                +"|하게|한|게|할|때|날|에|더"
+                +"|\\b(?:reset|start\\s+over|recommend|music|songs?|genre|please|only|instead|no|not|and|or)\\b)*");
+    }
+
     public static Conditions parse(String request) {
         if (request == null || request.trim().isEmpty() || request.length() > 500)
             throw new IllegalArgumentException("듣고 싶은 음악을 1~500자로 입력해 주세요.");
@@ -77,7 +100,7 @@ public final class Recommender {
             while (matcher.find()) {
                 String tail = input.substring(matcher.end(), Math.min(input.length(), matcher.end() + 15));
                 String head = input.substring(Math.max(0, matcher.start() - 4), matcher.start());
-                boolean negative = tail.matches("^[은는을를가이\\s]*(?:음악|노래|곡|건)?[은는을를\\s]*(?:빼|제외|말고|싫|아니|없).*" )
+                boolean negative = tail.matches("^[한은는을를가이도만\\s]*(?:음악|노래|곡|건|장르)?[은는을를가이도만\\s]*(?:빼|제외|말고|싫|아니|없).*" )
                     || head.matches(".*(?:no |not )$");
                 List<String> target = negative ? c.excludedTags : c.tags;
                 if (!target.contains(word.getKey())) target.add(word.getKey());
@@ -118,13 +141,13 @@ public final class Recommender {
         Map<String, Integer> scores = new LinkedHashMap<>();
         List<Track> candidates = new ArrayList<>();
         Set<String> seen = new LinkedHashSet<>();
-        List<String> genre = Arrays.asList("acoustic", "ballad", "kpop", "pop", "rock", "piano", "instrumental");
         List<String> mood = Arrays.asList("calm", "bright", "energetic", "warm", "sad");
         for (Track track : catalogue) {
             if (!track.usable() || excludedTrackIds.contains(track.id) || !seen.add(track.id) || feedback.getOrDefault(track.id, 0) == -1
                     || !Collections.disjoint(track.tags, c.excludedTags)
                     || (!c.language.isEmpty() && !c.language.equals(track.language))) continue;
-            if (!matchesGroup(c.tags, track.tags, genre) || !matchesGroup(c.tags, track.tags, mood)) continue;
+            if (c.tags.contains("unsupported_genre") || !matchesGroup(c.tags, track.tags, GENRES)
+                    || !matchesGroup(c.tags, track.tags, mood)) continue;
             int score = feedback.getOrDefault(track.id, 0) == 1 ? 1 : 0;
             for (String tag : track.tags) {
                 if (c.tags.contains(tag)) score += 10;
@@ -150,6 +173,8 @@ public final class Recommender {
             picks.add(new Pick(track, reason));
         }
         String notice = picks.size() < 7 ? "조건에 맞는 곡이 " + picks.size() + "곡이에요. 조건을 줄이면 더 많은 곡을 찾을 수 있어요." : "";
+        if (picks.isEmpty() && !Collections.disjoint(c.tags, GENRES))
+            notice = "요청한 장르 조건에 맞는 곡이 현재 카탈로그에 없어 0곡을 찾았어요. 장르 조건을 줄여 다시 추천받아 보세요.";
         if (c.language.equals("unsupported")) notice = "요청한 언어의 곡이 현재 카탈로그에 없어 0곡을 찾았어요. 언어 조건을 줄여 다시 추천받아 보세요.";
         if (c.tags.isEmpty() && c.language.isEmpty()) notice = "구체적인 분위기나 장르를 더하면 요청에 맞춰 추천할 수 있어요.";
         return new Result(picks, c, mode, notice);

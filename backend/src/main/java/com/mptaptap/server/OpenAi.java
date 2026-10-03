@@ -7,12 +7,15 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.text.Normalizer;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ObjectNode;
 
 @Component
 public class OpenAi {
@@ -47,13 +50,24 @@ public class OpenAi {
                 +"Explicitly excluding instrumental/no vocals also removes a prior language none constraint.";
         Map<String, Object> tagArray = Map.of("type", "array", "items", Map.of("type", "string", "enum", Recommender.LABELS.keySet()));
         Map<String, Object> schema = Map.of("type", "object", "additionalProperties", false,
-                "required", List.of("tags", "excludedTags", "language"), "properties", Map.of(
+                "required", List.of("tags", "excludedTags", "language", "languageSpecified"), "properties", Map.of(
                     "tags", tagArray, "excludedTags", tagArray,
-                    "language", Map.of("type", "string", "enum", List.of("", "ko", "en", "none", "unsupported"))));
+                    "language", Map.of("type", "string", "enum", List.of("", "ko", "en", "none", "unsupported"),
+                        "description", "Requested vocal language only. Never infer it from input text language or genre. Keep the prior value when unchanged; use empty when unspecified without a prior constraint, or after reset."),
+                    "languageSpecified", Map.of("type", "boolean", "description",
+                        "True only for an effective vocal-language or no-vocals request in the direct user requests, not their text language or a bare genre. With a snapshot, an unchanged language may be inherited with false; without a snapshot consider effective requests across the history. Gregorian chant alone is false with language empty.")));
         Map<String, Object> body = Map.of("model", model, "store", false, "max_output_tokens", 300,
                 "instructions", "Extract music preferences from the user's request. Return only supported tags. " +
                     "Recognize Korean/English moods, situations, genres and negation. Use excludedTags for preferences to avoid. " +
-                    "Instrumental/no vocals means language none. Unspecified language is empty. " +
+                    "Keep explicitly requested genres even when this catalogue has no matching songs. " +
+                    "For an explicitly requested genre absent from the tag enum, use unsupported_genre in tags; never replace it with a different genre or silently remove it. " +
+                    "Use unsupported_genre in excludedTags only when that unlisted genre is explicitly excluded. " +
+                    "Instrumental/no vocals means language none. Never infer vocal language from the language of the request text or from its genre. " +
+                    "When the latest request does not specify a language, preserve the validated snapshot's language, including its empty value. " +
+                    "Without a prior language constraint, or after reset, unspecified language is empty. " +
+                    "Set languageSpecified true only when the direct user requests actually specify a vocal language or no vocals. Text language and bare genres do not count. " +
+                    "With a validated snapshot, unchanged language may be inherited with languageSpecified false. Without a snapshot, consider effective language requests across the history. " +
+                    "For example, Gregorian chant alone means tags [unsupported_genre], language empty and languageSpecified false, not language none or unsupported. " +
                     "For requested vocal languages other than Korean or English, use unsupported; never silently remove the language constraint. " +
                     "Do not invent song names, artists or URLs. " +
                     "The input contains consecutive user requests. Preserve prior constraints unless the latest request replaces or removes them. " +
@@ -73,13 +87,44 @@ public class OpenAi {
             for (JsonNode content : output.path("content")) {
                 if ("refusal".equals(content.path("type").asString())) throw new IllegalStateException("AI_REFUSED");
                 if ("output_text".equals(content.path("type").asString())) {
-                    Recommender.Conditions interpreted=Recommender.validate(json.readValue(content.path("text").asString(), Recommender.Conditions.class));
+                    JsonNode payload=json.readTree(content.path("text").asString());
+                    if(!(payload instanceof ObjectNode object)||!object.path("languageSpecified").isBoolean())throw new IllegalStateException("AI_LANGUAGE_UNCONFIRMED");
+                    boolean languageSpecified=object.remove("languageSpecified").asBoolean();
+                    Recommender.Conditions interpreted=Recommender.validate(json.treeToValue(object,Recommender.Conditions.class));
+                    if(!languageSpecified) {
+                        interpreted.language=previousConditions==null?"":Conversation.parse(previousConditions,List.of(),prompt).language;
+                        if(!interpreted.language.equals("none"))interpreted.tags.remove("instrumental");
+                    }
+                    Recommender.validate(interpreted);
+                    if(interpreted.excludedTags.contains("unsupported_genre")&&!hasUnknownExclusion(requests,previousConditions,prompt)) {
+                        interpreted.excludedTags.remove("unsupported_genre");
+                        interpreted.tags.add("unsupported_genre");
+                    }
+                    if(Recommender.isKnownConditionRequest(prompt)) {
+                        if(previousConditions!=null||history==null||history.isEmpty())return Conversation.parse(previousConditions,history,prompt);
+                        return Conversation.parse(interpreted,List.of(),prompt);
+                    }
                     // The model already interpreted reset; replay explicit overrides without erasing its new semantic tags.
                     String explicit=prompt.replaceAll("(?i)(처음부터|새로 시작|조건 초기화|start over|reset)","").trim();
-                    return explicit.isEmpty()?interpreted:Conversation.parse(interpreted,List.of(),explicit);
+                    boolean unlisted=interpreted.tags.contains("unsupported_genre");
+                    Recommender.Conditions resolved=explicit.isEmpty()?interpreted:Conversation.parse(interpreted,List.of(),explicit);
+                    if(unlisted&&!resolved.tags.contains("unsupported_genre"))resolved.tags.add("unsupported_genre");
+                    return Recommender.validate(resolved);
                 }
             }
         }
         throw new IllegalStateException("AI_EMPTY");
+    }
+
+    // ponytail: bounded exclusion cues only; this does not attach arbitrary negation to each genre.
+    private static boolean hasUnknownExclusion(List<String> requests, Recommender.Conditions previousConditions, String prompt) {
+        boolean excluded=previousConditions!=null&&Conversation.parse(previousConditions,List.of(),prompt).excludedTags.contains("unsupported_genre");
+        for(String direct:previousConditions==null?requests:List.of(prompt)) {
+            if(direct.matches("(?is).*(처음부터|새로 시작|조건 초기화|start over|reset).*"))excluded=false;
+            String text=Normalizer.normalize(direct,Normalizer.Form.NFKC).toLowerCase(Locale.ROOT)
+                    .replaceAll("(?:가사|보컬)\\s*(?:없는|없이)|\\b(?:no|without)\\s+vocals\\b"," ");
+            if(text.matches("(?s).*(?:빼|제외|말고|싫|아니|없|\\b(?:no|not|never|don't|don’t|without|exclude[ds]?|excluding|avoid(?:s|ed|ing)?|except|dislik(?:e|es|ed|ing)|hate[sd]?|hating)\\b).*"))excluded=true;
+        }
+        return excluded;
     }
 }

@@ -29,7 +29,7 @@ DATABASE_PASSWORD=replace-with-a-long-random-password
 openssl rand -base64 32
 ```
 
-Spotify와 Google 개발자 콘솔에는 각각 아래 콜백을 등록하고 기존 예제의 client ID/secret에 발급받은 값을 넣는다. Apple Music은 `APPLE_MUSIC_DEVELOPER_TOKEN`과 storefront를 설정한다. 키가 없는 서비스는 앱에서 설정 필요 상태로 표시된다.
+Spotify와 Google 개발자 콘솔에는 각각 아래 콜백을 등록한다. Spotify는 PKCE를 사용하므로 `SPOTIFY_CLIENT_ID`만 필요하며 Client Secret은 사용하지 않는다. Google은 `GOOGLE_CLIENT_ID`와 `GOOGLE_CLIENT_SECRET`에 발급받은 값을 넣는다. Apple Music은 `APPLE_MUSIC_DEVELOPER_TOKEN`과 storefront를 설정한다. 키가 없는 서비스는 앱에서 설정 필요 상태로 표시된다.
 
 ```text
 https://실제도메인/connections/spotify/callback
