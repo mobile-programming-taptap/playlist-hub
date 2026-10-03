@@ -37,6 +37,14 @@ https://실제도메인/connections/youtube/callback
 https://실제도메인/connections/apple_music/callback
 ```
 
+## 공개 안내 페이지와 플랫폼 설정
+
+서버는 로그인 없이 `https://실제도메인/`에서 앱 소개, `https://실제도메인/privacy`에서 현재 데이터 처리 안내를 제공합니다. 공개 목록과 Apple Music 허용 화면에서도 안내에 연결합니다. OpenAI에 보내는 직접 입력·대화 조건, 기기에 보관하는 최근 요청, 외부 메타데이터의 30일 보관, 공개·연결 해제·계정 삭제 범위를 설명합니다.
+
+운영자의 실제 문의 주소를 `SUPPORT_EMAIL`에 설정하면 안내 페이지에 메일 앱 링크를 표시합니다. 값이 없거나 형식이 잘못되면 문의 주소를 만들지 않습니다. 공개 운영 전에 실제 운영자 정보와 서버의 로그·백업 보관 정책을 확인해 안내에 반영해야 합니다.
+
+Google OAuth 앱의 홈페이지와 개인정보 안내 주소는 같은 실제 도메인으로 등록하고 소유권을 확인합니다. 공개된 페이지와 안내 링크·처리 설명은 [Google의 민감한 범위 검증 안내](https://developers.google.com/identity/protocols/oauth2/production-readiness/sensitive-scope-verification)의 준비 항목입니다. 이 페이지를 제공하는 것만으로 Google 검증·OAuth 승인이나 공개 배포가 완료되는 것은 아닙니다. 제한된 테스트 사용자 설정과 공개 서비스 검증은 구분합니다.
+
 ## 설정 확인과 실행
 
 비공개 환경 파일을 Compose의 변수 치환과 앱 실행에 함께 사용한다. `DOMAIN`과 DB 비밀번호가 비어 있으면 설정 검사가 실패한다. `config --quiet`는 키 값을 출력하지 않고 설정 형식만 검사한다. [Compose 환경 파일](https://docs.docker.com/compose/how-tos/environment-variables/variable-interpolation/)

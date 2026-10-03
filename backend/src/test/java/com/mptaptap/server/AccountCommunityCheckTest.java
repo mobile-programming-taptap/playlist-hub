@@ -38,19 +38,37 @@ class AccountCommunityCheckTest {
         return response.body().isEmpty()?json.createObjectNode():json.readTree(response.body());
     }
     private ConfigurableApplicationContext start(String database) {
+        return start(database,"");
+    }
+    private ConfigurableApplicationContext start(String database,String supportEmail) {
         var context=new SpringApplicationBuilder(TapTapApplication.class).run("--spring.config.import=","--server.port=0","--server.address=127.0.0.1",
             "--spring.datasource.url="+database,"--spring.datasource.username="+System.getenv().getOrDefault("TAPTAP_TEST_DATABASE_USER","sa"),
             "--spring.datasource.password="+System.getenv().getOrDefault("TAPTAP_TEST_DATABASE_PASSWORD",""),"--taptap.openai.key=",
-            "--taptap.openai.endpoint=https://api.openai.com/v1/responses","--logging.level.root=WARN","--spring.main.banner-mode=off");
+            "--taptap.openai.endpoint=https://api.openai.com/v1/responses","--taptap.support-email="+supportEmail,"--logging.level.root=WARN","--spring.main.banner-mode=off");
         base="http://127.0.0.1:"+((WebServerApplicationContext)context).getWebServer().getPort(); return context;
     }
 
     @Test void accountMigrationDeviceSessionsPublicOwnershipAndExternalSnapshots() throws Exception {
         String database=System.getenv().getOrDefault("TAPTAP_TEST_DATABASE_URL","jdbc:h2:mem:community"+UUID.randomUUID()+";MODE=PostgreSQL;DB_CLOSE_DELAY=-1");
         String email="check-"+UUID.randomUUID()+"@example.test", password="Only-for-checks!2026";
-        List<String> owners=new ArrayList<>(); ConfigurableApplicationContext context=start(database);
+        List<String> owners=new ArrayList<>(); ConfigurableApplicationContext context=start(database,"help&demo@example.test");
         try {
             Store store=context.getBean(Store.class); JdbcTemplate db=context.getBean(JdbcTemplate.class);
+            for(String route:List.of("/","/privacy")) {
+                HttpResponse<String> page=request("GET",route,null,null); assertEquals(200,page.statusCode());
+                assertTrue(page.headers().firstValue("Content-Type").orElse("").contains("text/html"));
+                assertEquals("no-store",page.headers().firstValue("Cache-Control").orElse(""));
+                assertEquals("nosniff",page.headers().firstValue("X-Content-Type-Options").orElse(""));
+                assertEquals("no-referrer",page.headers().firstValue("Referrer-Policy").orElse(""));
+                assertTrue(page.headers().firstValue("Content-Security-Policy").orElse("").contains("default-src 'none'"));
+                assertTrue(page.headers().firstValue("Set-Cookie").isEmpty());
+                assertTrue(page.body().contains("href=\"/privacy\"")); assertTrue(page.body().contains("개발·시연"));
+                assertTrue(page.body().contains("help&amp;demo@example.test")); assertTrue(page.body().contains("mailto:help%26demo@example.test"));
+                assertFalse(page.body().contains("<script"));
+            }
+            String invalidContact=new PublicPagesApi("bad@example.test?subject=<script>alert(1)</script>").privacy().getBody();
+            assertFalse(invalidContact.contains("mailto:")); assertFalse(invalidContact.contains("<script"));
+            assertTrue(invalidContact.contains("운영자 문의 이메일은 아직 설정되지 않았습니다"));
             assertFalse(value("GET","/health",null,null,200).path("aiConfigured").asBoolean());
             JsonNode anon=value("POST","/sessions",null,null,201), other=value("POST","/sessions",null,null,201);
             owners.add(anon.path("userId").asString()); owners.add(other.path("userId").asString());
@@ -113,6 +131,7 @@ class AccountCommunityCheckTest {
             HttpResponse<String> html=request("GET","/share/"+share,null,null); assertEquals(200,html.statusCode());
             assertTrue(html.body().contains("&lt;script&gt;")); assertTrue(html.body().contains("&lt;img src=x onerror=alert(1)&gt;"));
             assertFalse(html.body().contains("<script>")); assertTrue(html.headers().firstValue("Content-Security-Policy").isPresent());
+            assertTrue(html.body().contains("href=\"/privacy\""));
             assertEquals(1,value("PUT","/public/playlists/"+share+"/favourite",first,Map.of("favourite",true),200).path("favourites").asInt());
             assertEquals(1,value("PUT","/public/playlists/"+share+"/favourite",second,Map.of("favourite",true),200).path("favourites").asInt());
             assertEquals(2,value("PUT","/public/playlists/"+share+"/favourite",reader,Map.of("favourite",true),200).path("favourites").asInt());
@@ -172,6 +191,7 @@ class AccountCommunityCheckTest {
             assertEquals(3,value("GET","/playlists/"+copy,reader,null,200).path("items").size());
 
             context.close(); context=start(database); db=context.getBean(JdbcTemplate.class);
+            assertFalse(request("GET","/privacy",null,null).body().contains("mailto:"),"An unset operator address must not invent a contact channel.");
             assertEquals(owner,value("GET","/accounts/me",second,null,200).path("userId").asString());
             assertEquals(3,value("GET",path,second,null,200).path("items").size());
             assertEquals(1,value("GET","/me/feedback",second,null,200).path(track).asInt());
