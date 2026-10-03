@@ -37,11 +37,11 @@ public class AppFlowCheckTest {
         try {
             try(ActivityScenario<MainActivity> app=ActivityScenario.launch(MainActivity.class)){
                 ready(app);
-                onView(withId(R.id.recommend)).perform(click());
+                onView(withId(R.id.recommend)).perform(closeSoftKeyboard(),scrollTo(),click());
                 onView(withId(R.id.prompt_layout)).check((view,error)->assertEquals("듣고 싶은 음악을 1~500자로 입력해 주세요.",((com.google.android.material.textfield.TextInputLayout)view).getError()));
                 app.recreate();ready(app);
                 onView(withId(R.id.results)).check(matches(withEffectiveVisibility(Visibility.GONE)));
-                onView(withId(R.id.example_study)).perform(click());
+                onView(withId(R.id.example_study)).perform(closeSoftKeyboard(),scrollTo(),click());
                 onView(withId(R.id.recommend)).perform(scrollTo(),click());ready(app);
                 onView(withId(R.id.counter)).check(matches(withText("1 / 8")));
                 onView(allOf(withId(R.id.artwork),isDisplayed())).perform(scrollTo(),swipeLeft());ready(app);
@@ -70,33 +70,36 @@ public class AppFlowCheckTest {
                 onView(withId(R.id.condition_summary)).check(matches(withText(containsString("가사 없는"))));
                 assertTrue(data.feedback().isEmpty());
                 onView(withId(R.id.edit_request)).perform(scrollTo(),click());
+                onView(withId(R.id.card_navigation)).check(matches(withEffectiveVisibility(Visibility.GONE)));
                 onView(withId(R.id.prompt)).check(matches(hasFocus())).perform(closeSoftKeyboard());
                 onView(withId(R.id.recommend)).perform(scrollTo(),click());ready(app);
                 onView(withId(R.id.counter)).check(matches(withText("1 / 8")));
-                onView(withId(R.id.next)).perform(scrollTo(),click());ready(app);
-                onView(allOf(withId(R.id.like),isDisplayed())).perform(scrollTo(),click());ready(app);
+                onView(withId(R.id.next)).perform(click());ready(app);
+                onView(allOf(withId(R.id.like),isDisplayed())).perform(click());ready(app);
                 assertEquals(1,data.feedback().size());
-                onView(withId(R.id.previous)).perform(scrollTo(),click());ready(app);
+                onView(withId(R.id.previous)).perform(click());ready(app);
                 onView(withId(R.id.counter)).check(matches(withText("1 / 8")));
-                onView(withId(R.id.next)).perform(scrollTo(),click());ready(app);
+                onView(withId(R.id.next)).perform(click());ready(app);
                 onView(withId(R.id.counter)).check(matches(withText("2 / 8")));
                 app.recreate();ready(app);
                 onView(withId(R.id.counter)).check(matches(withText("2 / 8")));
                 onView(allOf(withId(R.id.like),isDisplayed())).check(matches(withText("좋아요 취소")));
-                onView(allOf(withId(R.id.external),isDisplayed())).perform(scrollTo(),click());
+                onView(currentCard(R.id.external)).perform(scrollTo(),click());
                 onView(withText("Spotify · 곡 검색")).check(matches(isDisplayed()));
                 onView(withText("YouTube Music · 영상으로 연결")).check(matches(isDisplayed()));
                 onView(withText("취소")).perform(click());
-                onView(allOf(withId(R.id.save),isDisplayed())).perform(scrollTo(),click());ready(app);
+                onView(currentCard(R.id.save)).perform(scrollTo(),click());ready(app);
                 onView(withText("+ 새 플레이리스트")).perform(click());
                 onView(withHint("예: 비 오는 날의 음악")).perform(replaceText(title),closeSoftKeyboard());
                 onView(withText("만들기")).perform(click());ready(app);
-                onView(allOf(withId(R.id.save),isDisplayed())).check(matches(withText("저장됨 · 추가")));
-                onView(allOf(withId(R.id.save),isDisplayed())).perform(click());ready(app);
+                onView(currentCard(R.id.save)).check(matches(withText("저장됨 · 추가")));
+                noticeGone(app);
+                onView(currentCard(R.id.save)).perform(scrollTo(),click());ready(app);
                 onView(withText(title+" · 1곡")).perform(click());ready(app);
                 assertEquals(1,ourPlaylist(data,title).getJSONArray("items").length());
-                onView(withId(R.id.previous)).perform(scrollTo(),click());ready(app);
-                onView(allOf(withId(R.id.save),isDisplayed())).perform(scrollTo(),click());ready(app);
+                onView(withId(R.id.previous)).perform(click());ready(app);
+                noticeGone(app);
+                onView(currentCard(R.id.save)).perform(scrollTo(),click());ready(app);
                 onView(withText(title+" · 1곡")).perform(click());ready(app);
                 assertEquals(2,ourPlaylist(data,title).getJSONArray("items").length());
                 onView(withId(R.id.save_results)).perform(scrollTo(),click());ready(app);
@@ -107,6 +110,7 @@ public class AppFlowCheckTest {
                 onView(withId(R.id.save_results)).perform(scrollTo(),click());ready(app);
                 onView(withText(bulkTitle+" · 8곡")).perform(click());ready(app);
                 assertEquals(8,ourPlaylist(data,bulkTitle).getJSONArray("items").length());
+                noticeGone(app);
                 onView(withId(R.id.edit_request)).perform(scrollTo(),click());
                 onView(withId(R.id.prompt)).perform(replaceText("일본어 노래 추천"),closeSoftKeyboard());
                 onView(withId(R.id.recommend)).perform(scrollTo(),click());ready(app);
@@ -116,7 +120,7 @@ public class AppFlowCheckTest {
             }
             try(ActivityScenario<MainActivity> app=ActivityScenario.launch(MainActivity.class)){
                 ready(app);
-                onView(withId(R.id.nav_library)).perform(click());ready(app);
+                onView(withId(R.id.nav_library)).perform(closeSoftKeyboard(),click());ready(app);
                 onView(withHint("내 목록 이름 검색")).perform(replaceText("일치하지않는검색어"),closeSoftKeyboard());
                 onView(withText("검색한 이름의 목록이 없어요.")).check(matches(isDisplayed()));
                 onView(withHint("내 목록 이름 검색")).perform(replaceText(title),closeSoftKeyboard());
@@ -143,7 +147,7 @@ public class AppFlowCheckTest {
                 } finally { instrumentation.removeMonitor(share); }
                 onView(withId(R.id.nav_recommend)).perform(click());
                 app.recreate();ready(app);
-                onView(withId(R.id.nav_library)).perform(click());ready(app);
+                onView(withId(R.id.nav_library)).perform(closeSoftKeyboard(),click());ready(app);
                 onView(withText(title+" 변경\n2곡 · 앱 추천에서 저장")).perform(scrollTo(),click());ready(app);
                 onView(withText(startsWith("1. "))).perform(scrollTo(),click());
                 onView(withText("곡 정보·출처")).perform(click());
@@ -175,6 +179,19 @@ public class AppFlowCheckTest {
             }
             restore.commit();data.close();
         }
+    }
+
+    private org.hamcrest.Matcher<View> currentCard(int id) {
+        return allOf(withId(id),isDescendantOfA(allOf(isAssignableFrom(android.widget.ScrollView.class),isDisplayed())));
+    }
+
+    private void noticeGone(ActivityScenario<MainActivity> app) {
+        long until=SystemClock.uptimeMillis()+5000;AtomicBoolean gone=new AtomicBoolean();
+        do {
+            app.onActivity(activity->{View notice=activity.findViewById(com.google.android.material.R.id.snackbar_text);gone.set(notice==null||!notice.isShown());});
+            if(gone.get())return;SystemClock.sleep(25);
+        } while(SystemClock.uptimeMillis()<until);
+        fail("Save notice did not finish within five seconds");
     }
 
     private org.json.JSONObject ourPlaylist(LocalStore data,String title) throws Exception {
