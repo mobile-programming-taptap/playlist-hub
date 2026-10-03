@@ -8,6 +8,28 @@
         <item name="colorOnSurface">@color/ink</item><item name="android:colorBackground">@color/background</item>
         <item name="android:windowLightStatusBar">true</item><item name="android:fontFamily">sans</item>
         <item name="android:navigationBarColor">@color/background</item>
+        <item name="materialAlertDialogTheme">@style/ThemeOverlay.TapTap.Dialog</item>
+        <item name="elevationOverlayEnabled">false</item>
+    </style>
+    <style name="ThemeOverlay.TapTap.Dialog" parent="ThemeOverlay.Material3.MaterialAlertDialog">
+        <item name="colorSurfaceContainerHigh">@color/surface</item>
+    </style>
+    <style name="TapTap.CardAction" parent="Widget.Material3.Button.OutlinedButton">
+        <item name="android:minHeight">48dp</item><item name="android:minWidth">0dp</item>
+        <item name="android:textSize">12sp</item><item name="android:textColor">@color/card_ink</item>
+        <item name="android:paddingStart">8dp</item><item name="android:paddingEnd">8dp</item>
+        <item name="android:insetTop">0dp</item><item name="android:insetBottom">0dp</item>
+        <item name="iconSize">16dp</item><item name="iconPadding">6dp</item><item name="iconTint">@color/card_ink</item>
+        <item name="strokeColor">@color/card_line</item><item name="cornerRadius">14dp</item>
+    </style>
+    <style name="TapTap.Control" parent="Widget.Material3.Button.IconButton">
+        <item name="android:minWidth">48dp</item><item name="android:minHeight">48dp</item>
+        <item name="android:insetTop">0dp</item><item name="android:insetBottom">0dp</item>
+        <item name="android:insetLeft">0dp</item><item name="android:insetRight">0dp</item>
+        <item name="android:paddingStart">0dp</item><item name="android:paddingEnd">0dp</item>
+        <item name="backgroundTint">@color/card_surface</item><item name="cornerRadius">40dp</item>
+        <item name="iconGravity">textStart</item><item name="iconPadding">0dp</item>
+        <item name="iconSize">24dp</item><item name="iconTint">@null</item>
     </style>
     <style name="TapTap.Outlined" parent="Widget.Material3.Button.OutlinedButton">
         <item name="android:minHeight">48dp</item><item name="cornerRadius">16dp</item>

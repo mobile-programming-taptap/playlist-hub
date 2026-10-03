@@ -196,7 +196,7 @@ public class ErrorRecoveryCheckTest {
                         onView(withId(R.id.like)).check(matches(not(isEnabled())));
                         assertEquals(1,feedbackWrites.get());assertNull(serverFailure.get());
                         feedbackRelease.countDown();ready(app);
-                        onView(withId(R.id.like)).check(matches(withText("좋아요 취소")));
+                        onView(withId(R.id.like)).check(matches(withContentDescription("좋아요 취소")));
                         onView(withId(R.id.next)).perform(click());ready(app);
                         org.hamcrest.Matcher<View> save=allOf(withId(R.id.save),isDescendantOfA(allOf(isAssignableFrom(android.widget.ScrollView.class),isDisplayed())));
                         onView(save).perform(scrollTo(),click());ready(app);
@@ -238,12 +238,12 @@ public class ErrorRecoveryCheckTest {
                         assertEquals(1,retryCreates.get());assertEquals(2,retryBatchWrites.get());
                         for(int i=0;i<3;i++){onView(withId(R.id.previous)).perform(click());ready(app);}
                         onView(withId(R.id.counter)).check(matches(withText("1 / 8")));
-                        onView(withId(R.id.like)).check(matches(withText("좋아요 취소")));
+                        onView(withId(R.id.like)).check(matches(withContentDescription("좋아요 취소")));
                         onView(withId(R.id.dislike)).perform(click());
                         assertTrue("The failing feedback write must reach the server",failedFeedbackReceived.await(5,TimeUnit.SECONDS));
                         app.recreate();pendingWriteVisible(app);onView(withId(R.id.dislike)).check(matches(not(isEnabled())));
                         assertEquals(2,feedbackWrites.get());failedFeedbackRelease.countDown();ready(app);
-                        onView(withId(R.id.like)).check(matches(withText("좋아요 취소")));
+                        onView(withId(R.id.like)).check(matches(withContentDescription("좋아요 취소")));
                         onView(withText("회전 중 반응 검사 오류")).check(matches(isDisplayed()));
                         assertEquals(2,feedbackWrites.get());assertEquals(1,batchWrites.get());
                         assertNull(serverFailure.get());assertEquals(previousFeedback,data.feedback());
@@ -1011,8 +1011,8 @@ public class ErrorRecoveryCheckTest {
                 });
                 onView(withText("플레이어를 준비하지 못했어요. 외부에서 열어보세요.")).inRoot(isDialog()).check(matches(isDisplayed()));
                 onView(withText("외부에서 열기")).inRoot(isDialog()).perform(click());
-                onView(withText("Spotify · 곡 검색")).inRoot(isDialog()).check(matches(isDisplayed()));
-                onView(withText("YouTube Music · 영상으로 연결")).inRoot(isDialog()).check(matches(isDisplayed()));
+                onView(withText("Spotify")).inRoot(isDialog()).check(matches(isDisplayed()));
+                onView(withText("YouTube Music")).inRoot(isDialog()).check(matches(isDisplayed()));
                 onView(withText("취소")).inRoot(isDialog()).perform(click());ready(app);
                 onView(withId(R.id.counter)).check(matches(withText("1 / 8")));
                 assertTrue("Playback failure must not create recommendation feedback",data.feedback().isEmpty());
