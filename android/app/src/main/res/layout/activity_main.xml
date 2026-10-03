@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto"
-    android:id="@+id/main" android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:background="@color/background">
+    android:id="@+id/main" android:focusableInTouchMode="true" android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:background="@color/background">
     <LinearLayout android:layout_width="match_parent" android:layout_height="56dp" android:gravity="center_vertical" android:paddingStart="20dp" android:paddingEnd="12dp">
         <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="TapTap" android:textColor="@color/accent" android:textSize="28sp" android:fontFamily="sans-serif-black" />
         <com.google.android.material.button.MaterialButton android:id="@+id/settings" style="@style/Widget.Material3.Button.IconButton" android:layout_width="48dp" android:layout_height="48dp" android:contentDescription="설정 및 반응 관리" app:icon="@drawable/ic_settings" />

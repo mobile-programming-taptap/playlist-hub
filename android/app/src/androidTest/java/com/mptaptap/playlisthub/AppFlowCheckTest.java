@@ -16,6 +16,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import static androidx.test.espresso.Espresso.onView;
+import static androidx.test.espresso.Espresso.pressBack;
 import static androidx.test.espresso.action.ViewActions.*;
 import static androidx.test.espresso.assertion.ViewAssertions.matches;
 import static androidx.test.espresso.matcher.ViewMatchers.*;
@@ -175,6 +176,60 @@ public class AppFlowCheckTest {
             data.clearFeedback();for(Map.Entry<String,Integer> reaction:previousFeedback.entrySet())data.react(reaction.getKey(),reaction.getValue());
             SharedPreferences.Editor restore=settings.edit();
             for(String key:new String[]{"server","prompt"}){
+                if(previousSettings.containsKey(key))restore.putString(key,(String)previousSettings.get(key));else restore.remove(key);
+            }
+            restore.commit();data.close();
+        }
+    }
+
+    @Test public void requestDraftSurvivesRecreateAndNavigation() {
+        Context context=InstrumentationRegistry.getInstrumentation().getTargetContext();
+        SharedPreferences settings=context.getSharedPreferences("settings",Context.MODE_PRIVATE);
+        Map<String,?> previousSettings=settings.getAll();
+        LocalStore data=new LocalStore(context);
+        Map<String,Integer> previousFeedback=data.feedback();
+        settings.edit().remove("server").remove("prompt").commit();
+        data.clearFeedback();
+        String draft="비 오는 밤에는 공부 대신 산책하며 듣고 싶은 차분한 노래를 찾아주세요. 가사가 있는 한국어 음악과 편안한 재즈 위주로 너무 빠른 곡은 피하고 조용한 분위기를 오래 이어가 주세요.";
+        try {
+            try(ActivityScenario<MainActivity> app=ActivityScenario.launch(MainActivity.class)) {
+                ready(app);
+                onView(withId(R.id.example_study)).perform(closeSoftKeyboard(),scrollTo(),click());
+                onView(withId(R.id.recommend)).perform(scrollTo(),click());ready(app);
+                onView(withId(R.id.counter)).check(matches(withText("1 / 8")));
+                onView(withId(R.id.next)).perform(click());ready(app);
+                onView(withId(R.id.counter)).check(matches(withText("2 / 8")));
+                AtomicReference<String> title=new AtomicReference<>(),artist=new AtomicReference<>(),conditions=new AtomicReference<>();
+                onView(currentCard(R.id.track_title)).check((view,error)->title.set(((android.widget.TextView)view).getText().toString()));
+                onView(currentCard(R.id.track_artist)).check((view,error)->artist.set(((android.widget.TextView)view).getText().toString()));
+                onView(withId(R.id.condition_summary)).check((view,error)->conditions.set(((android.widget.TextView)view).getText().toString()));
+                onView(withId(R.id.edit_request)).perform(scrollTo(),click());
+                onView(withId(R.id.prompt)).perform(replaceText(draft),closeSoftKeyboard());
+                app.recreate();ready(app);
+                onView(withId(R.id.request_panel)).check(matches(withEffectiveVisibility(Visibility.VISIBLE)));
+                onView(withId(R.id.results)).check(matches(withEffectiveVisibility(Visibility.GONE)));
+                onView(withId(R.id.card_navigation)).check(matches(withEffectiveVisibility(Visibility.GONE)));
+                onView(withId(R.id.prompt)).check(matches(withText(draft))).perform(closeSoftKeyboard());
+                onView(withId(R.id.nav_library)).perform(click());ready(app);
+                onView(withId(R.id.library_scroll)).check(matches(isDisplayed()));
+                onView(withId(R.id.nav_recommend)).perform(click());ready(app);
+                onView(withId(R.id.request_panel)).check(matches(withEffectiveVisibility(Visibility.VISIBLE)));
+                onView(withId(R.id.card_navigation)).check(matches(withEffectiveVisibility(Visibility.GONE)));
+                onView(withId(R.id.prompt)).check(matches(withText(draft))).perform(closeSoftKeyboard());
+                pressBack();ready(app);
+                onView(withId(R.id.request_panel)).check(matches(withEffectiveVisibility(Visibility.GONE)));
+                onView(withId(R.id.results)).check(matches(withEffectiveVisibility(Visibility.VISIBLE)));
+                onView(withId(R.id.card_navigation)).check(matches(isDisplayed()));
+                onView(withId(R.id.counter)).check(matches(withText("2 / 8")));
+                onView(currentCard(R.id.track_title)).check(matches(withText(title.get())));
+                onView(currentCard(R.id.track_artist)).check(matches(withText(artist.get())));
+                onView(withId(R.id.condition_summary)).check(matches(withText(conditions.get())));
+                assertTrue("Editing a draft must not record feedback",data.feedback().isEmpty());
+            }
+        } finally {
+            data.clearFeedback();for(Map.Entry<String,Integer> reaction:previousFeedback.entrySet())data.react(reaction.getKey(),reaction.getValue());
+            SharedPreferences.Editor restore=settings.edit();
+            for(String key:new String[]{"server","prompt"}) {
                 if(previousSettings.containsKey(key))restore.putString(key,(String)previousSettings.get(key));else restore.remove(key);
             }
             restore.commit();data.close();
