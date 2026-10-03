@@ -4,7 +4,7 @@
         <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="80dp" android:padding="16dp" android:gravity="center_vertical">
             <ImageView android:layout_width="32dp" android:layout_height="32dp" android:src="@drawable/ic_spotify" android:importantForAccessibility="no" />
             <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:layout_marginStart="14dp" android:orientation="vertical">
-                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Spotify" android:textColor="@color/ink" android:textSize="17sp" android:fontFamily="sans-serif-medium" />
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Spotify" android:textColor="@color/ink" android:textSize="17sp" android:fontFamily="@font/pretendard_semibold" app:fontFamily="@font/pretendard_semibold" />
                 <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="4dp" android:text="곡명·아티스트로 검색" android:textColor="@color/muted" android:textSize="12sp" />
             </LinearLayout>
             <ImageView android:layout_width="20dp" android:layout_height="20dp" android:src="@drawable/ic_external" android:importantForAccessibility="no" />
@@ -14,7 +14,7 @@
         <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="80dp" android:padding="16dp" android:gravity="center_vertical">
             <ImageView android:layout_width="32dp" android:layout_height="32dp" android:src="@drawable/ic_youtube" android:importantForAccessibility="no" />
             <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:layout_marginStart="14dp" android:orientation="vertical">
-                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="YouTube Music" android:textColor="@color/ink" android:textSize="17sp" android:fontFamily="sans-serif-medium" />
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="YouTube Music" android:textColor="@color/ink" android:textSize="17sp" android:fontFamily="@font/pretendard_semibold" app:fontFamily="@font/pretendard_semibold" />
                 <TextView android:id="@+id/youtube_music_detail" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="4dp" android:text="공식 영상으로 듣기" android:textColor="@color/muted" android:textSize="12sp" />
             </LinearLayout>
             <ImageView android:layout_width="20dp" android:layout_height="20dp" android:src="@drawable/ic_external" android:importantForAccessibility="no" />

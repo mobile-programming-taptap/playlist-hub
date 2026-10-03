@@ -6,13 +6,61 @@
         <item name="colorSecondaryContainer">@color/soft_teal</item><item name="colorOnSecondaryContainer">@color/teal</item>
         <item name="colorSurface">@color/surface</item>
         <item name="colorOnSurface">@color/ink</item><item name="android:colorBackground">@color/background</item>
-        <item name="android:windowLightStatusBar">true</item><item name="android:fontFamily">sans</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:textAppearanceSmall">@style/TextAppearance.TapTap.Default</item>
+        <item name="android:textAppearanceMediumInverse">@style/TextAppearance.TapTap.Input</item>
+        <item name="textAppearanceBodyLarge">@style/TextAppearance.TapTap.BodyLarge</item>
+        <item name="textAppearanceBodyMedium">@style/TextAppearance.TapTap.BodyMedium</item>
+        <item name="textAppearanceBodySmall">@style/TextAppearance.TapTap.BodySmall</item>
+        <item name="textAppearanceLabelLarge">@style/TextAppearance.TapTap.LabelLarge</item>
+        <item name="textAppearanceLabelMedium">@style/TextAppearance.TapTap.LabelMedium</item>
+        <item name="textAppearanceLabelSmall">@style/TextAppearance.TapTap.LabelSmall</item>
+        <item name="textAppearanceTitleLarge">@style/TextAppearance.TapTap.TitleLarge</item>
+        <item name="textAppearanceTitleMedium">@style/TextAppearance.TapTap.TitleMedium</item>
+        <item name="textAppearanceTitleSmall">@style/TextAppearance.TapTap.TitleSmall</item>
+        <item name="textAppearanceHeadlineSmall">@style/TextAppearance.TapTap.HeadlineSmall</item>
         <item name="android:navigationBarColor">@color/background</item>
         <item name="materialAlertDialogTheme">@style/ThemeOverlay.TapTap.Dialog</item>
         <item name="elevationOverlayEnabled">false</item>
     </style>
     <style name="ThemeOverlay.TapTap.Dialog" parent="ThemeOverlay.Material3.MaterialAlertDialog">
         <item name="colorSurfaceContainerHigh">@color/surface</item>
+    </style>
+    <style name="TextAppearance.TapTap.Default" parent="TextAppearance.AppCompat.Small">
+        <item name="fontFamily">@font/pretendard</item><item name="android:fontFamily">@font/pretendard</item>
+    </style>
+    <style name="TextAppearance.TapTap.Input" parent="TextAppearance.AppCompat.Medium.Inverse">
+        <item name="fontFamily">@font/pretendard</item><item name="android:fontFamily">@font/pretendard</item>
+    </style>
+    <style name="TextAppearance.TapTap.BodyLarge" parent="TextAppearance.Material3.BodyLarge">
+        <item name="fontFamily">@font/pretendard</item><item name="android:fontFamily">@font/pretendard</item>
+    </style>
+    <style name="TextAppearance.TapTap.BodyMedium" parent="TextAppearance.Material3.BodyMedium">
+        <item name="fontFamily">@font/pretendard</item><item name="android:fontFamily">@font/pretendard</item>
+    </style>
+    <style name="TextAppearance.TapTap.BodySmall" parent="TextAppearance.Material3.BodySmall">
+        <item name="fontFamily">@font/pretendard</item><item name="android:fontFamily">@font/pretendard</item>
+    </style>
+    <style name="TextAppearance.TapTap.LabelLarge" parent="TextAppearance.Material3.LabelLarge">
+        <item name="fontFamily">@font/pretendard_semibold</item><item name="android:fontFamily">@font/pretendard_semibold</item>
+    </style>
+    <style name="TextAppearance.TapTap.LabelMedium" parent="TextAppearance.Material3.LabelMedium">
+        <item name="fontFamily">@font/pretendard_semibold</item><item name="android:fontFamily">@font/pretendard_semibold</item>
+    </style>
+    <style name="TextAppearance.TapTap.LabelSmall" parent="TextAppearance.Material3.LabelSmall">
+        <item name="fontFamily">@font/pretendard_semibold</item><item name="android:fontFamily">@font/pretendard_semibold</item>
+    </style>
+    <style name="TextAppearance.TapTap.TitleLarge" parent="TextAppearance.Material3.TitleLarge">
+        <item name="fontFamily">@font/pretendard_semibold</item><item name="android:fontFamily">@font/pretendard_semibold</item>
+    </style>
+    <style name="TextAppearance.TapTap.TitleMedium" parent="TextAppearance.Material3.TitleMedium">
+        <item name="fontFamily">@font/pretendard_semibold</item><item name="android:fontFamily">@font/pretendard_semibold</item>
+    </style>
+    <style name="TextAppearance.TapTap.TitleSmall" parent="TextAppearance.Material3.TitleSmall">
+        <item name="fontFamily">@font/pretendard_semibold</item><item name="android:fontFamily">@font/pretendard_semibold</item>
+    </style>
+    <style name="TextAppearance.TapTap.HeadlineSmall" parent="TextAppearance.Material3.HeadlineSmall">
+        <item name="fontFamily">@font/pretendard_semibold</item><item name="android:fontFamily">@font/pretendard_semibold</item>
     </style>
     <style name="TapTap.CardAction" parent="Widget.Material3.Button.OutlinedButton">
         <item name="android:minHeight">48dp</item><item name="android:minWidth">0dp</item>

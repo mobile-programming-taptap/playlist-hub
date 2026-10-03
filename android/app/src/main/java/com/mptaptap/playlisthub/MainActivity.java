@@ -30,6 +30,8 @@ import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.appcompat.widget.AppCompatEditText;
+import androidx.appcompat.widget.AppCompatTextView;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
@@ -423,7 +425,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void editPlaylist(List<Track> firstTracks, String id, String currentTitle) {
-        EditText name = new EditText(this); name.setHint("예: 비 오는 날의 음악"); name.setFilters(new InputFilter[]{new InputFilter.LengthFilter(80)});
+        EditText name = new AppCompatEditText(this); name.setHint("예: 비 오는 날의 음악"); name.setFilters(new InputFilter[]{new InputFilter.LengthFilter(80)});
         name.setSingleLine(true); name.setText(currentTitle); name.setSelection(name.length());
         LinearLayout box = column(); box.addView(name);
         TextView failure=text("",14,false);failure.setTextColor(getColor(R.color.accent));failure.setVisibility(View.GONE);failure.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);box.addView(failure);
@@ -554,7 +556,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private EditText searchField(String hint, Consumer<String> change) {
-        EditText field=new EditText(this); field.setSingleLine(true); field.setHint(hint);
+        EditText field=new AppCompatEditText(this); field.setSingleLine(true); field.setHint(hint);
         field.setFilters(new InputFilter[]{new InputFilter.LengthFilter(100)});
         field.addTextChangedListener(new TextWatcher() {
             public void beforeTextChanged(CharSequence s,int start,int count,int after) {}
@@ -710,7 +712,7 @@ public class MainActivity extends AppCompatActivity {
         reactions.setEnabled(metadataReady);box.addView(reactions);
         box.addView(text("AI 추천 서버 연결",18,true));
         box.addView(text(api==null?"기본 추천을 사용 중이에요. 목록은 이 기기에 보관돼요.":"서버에 연결된 내 반응과 목록을 사용해요.",14,false));
-        EditText address=new EditText(this);address.setSingleLine(true);address.setHint("https://서버주소");address.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_VARIATION_URI);
+        EditText address=new AppCompatEditText(this);address.setSingleLine(true);address.setHint("https://서버주소");address.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_VARIATION_URI);
         address.setText(api==null?"":api.base);box.addView(address);
         TextView failure=text("",14,false);failure.setTextColor(getColor(R.color.accent));failure.setVisibility(View.GONE);failure.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);box.addView(failure);
         AlertDialog dialog=dialogBuilder().setView(scroll(box)).setNegativeButton("닫기",null).create();
@@ -756,7 +758,7 @@ public class MainActivity extends AppCompatActivity {
 
     private LinearLayout column(){LinearLayout box=new LinearLayout(this);box.setOrientation(LinearLayout.VERTICAL);box.setPadding(dp(20),dp(8),dp(20),dp(16));return box;}
     private ScrollView scroll(View child){ScrollView view=new ScrollView(this);view.addView(child);return view;}
-    private TextView text(String value,int size,boolean bold){TextView view=new TextView(this);view.setText(value);view.setTextSize(size);view.setTextColor(getColor(bold?R.color.ink:R.color.muted));view.setPadding(0,dp(10),0,dp(10));if(bold)view.setTypeface(null,Typeface.BOLD);return view;}
+    private TextView text(String value,int size,boolean bold){TextView view=new AppCompatTextView(this);view.setText(value);view.setTextSize(size);view.setTextColor(getColor(bold?R.color.ink:R.color.muted));view.setPadding(0,dp(10),0,dp(10));if(bold)view.setTypeface(view.getTypeface(),Typeface.BOLD);return view;}
     private MaterialButton button(String label,View.OnClickListener action){MaterialButton view=new MaterialButton(this,null,com.google.android.material.R.attr.materialButtonOutlinedStyle);view.setText(label);view.setTextSize(14);view.setGravity(android.view.Gravity.START|android.view.Gravity.CENTER_VERTICAL);view.setMinHeight(dp(52));view.setCornerRadius(dp(16));view.setStrokeColor(android.content.res.ColorStateList.valueOf(getColor(R.color.line)));view.setTextColor(getColor(R.color.ink));view.setBackgroundTintList(android.content.res.ColorStateList.valueOf(getColor(R.color.surface)));view.setOnClickListener(v->{if(!busy)action.onClick(v);});return view;}
     private int dp(int value){return Math.round(value*getResources().getDisplayMetrics().density);}
 
