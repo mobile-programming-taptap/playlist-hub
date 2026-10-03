@@ -103,6 +103,10 @@ public class MainActivity extends AppCompatActivity {
             @Override public void onPageSelected(int index) { stopPlayer(); updateCounter(); }
         });
         findViewById(R.id.recommend).setOnClickListener(v -> recommend());
+        findViewById(R.id.save_results).setOnClickListener(v -> {
+            List<Track> tracks=new ArrayList<>(); for (Recommender.Pick pick:picks) tracks.add(pick.track);
+            chooseSaveAll(tracks);
+        });
         findViewById(R.id.settings).setOnClickListener(v -> showSettings());
         findViewById(R.id.example_rain).setOnClickListener(v -> prompt.setText("비 오는 밤에 듣기 좋은 잔잔한 음악"));
         findViewById(R.id.example_study).setOnClickListener(v -> prompt.setText("공부할 때 집중할 수 있는 가사 없는 피아노 음악"));
@@ -186,7 +190,7 @@ public class MainActivity extends AppCompatActivity {
         }, result -> {
             picks = (List<Recommender.Pick>)result[0]; resultMode = (String)result[1]; resultNotice = (String)result[2];
             showResults(); pager.setCurrentItem(0, false);
-            findViewById(R.id.results).post(() -> ((androidx.core.widget.NestedScrollView)findViewById(R.id.recommend_scroll)).smoothScrollTo(0, findViewById(R.id.results).getTop()));
+            findViewById(R.id.results).post(() -> ((androidx.core.widget.NestedScrollView)findViewById(R.id.recommend_scroll)).scrollTo(0, findViewById(R.id.results).getTop()));
         }, this::recommend);
     }
 
@@ -196,6 +200,9 @@ public class MainActivity extends AppCompatActivity {
         ((TextView)findViewById(R.id.empty)).setText("조건에 맞는 곡을 찾지 못했어요.\n장르나 언어 조건을 줄여 다시 추천받아 보세요.");
         ((TextView)findViewById(R.id.notice)).setText((resultMode.equals("openai") ? "AI 추천" : "기본 추천") + (resultNotice.isEmpty() ? " · 한 곡씩 들어보세요." : "\n" + resultNotice));
         pager.setVisibility(picks.isEmpty() ? View.GONE : View.VISIBLE);
+        findViewById(R.id.save_results).setVisibility(picks.isEmpty() ? View.GONE : View.VISIBLE);
+        findViewById(R.id.save_results).setEnabled(!busy && !picks.isEmpty());
+        ((MaterialButton)findViewById(R.id.save_results)).setText("추천 "+picks.size()+"곡 모두 저장");
         cards.notifyDataSetChanged(); updateCounter();
     }
 
@@ -226,22 +233,23 @@ public class MainActivity extends AppCompatActivity {
     private JSONObject playlist(String id) throws Exception { return api == null ? local.playlist(id) : api.object("GET", "/playlists/" + id, null); }
 
     private void chooseSave(Track track) {
+        chooseSaveAll(java.util.Collections.singletonList(track));
+    }
+
+    private void chooseSaveAll(List<Track> tracks) {
+        if (tracks.isEmpty()) return;
         task(this::playlists, lists -> {
             String[] labels = new String[lists.length()+1];
             for (int i=0;i<lists.length();i++) labels[i] = lists.optJSONObject(i).optString("title") + " · " + lists.optJSONObject(i).optInt("size") + "곡";
             labels[lists.length()] = "+ 새 플레이리스트";
             new MaterialAlertDialogBuilder(this).setTitle("어디에 저장할까요?").setItems(labels, (dialog, which) -> {
-                if (which == lists.length()) createPlaylist(track);
-                else save(track, lists.optJSONObject(which).optString("id"));
+                if (which == lists.length()) editPlaylist(tracks, null, "");
+                else save(tracks, lists.optJSONObject(which).optString("id"));
             }).setNegativeButton("취소", null).show();
-        }, () -> chooseSave(track));
+        }, () -> chooseSaveAll(tracks));
     }
 
-    private void createPlaylist(Track firstTrack) {
-        editPlaylist(firstTrack, null, "");
-    }
-
-    private void editPlaylist(Track firstTrack, String id, String currentTitle) {
+    private void editPlaylist(List<Track> firstTracks, String id, String currentTitle) {
         EditText name = new EditText(this); name.setHint("예: 비 오는 날의 음악"); name.setFilters(new InputFilter[]{new InputFilter.LengthFilter(80)});
         name.setSingleLine(true); name.setText(currentTitle); name.setSelection(name.length());
         LinearLayout box = column(); box.addView(name);
@@ -256,21 +264,22 @@ public class MainActivity extends AppCompatActivity {
             }, created -> {
                 dialog.dismiss();
                 if (id != null) openPlaylist(id);
-                else if (firstTrack != null) save(firstTrack, created.optString("id")); else loadLibrary();
+                else if (firstTracks != null) save(firstTracks, created.optString("id")); else loadLibrary();
             }, null);
         })); dialog.show();
     }
 
-    private void save(Track track, String id) {
+    private void save(List<Track> tracks, String id) {
         task(() -> {
-            if (api == null) local.save(id, track);
-            else api.object("POST", "/playlists/" + id + "/items", new JSONObject().put("trackId", track.id));
-            return track.id;
+            List<String> ids=new ArrayList<>(); for (Track track:tracks) ids.add(track.id);
+            if (api == null) local.saveAll(id, tracks);
+            else api.request("POST", "/playlists/" + id + "/items/batch", new JSONObject().put("trackIds", new JSONArray(ids)));
+            return ids;
         }, saved -> {
-            savedTracks.add(saved); cards.notifyDataSetChanged();
-            Snackbar.make(findViewById(R.id.main), "플레이리스트에 저장했어요.", Snackbar.LENGTH_LONG)
+            savedTracks.addAll(saved); cards.notifyDataSetChanged();
+            Snackbar.make(findViewById(R.id.main), "플레이리스트에 "+saved.size()+"곡을 저장했어요.", Snackbar.LENGTH_LONG)
                     .setAction("목록 보기", v -> ((BottomNavigationView)findViewById(R.id.navigation)).setSelectedItemId(R.id.nav_library)).show();
-        }, () -> save(track, id));
+        }, () -> save(tracks, id));
     }
 
     private void loadLibrary() {
@@ -280,7 +289,7 @@ public class MainActivity extends AppCompatActivity {
             LinearLayout box = findViewById(R.id.library); box.removeAllViews();
             box.addView(text("내 플레이리스트", 27, true));
             box.addView(text(api == null ? "좋아하는 음악을 이 기기에 모아두세요." : "내가 저장한 음악을 다시 들어보세요.", 14, false));
-            box.addView(button("+ 새 플레이리스트", v -> createPlaylist(null)));
+            box.addView(button("+ 새 플레이리스트", v -> editPlaylist(null, null, "")));
             box.addView(button("곡명·아티스트로 찾기", v -> searchCatalogue()));
             LinearLayout rows = new LinearLayout(this); rows.setOrientation(LinearLayout.VERTICAL);
             EditText search = searchField("내 목록 이름 검색", q -> { libraryQuery=q; renderLists(rows, lists, q); });
@@ -520,6 +529,7 @@ public class MainActivity extends AppCompatActivity {
     private void setBusy(boolean value){
         busy=value;findViewById(R.id.progress).setVisibility(value?View.VISIBLE:View.INVISIBLE);
         findViewById(R.id.recommend).setEnabled(!value);findViewById(R.id.settings).setEnabled(!value);
+        findViewById(R.id.save_results).setEnabled(!value && !picks.isEmpty());
         android.view.Menu menu=((BottomNavigationView)findViewById(R.id.navigation)).getMenu();
         for(int i=0;i<menu.size();i++)menu.getItem(i).setEnabled(!value);
         updateCounter();cards.notifyDataSetChanged();

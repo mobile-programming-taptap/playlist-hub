@@ -107,6 +107,18 @@ class ApiCheckTest {
                 value("DELETE","/playlists/"+playlist+"/items/"+first.path("id").asString(),other,null,404);
                 assertEquals(1,value("GET","/me/saved-tracks",token,null,200).size());
                 assertEquals("search",value("GET","/tracks/"+saved+"/links",token,null,200).get(0).path("kind").asString());
+                String bulk=value("POST","/playlists",token,Map.of("title","Batch check"),201).path("id").asString();
+                String bulkPath="/playlists/"+bulk;
+                value("POST",bulkPath+"/items/batch",token,Map.of("trackIds",List.of(saved,"invented")),404);
+                value("POST",bulkPath+"/items/batch",token,Map.of("trackIds",List.of()),400);
+                value("POST",bulkPath+"/items/batch",token,Map.of("trackIds",List.of(saved,saved)),400);
+                value("POST",bulkPath+"/items/batch",token,Map.of("trackIds",java.util.Collections.nCopies(11,saved)),400);
+                assertEquals(0,value("GET",bulkPath,token,null,200).path("items").size());
+                value("POST",bulkPath+"/items/batch",other,Map.of("trackIds",List.of(saved,dislike)),404);
+                JsonNode batch=value("POST",bulkPath+"/items/batch",token,Map.of("trackIds",List.of(saved,dislike)),200);
+                assertEquals(batch,value("POST",bulkPath+"/items/batch",token,Map.of("trackIds",List.of(saved,dislike)),200));
+                assertEquals(2,value("GET",bulkPath,token,null,200).path("items").size());
+                value("DELETE",bulkPath,token,null,204);
                 String managed=value("POST","/playlists",token,Map.of("title","Manage check"),201).path("id").asString();
                 String path="/playlists/"+managed;
                 JsonNode a=value("POST",path+"/items",token,Map.of("trackId",saved),200);

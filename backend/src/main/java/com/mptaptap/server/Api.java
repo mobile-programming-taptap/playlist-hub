@@ -49,6 +49,7 @@ public class Api {
     public record Reaction(Integer reaction) {}
     public record PlaylistTitle(String title) {}
     public record Item(String trackId) {}
+    public record Items(List<String> trackIds) {}
     public record Order(List<String> itemIds) {}
 
     @PostMapping("/recommendations")
@@ -136,6 +137,14 @@ public class Api {
     @PostMapping("/playlists/{id}/items")
     public Map<String, Object> save(@RequestHeader(value="Authorization", required=false) String auth, @PathVariable String id, @RequestBody Item body) {
         String user = store.user(auth); return store.add(user, id, track(body.trackId()));
+    }
+
+    @PostMapping("/playlists/{id}/items/batch")
+    public List<Map<String, Object>> saveAll(@RequestHeader(value="Authorization", required=false) String auth, @PathVariable String id, @RequestBody Items body) {
+        String user = store.user(auth); List<String> ids = body.trackIds();
+        if (ids == null || ids.isEmpty() || ids.size() > 10 || new java.util.HashSet<>(ids).size() != ids.size())
+            throw new IllegalArgumentException("한 번에 서로 다른 1~10곡을 저장할 수 있어요.");
+        return store.addAll(user, id, ids.stream().map(this::track).toList());
     }
 
     @DeleteMapping("/playlists/{id}/items/{item}") @ResponseStatus(HttpStatus.NO_CONTENT)

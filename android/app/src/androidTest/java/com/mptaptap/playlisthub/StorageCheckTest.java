@@ -86,6 +86,13 @@ public class StorageCheckTest {
             store.delete(list);assertEquals(0,store.playlists().length());assertFalse(store.saved(track.id));
             try(android.database.Cursor rows=store.getReadableDatabase().rawQuery("SELECT id FROM items",null)){assertEquals(0,rows.getCount());}
             list=store.create("권한 검사").getString("id");
+            store.saveAll(list,java.util.Arrays.asList(track,second));store.saveAll(list,java.util.Arrays.asList(track,second));
+            assertEquals(2,store.playlist(list).getJSONArray("items").length());
+            JSONArray source=new JSONArray(ApiClient.read(context.getAssets().open("tracks.json")));
+            Track third=TrackJson.read(source.getJSONObject(2)),unapproved=TrackJson.read(source.getJSONObject(3));unapproved.source="Spotify";
+            try {store.saveAll(list,java.util.Arrays.asList(third,unapproved));fail("Invalid batch accepted");}catch(IllegalArgumentException expected){}
+            assertEquals(2,store.playlist(list).getJSONArray("items").length());assertFalse(store.saved(third.id));
+            try {store.saveAll(list,java.util.Collections.emptyList());fail("Empty batch accepted");}catch(IllegalArgumentException expected){}
             try {store.create(" ");fail("Empty title accepted");}catch(IllegalArgumentException expected){}
             track.source="Spotify";
             try {store.save(list,track);fail("Unapproved source accepted");}catch(IllegalArgumentException expected){}

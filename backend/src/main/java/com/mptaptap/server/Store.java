@@ -128,6 +128,11 @@ public class Store {
         db.update("DELETE FROM playlist_items WHERE playlist_id=? AND id=?", playlist, item);
     }
 
+    public synchronized List<Map<String, Object>> addAll(String user, String playlist, List<Track> tracks) {
+        ownedPlaylist(user, playlist);
+        return tx.execute(status -> tracks.stream().map(track -> add(user, playlist, track)).toList());
+    }
+
     public synchronized void rename(String user, String playlist, String title) {
         ownedPlaylist(user, playlist);
         db.update("UPDATE playlists SET title=? WHERE id=? AND user_id=?", title, playlist, user);
