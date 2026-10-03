@@ -308,7 +308,7 @@ public final class HubActivity extends AppCompatActivity {
     }
     private int timelineSeconds(JSONObject imported,JSONObject edit) {
         int seconds;try{seconds=Integer.parseInt(edit.optString("seconds"));}catch(NumberFormatException error){throw new IllegalArgumentException("시작 시간을 초 단위로 입력하거나 곡을 제외해 주세요.");}
-        int duration=imported.optInt("durationSeconds",-1);if(seconds<0||seconds>(duration>0?duration:21600))throw new IllegalArgumentException("시작 시간이 영상 범위를 벗어났어요. 시간을 수정하거나 곡을 제외해 주세요.");return seconds;
+        int duration=imported.optInt("durationSeconds",-1);if(seconds<0||(duration>0?seconds>=duration:seconds>21600))throw new IllegalArgumentException("시작 시간이 영상 범위를 벗어났어요. 시간을 수정하거나 곡을 제외해 주세요.");return seconds;
     }
 
     private void review() {
@@ -318,7 +318,15 @@ public final class HubActivity extends AppCompatActivity {
         for(int i=0;i<items.length();i++) {
             JSONObject item=items.optJSONObject(i);if(item==null)continue;int index=item.optInt("sourceIndex",i);JSONObject source=item.optJSONObject("source");LinearLayout box=card(content);
             box.addView(text((index+1)+". "+song(source),16,true));JSONObject chosen=find(requests.data.optJSONArray("selections"),"sourceIndex",index);
-            box.addView(text(chosen==null?"선택이 필요해요":chosen.optBoolean("excluded")?"전송에서 제외됨":"선택한 곡: "+selectionLabel(item,chosen),13,false));
+            String label="곡 후보 상태를 확인하지 못했어요. 후보를 직접 확인해 주세요.";
+            if(chosen!=null)label=chosen.optBoolean("excluded")?"전송에서 제외됨":"선택한 곡: "+selectionLabel(item,chosen);
+            else switch(item.optString("status")) {
+                case "MATCHED":label="일치 후보 있음 · 선택해 주세요";break;
+                case "NEEDS_REVIEW":label="확인 필요 · 곡과 버전을 비교해 주세요";break;
+                case "UNKNOWN":JSONArray candidates=item.optJSONArray("candidates");label=candidates==null||candidates.length()==0?"찾지 못함 · 이 곡을 제외할 수 있어요":"확인 필요 · 일치하는 곡을 확인하지 못했어요";break;
+                case "NOT_SEARCHED":label="후보 조회 전 · 다음 곡의 후보를 찾아 주세요";break;
+            }
+            box.addView(text(label,13,false));
             addButton(box,"후보 선택 또는 제외",()->chooseCandidate(item,index));
         }
         if(review.optInt("nextOffset",-1)>=0)addButton(content,"다음 20곡의 후보 찾기",()->send("review","POST","/matches",json("importId",value("importId"),"targetProvider",provider("targetProvider"),"offset",review.optInt("nextOffset"))));

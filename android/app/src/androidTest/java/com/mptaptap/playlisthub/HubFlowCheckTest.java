@@ -87,11 +87,16 @@ public class HubFlowCheckTest {
                         for(int i=0;i<indices.length;i++){JSONObject row=entries.getJSONObject(i);assertEquals(indices[i],row.getInt("sourceIndex"));assertFalse(row.getBoolean("excluded"));assertEquals(i==0?"수정한 곡 A":sourceNames[i],row.getString("title"));assertEquals("검사 가수",row.getString("artist"));}
                         savedRows.set(entries);response=new JSONObject().put("id",importId.get()).put("title",listTitle).put("size",3).put("items",originals);
                     } else if(path.equals("/matches")) {
-                        assertEquals("POST",method);assertEquals(1,matches.incrementAndGet());assertEquals(importId.get(),body.getString("importId"));assertEquals("youtube",body.getString("targetProvider"));assertEquals(2,saves.get());JSONArray rows=new JSONArray();
-                        for(int i=0;i<indices.length;i++){JSONObject source=new JSONObject(originals.getJSONObject(i).getJSONObject("track").toString()).put("title",savedRows.get().getJSONObject(i).getString("title"));JSONArray candidates=new JSONArray();
-                            if(i<2)candidates.put(new JSONObject().put("track",new JSONObject().put("platform","youtube").put("externalId",targetIds[i]).put("title","대상 곡 "+(i==0?"A":"B")).put("artist","대상 가수").put("album","검사 앨범")));
-                            rows.put(new JSONObject().put("sourceIndex",indices[i]).put("source",source).put("candidates",candidates).put("status",i<2?"NEEDS_REVIEW":"UNKNOWN").put("selected",JSONObject.NULL).put("approved",false));}
-                        review=new JSONObject().put("importId",importId.get()).put("targetProvider","youtube").put("items",rows).put("nextOffset",-1);response=review;
+                        assertEquals("POST",method);int page=matches.incrementAndGet();assertTrue(page<=2);assertEquals(importId.get(),body.getString("importId"));assertEquals("youtube",body.getString("targetProvider"));assertEquals(2,saves.get());
+                        if(page==1){assertEquals(0,body.optInt("offset",0));JSONArray rows=new JSONArray();
+                            for(int i=0;i<indices.length;i++){JSONObject source=new JSONObject(originals.getJSONObject(i).getJSONObject("track").toString()).put("title",savedRows.get().getJSONObject(i).getString("title"));JSONArray candidates=new JSONArray();
+                                if(i<2)candidates.put(new JSONObject().put("track",new JSONObject().put("platform","youtube").put("externalId",targetIds[i]).put("title","대상 곡 "+(i==0?"A":"B")).put("artist","대상 가수").put("album","검사 앨범")));
+                                rows.put(new JSONObject().put("sourceIndex",indices[i]).put("source",source).put("candidates",candidates).put("status",i==0?"MATCHED":i==1?"NEEDS_REVIEW":"NOT_SEARCHED").put("selected",i==0?candidates.getJSONObject(0).getJSONObject("track"):JSONObject.NULL).put("approved",false));}
+                            review=new JSONObject().put("importId",importId.get()).put("targetProvider","youtube").put("items",rows).put("nextOffset",2);
+                        }else{assertEquals(2,body.getInt("offset"));assertNotNull(review);review.getJSONArray("items").getJSONObject(2).put("status","UNKNOWN");review.put("nextOffset",-1);}
+                        response=review;
+                    } else if(path.equals("/matches/"+importId.get()+"?targetProvider=youtube")) {
+                        assertEquals("GET",method);assertNotNull(review);response=review;
                     } else if(path.equals("/matches/"+importId.get())) {
                         assertEquals("PUT",method);assertEquals(1,reviews.incrementAndGet());assertEquals("youtube",body.getString("targetProvider"));JSONArray selected=body.getJSONArray("selections");assertEquals(3,selected.length());
                         for(int i=0;i<indices.length;i++){JSONObject choice=selected.getJSONObject(i),row=review.getJSONArray("items").getJSONObject(i);assertEquals(indices[i],choice.getInt("sourceIndex"));assertEquals(i==2,choice.getBoolean("excluded"));assertEquals(i<2?targetIds[i]:"",choice.getString("targetId"));row.put("approved",true).put("status",i==2?"USER_EXCLUDED":"MATCHED").put("selected",i==2?JSONObject.NULL:row.getJSONArray("candidates").getJSONObject(0).getJSONObject("track"));}
@@ -124,10 +129,24 @@ public class HubFlowCheckTest {
                     onView(withText("내 목록에 저장했어요")).inRoot(isDialog()).check(matches(isDisplayed()));onView(withText("계속 보기")).inRoot(isDialog()).perform(click());assertEquals(1,saves.get());assertEquals(3,savedRows.get().length());
                     onView(isAssignableFrom(android.widget.Spinner.class)).perform(scrollTo(),click());onData(allOf(is(instanceOf(String.class)),is("YouTube Music"))).perform(click());
                     onView(withText("대상 플랫폼의 곡 후보 찾기")).perform(scrollTo(),click());ready(app);assertNull("Test server failure",serverFailure.get());
-                    onView(allOf(withText("후보 선택 또는 제외"),hasSibling(withText("1. 수정한 곡 A · 검사 가수")))).perform(scrollTo(),click());onView(withText("대상 곡 A · 대상 가수 · 검사 앨범")).inRoot(isDialog()).perform(click());
+                    onView(withText("일치 후보 있음 · 선택해 주세요")).perform(scrollTo()).check(matches(isDisplayed()));
+                    onView(withText("확인 필요 · 곡과 버전을 비교해 주세요")).perform(scrollTo()).check(matches(isDisplayed()));
+                    onView(withText("후보 조회 전 · 다음 곡의 후보를 찾아 주세요")).perform(scrollTo()).check(matches(isDisplayed()));
+                    app.recreate();ready(app);focused(app);
+                    onView(withText("일치 후보 있음 · 선택해 주세요")).perform(scrollTo()).check(matches(isDisplayed()));
+                    onView(withText("후보 조회 전 · 다음 곡의 후보를 찾아 주세요")).perform(scrollTo()).check(matches(isDisplayed()));
+                    onView(allOf(withText("후보 선택 또는 제외"),hasSibling(withText("1. 수정한 곡 A · 검사 가수")))).perform(scrollTo(),click());onView(withText("대상 곡 A · 대상 가수 · 검사 앨범")).inRoot(isDialog()).check(matches(isDisplayed()));onView(withText("취소")).inRoot(isDialog()).perform(click());
+                    onView(withText("다음 20곡의 후보 찾기")).perform(scrollTo(),click());ready(app);assertEquals(2,matches.get());assertNull("Test server failure",serverFailure.get());
+                    onView(withText("찾지 못함 · 이 곡을 제외할 수 있어요")).perform(scrollTo()).check(matches(isDisplayed()));onView(withText("후보 조회 전 · 다음 곡의 후보를 찾아 주세요")).check(doesNotExist());
                     onView(allOf(withText("후보 선택 또는 제외"),hasSibling(withText("3. 원본 곡 B · 검사 가수")))).perform(scrollTo(),click());onView(withText("대상 곡 B · 대상 가수 · 검사 앨범")).inRoot(isDialog()).perform(click());
                     onView(allOf(withText("후보 선택 또는 제외"),hasSibling(withText("5. 원본 곡 C · 검사 가수")))).perform(scrollTo(),click());onView(withText("이 곡은 전송에서 제외")).inRoot(isDialog()).perform(click());
                     onView(withText("전송에서 제외됨")).perform(scrollTo()).check(matches(isDisplayed()));onView(withText("선택 확인 후 플레이리스트 보내기")).perform(scrollTo(),click());ready(app);
+                    onView(withText("모든 곡에 대해 후보를 선택하거나 제외해 주세요.")).perform(scrollTo()).check(matches(isDisplayed()));assertEquals("A scored match is not user approval",0,reviews.get());assertEquals(0,transfers.get());
+                    app.recreate();ready(app);focused(app);
+                    onView(withText("일치 후보 있음 · 선택해 주세요")).perform(scrollTo()).check(matches(isDisplayed()));onView(withText("선택한 곡: 대상 곡 B · 대상 가수")).perform(scrollTo()).check(matches(isDisplayed()));onView(withText("전송에서 제외됨")).perform(scrollTo()).check(matches(isDisplayed()));
+                    onView(withText("선택 확인 후 플레이리스트 보내기")).perform(scrollTo(),click());ready(app);onView(withText("모든 곡에 대해 후보를 선택하거나 제외해 주세요.")).perform(scrollTo()).check(matches(isDisplayed()));assertEquals(0,reviews.get());
+                    onView(allOf(withText("후보 선택 또는 제외"),hasSibling(withText("1. 수정한 곡 A · 검사 가수")))).perform(scrollTo(),click());onView(withText("대상 곡 A · 대상 가수 · 검사 앨범")).inRoot(isDialog()).perform(click());
+                    onView(withText("선택한 곡: 대상 곡 A · 대상 가수")).perform(scrollTo()).check(matches(isDisplayed()));onView(withText("선택 확인 후 플레이리스트 보내기")).perform(scrollTo(),click());ready(app);
                     onView(withText("확인한 곡을 전송할까요?")).inRoot(isDialog()).check(matches(isDisplayed()));assertEquals("Confirmation must precede a remote transfer",0,transfers.get());assertEquals(1,reviews.get());
                     onView(withText("전송")).inRoot(isDialog()).perform(click());ready(app);assertNull("Test server failure",serverFailure.get());
                     onView(withText("3번째 곡 · 실패 · 다시 시도할 수 있어요")).perform(scrollTo()).check(matches(isDisplayed()));onView(withText("5번째 곡 · 사용자가 제외")).perform(scrollTo()).check(matches(isDisplayed()));
@@ -136,7 +155,7 @@ public class HubFlowCheckTest {
                     onView(withText("계속 보내기")).inRoot(isDialog()).perform(click());ready(app);assertNull("Test server failure",serverFailure.get());
                     onView(withText("완료 2곡 · 실패 0곡 · 제외 1곡 · 대기 0곡 · 확인 필요 0곡")).perform(scrollTo()).check(matches(isDisplayed()));onView(withText("남은 곡 이어서 보내기")).check(doesNotExist());
                     app.recreate();ready(app);focused(app);onView(withText("5번째 곡 · 사용자가 제외")).perform(scrollTo()).check(matches(isDisplayed()));onView(withText("완료 2곡 · 실패 0곡 · 제외 1곡 · 대기 0곡 · 확인 필요 0곡")).perform(scrollTo()).check(matches(isDisplayed()));
-                    assertNull("Test server failure",serverFailure.get());assertEquals(1,imports.get());assertEquals(2,saves.get());assertEquals(1,matches.get());assertEquals(1,reviews.get());assertEquals(1,transfers.get());assertEquals(1,retries.get());assertTrue(statusReads.get()>0);assertEquals(token,credentials.getString(base,""));
+                    assertNull("Test server failure",serverFailure.get());assertEquals(1,imports.get());assertEquals(2,saves.get());assertEquals(2,matches.get());assertEquals(1,reviews.get());assertEquals(1,transfers.get());assertEquals(1,retries.get());assertTrue(statusReads.get()>0);assertEquals(token,credentials.getString(base,""));
                 }
             } finally {running.set(false);server.close();replies.get(2,TimeUnit.SECONDS);}
         } finally {running.set(false);worker.shutdownNow();restore(settings,oldSettings);restore(credentials,oldCredentials);}
@@ -340,6 +359,8 @@ public class HubFlowCheckTest {
                 timelineOpen("1. 01:00",null);
                 onView(withText("선택한 곡을 앱 목록에 저장")).perform(scrollTo(),click());ready(app);
                 assertFalse("Out-of-range times must not be saved",client.object("GET","/imports/playlists/"+zeroId,null).getBoolean("saved"));
+                onView(allOf(withHint("시작 시간 (초)"),hasSibling(withText("1. 01:00")))).perform(scrollTo(),replaceText("21600"),closeSoftKeyboard());
+                timelineOpen("1. 01:00","https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=21600s");
                 onView(allOf(withHint("시작 시간 (초)"),hasSibling(withText("1. 01:00")))).perform(scrollTo(),replaceText("90"),closeSoftKeyboard());
                 onView(allOf(withHint("곡명"),hasSibling(withText("1. 01:00")))).perform(scrollTo(),replaceText("Reviewed unknown length"),closeSoftKeyboard());
                 onView(withHint("새 목록 이름")).perform(scrollTo(),replaceText(zeroTitle),closeSoftKeyboard());
@@ -361,6 +382,27 @@ public class HubFlowCheckTest {
                 onView(allOf(withHint("시작 시간 (초)"),hasSibling(withText("1. 01:00")))).check(matches(withText("90")));
                 timelineOpen("1. 01:00","https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=90s");
             }
+            String knownId=UUID.randomUUID().toString(),knownTitle="길이 확인 "+suffix.substring(0,8);
+            JSONObject known=client.object("POST","/conversions/youtube",new JSONObject().put("id",knownId)
+                .put("url","https://www.youtube.com/watch?v=dQw4w9WgXcQ").put("durationSeconds",180).put("timeline","01:00 Known by Artist"));
+            assertEquals(180,known.getInt("durationSeconds"));assertEquals(180,known.getJSONArray("entries").getJSONObject(0).getInt("endSeconds"));
+            try(ActivityScenario<HubActivity> app=launch(context,"create")) {
+                ready(app);onView(withText("이전 변환 · 가져오기 · 전송 기록")).perform(scrollTo(),click());ready(app);
+                onView(allOf(withText("목록 검토 · 변경 확인"),hasSibling(withText("사용자 타임라인")))).perform(scrollTo(),click());ready(app);
+                onView(withHint("새 목록 이름")).perform(scrollTo(),replaceText(knownTitle),closeSoftKeyboard());
+                onView(allOf(withHint("시작 시간 (초)"),hasSibling(withText("1. 01:00")))).perform(scrollTo(),replaceText("180"),closeSoftKeyboard());
+                timelineOpen("1. 01:00",null);
+                onView(withText("시작 시간이 영상 범위를 벗어났어요. 시간을 수정하거나 곡을 제외해 주세요.")).perform(scrollTo()).check(matches(isDisplayed()));
+                onView(withText("선택한 곡을 앱 목록에 저장")).perform(scrollTo(),click());ready(app);
+                assertFalse("The exact known end is not a playable start or saved row",client.object("GET","/imports/playlists/"+knownId,null).getBoolean("saved"));
+                onView(withText("시작 시간이 영상 범위를 벗어났어요. 시간을 수정하거나 곡을 제외해 주세요.")).perform(scrollTo()).check(matches(isDisplayed()));
+                onView(allOf(withHint("시작 시간 (초)"),hasSibling(withText("1. 01:00")))).perform(scrollTo(),replaceText("179"),closeSoftKeyboard());
+                timelineOpen("1. 01:00","https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=179s");
+                onView(withText("선택한 곡을 앱 목록에 저장")).perform(scrollTo(),click());ready(app);
+            }
+            String knownPlaylist=client.object("GET","/imports/playlists/"+knownId,null).getString("localPlaylistId");
+            assertEquals(179,client.object("GET","/playlists/"+knownPlaylist,null).getJSONArray("items").getJSONObject(0).getJSONObject("track").getInt("timestamp"));
+            client.request("DELETE","/imports/playlists/"+knownId,null);client.request("DELETE","/playlists/"+knownPlaylist,null);
             assertEquals(1,client.array("/me/saved-tracks").length());
             String returnTitle="돌아올 목록 "+suffix.substring(0,8);
             try(ActivityScenario<MainActivity> main=ActivityScenario.launch(MainActivity.class)) {
