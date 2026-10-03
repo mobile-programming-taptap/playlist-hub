@@ -43,11 +43,221 @@ import static androidx.test.espresso.assertion.ViewAssertions.matches;
 import static androidx.test.espresso.matcher.ViewMatchers.*;
 import static androidx.test.espresso.matcher.RootMatchers.isDialog;
 import static org.hamcrest.Matchers.allOf;
+import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.startsWith;
 import static org.junit.Assert.*;
 
 @RunWith(AndroidJUnit4.class)
 public class ErrorRecoveryCheckTest {
+    @Test public void pendingServerFeedbackAndSaveSurviveRecreationWithoutDuplicateWrites() throws Exception {
+        Context context=InstrumentationRegistry.getInstrumentation().getTargetContext();
+        if(android.os.Build.VERSION.SDK_INT>=37) InstrumentationRegistry.getInstrumentation().getUiAutomation()
+            .grantRuntimePermission(context.getPackageName(),android.Manifest.permission.ACCESS_LOCAL_NETWORK);
+        SharedPreferences settings=context.getSharedPreferences("settings",Context.MODE_PRIVATE);
+        SharedPreferences credentials=context.getSharedPreferences("server_credentials",Context.MODE_PRIVATE);
+        Map<String,?> previousSettings=settings.getAll();
+        LocalStore data=new LocalStore(context);Map<String,Integer> previousFeedback=data.feedback();
+        String catalogue=ApiClient.read(context.getAssets().open("tracks.json"));
+        String prompt="공부할 때 집중할 수 있는 가사 없는 피아노 음악";
+        Recommender.Result result=Recommender.recommend(TrackJson.list(new JSONArray(catalogue)),Recommender.parse(prompt),Collections.emptyMap(),"openai");
+        assertEquals(8,result.tracks.size());
+        JSONArray picks=new JSONArray();
+        for(Recommender.Pick pick:result.tracks)picks.put(new JSONObject().put("track",TrackJson.write(pick.track)).put("reason",pick.reason));
+        String recommendation=new JSONObject().put("tracks",picks).put("mode",result.mode).put("notice",result.notice)
+            .put("conditions",TrackJson.conditions(result.conditions)).toString();
+        String first=result.tracks.get(0).track.id,second=result.tracks.get(1).track.id;
+        String third=result.tracks.get(2).track.id,fourth=result.tracks.get(3).track.id;
+        String playlist="22222222-2222-4222-8222-222222222222",title="회전 중 저장 검사";
+        String createdId="44444444-4444-4444-8444-444444444444",createdTitle="회전 중 만든 목록";
+        String retryId="55555555-5555-4555-8555-555555555555",retryTitle="첫 곡 저장 재시도";
+        CountDownLatch feedbackReceived=new CountDownLatch(1),feedbackRelease=new CountDownLatch(1);
+        CountDownLatch failedFeedbackReceived=new CountDownLatch(1),failedFeedbackRelease=new CountDownLatch(1);
+        CountDownLatch saveReceived=new CountDownLatch(1),saveRelease=new CountDownLatch(1);
+        CountDownLatch createReceived=new CountDownLatch(1),createRelease=new CountDownLatch(1);
+        AtomicBoolean running=new AtomicBoolean(true),feedbackDone=new AtomicBoolean(),saveDone=new AtomicBoolean();
+        AtomicBoolean created=new AtomicBoolean(),createdSaved=new AtomicBoolean(),retryCreated=new AtomicBoolean(),retrySaved=new AtomicBoolean();
+        AtomicInteger feedbackWrites=new AtomicInteger(),batchWrites=new AtomicInteger();
+        AtomicInteger createWrites=new AtomicInteger(),createdBatchWrites=new AtomicInteger(),retryCreates=new AtomicInteger(),retryBatchWrites=new AtomicInteger();
+        AtomicReference<Throwable> serverFailure=new AtomicReference<>();
+        ExecutorService serverWorkers=Executors.newCachedThreadPool();
+        try(ServerSocket server=new ServerSocket(0,5,InetAddress.getByName("127.0.0.1"))) {
+            server.setSoTimeout(500);
+            String base="http://127.0.0.1:"+server.getLocalPort();
+            String previousCredential=credentials.getString(base,null);
+            String token="FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF";
+            Future<?> accepting=serverWorkers.submit(()->{
+                while(running.get())try {
+                    Socket socket=server.accept();
+                    serverWorkers.submit(()->{
+                        try(Socket connection=socket) {
+                            connection.setSoTimeout(5000);
+                            DataInputStream input=new DataInputStream(connection.getInputStream());
+                            String[] request=httpLine(input).split(" ");
+                            String header;int length=0;boolean authenticated=false;
+                            while(!(header=httpLine(input)).isEmpty()) {
+                                String lower=header.toLowerCase(java.util.Locale.ROOT);
+                                if(lower.startsWith("content-length:"))length=Integer.parseInt(header.substring(header.indexOf(':')+1).trim());
+                                if(lower.startsWith("authorization:"))authenticated=header.endsWith("Bearer "+token);
+                            }
+                            assertTrue("The test must reuse its seeded session",authenticated);assertTrue(length>=0&&length<=4096);
+                            byte[] body=new byte[length];input.readFully(body);
+                            String content,status="200 OK";
+                            if(request[1].equals("/me/feedback/"+first)) {
+                                assertEquals("PUT",request[0]);int write=feedbackWrites.incrementAndGet();
+                                assertEquals(write==1?1:-1,new JSONObject(new String(body,StandardCharsets.UTF_8)).getInt("reaction"));
+                                if(write==1) {
+                                    feedbackReceived.countDown();assertTrue(feedbackRelease.await(15,TimeUnit.SECONDS));
+                                    feedbackDone.set(true);content="{\"reaction\":1}";
+                                } else {
+                                    assertEquals(2,write);failedFeedbackReceived.countDown();assertTrue(failedFeedbackRelease.await(15,TimeUnit.SECONDS));
+                                    status="500 Internal Server Error";content="{\"message\":\"회전 중 반응 검사 오류\"}";
+                                }
+                            } else if(request[1].equals("/playlists/"+playlist+"/items/batch")) {
+                                assertEquals("POST",request[0]);assertEquals(1,batchWrites.incrementAndGet());
+                                JSONArray ids=new JSONObject(new String(body,StandardCharsets.UTF_8)).getJSONArray("trackIds");
+                                assertEquals(1,ids.length());assertEquals(second,ids.getString(0));
+                                saveReceived.countDown();assertTrue(saveRelease.await(15,TimeUnit.SECONDS));
+                                saveDone.set(true);content=new JSONArray().put(new JSONObject().put("id","33333333-3333-4333-8333-333333333333")
+                                    .put("trackId",second).put("position",0)).toString();
+                            } else if(request[0].equals("POST")&&request[1].equals("/playlists")) {
+                                String name=new JSONObject(new String(body,StandardCharsets.UTF_8)).getString("title");
+                                String id;
+                                if(name.equals(createdTitle)) {
+                                    assertEquals(1,createWrites.incrementAndGet());createReceived.countDown();
+                                    assertTrue(createRelease.await(15,TimeUnit.SECONDS));created.set(true);id=createdId;
+                                } else {
+                                    assertEquals(retryTitle,name);assertEquals(1,retryCreates.incrementAndGet());retryCreated.set(true);id=retryId;
+                                }
+                                status="201 Created";content=new JSONObject().put("id",id).put("title",name).put("size",0)
+                                    .put("createdAt","2026-10-03T10:00:00Z").toString();
+                            } else if(request[1].equals("/playlists/"+createdId+"/items/batch")||request[1].equals("/playlists/"+retryId+"/items/batch")) {
+                                assertEquals("POST",request[0]);
+                                JSONArray ids=new JSONObject(new String(body,StandardCharsets.UTF_8)).getJSONArray("trackIds");assertEquals(1,ids.length());
+                                boolean retry=request[1].contains(retryId);assertEquals(retry?fourth:third,ids.getString(0));
+                                if(retry&&retryBatchWrites.incrementAndGet()==1) {
+                                    status="500 Internal Server Error";content="{\"message\":\"첫 곡 저장 검사 오류\"}";
+                                } else {
+                                    if(retry){assertEquals(2,retryBatchWrites.get());retrySaved.set(true);}
+                                    else{assertEquals(1,createdBatchWrites.incrementAndGet());createdSaved.set(true);}
+                                    content=new JSONArray().put(new JSONObject().put("id","66666666-6666-4666-8666-666666666666")
+                                        .put("trackId",retry?fourth:third).put("position",0)).toString();
+                                }
+                            } else if(request[1].equals("/recommendations")) {
+                                assertEquals("POST",request[0]);
+                                assertEquals(prompt,new JSONObject(new String(body,StandardCharsets.UTF_8)).getString("prompt"));
+                                content=recommendation;
+                            } else {
+                                assertEquals("GET",request[0]);
+                                switch(request[1]) {
+                                    case "/health": content="{\"status\":\"ok\"}";break;
+                                    case "/catalogue": content=catalogue;break;
+                                    case "/me/feedback": content=feedbackDone.get()?new JSONObject().put(first,1).toString():"{}";break;
+                                    case "/me/saved-tracks":
+                                        JSONArray saved=new JSONArray();if(saveDone.get())saved.put(second);if(createdSaved.get())saved.put(third);if(retrySaved.get())saved.put(fourth);
+                                        content=saved.toString();break;
+                                    case "/playlists":
+                                        JSONArray lists=new JSONArray().put(new JSONObject().put("id",playlist).put("title",title)
+                                            .put("size",saveDone.get()?1:0).put("createdAt","2026-10-03T10:00:00Z"));
+                                        if(created.get())lists.put(new JSONObject().put("id",createdId).put("title",createdTitle).put("size",createdSaved.get()?1:0).put("createdAt","2026-10-03T10:00:00Z"));
+                                        if(retryCreated.get())lists.put(new JSONObject().put("id",retryId).put("title",retryTitle).put("size",retrySaved.get()?1:0).put("createdAt","2026-10-03T10:00:00Z"));
+                                        content=lists.toString();break;
+                                    default: throw new AssertionError("Unexpected test request: "+request[1]);
+                                }
+                            }
+                            byte[] bytes=content.getBytes(StandardCharsets.UTF_8);
+                            String response="HTTP/1.1 "+status+"\r\nContent-Type: application/json\r\nContent-Length: "+bytes.length+"\r\nConnection: close\r\n\r\n";
+                            connection.getOutputStream().write(response.getBytes(StandardCharsets.UTF_8));connection.getOutputStream().write(bytes);connection.getOutputStream().flush();
+                        } catch(Throwable error) { if(running.get())serverFailure.compareAndSet(null,error); }
+                    });
+                } catch(SocketTimeoutException timeout) {
+                    // Held write sockets must not prevent independent reads.
+                } catch(Exception error) { if(running.get())serverFailure.compareAndSet(null,error);return; }
+            });
+            try {
+                assertTrue(credentials.edit().putString(base,token).commit());
+                assertTrue(settings.edit().putString("server",base).remove("prompt").commit());
+                try(ActivityScenario<MainActivity> app=ActivityScenario.launch(MainActivity.class)) {
+                    try {
+                        ready(app);onView(withId(R.id.example_study)).perform(closeSoftKeyboard(),scrollTo(),click());
+                        onView(withId(R.id.recommend)).perform(scrollTo(),click());ready(app);
+                        onView(withId(R.id.counter)).check(matches(withText("1 / 8")));
+                        onView(withId(R.id.like)).perform(click());
+                        assertTrue("The first feedback write must reach the server",feedbackReceived.await(5,TimeUnit.SECONDS));
+                        app.recreate();
+                        pendingWriteVisible(app);
+                        onView(withId(R.id.like)).check(matches(not(isEnabled())));
+                        assertEquals(1,feedbackWrites.get());assertNull(serverFailure.get());
+                        feedbackRelease.countDown();ready(app);
+                        onView(withId(R.id.like)).check(matches(withText("좋아요 취소")));
+                        onView(withId(R.id.next)).perform(click());ready(app);
+                        org.hamcrest.Matcher<View> save=allOf(withId(R.id.save),isDescendantOfA(allOf(isAssignableFrom(android.widget.ScrollView.class),isDisplayed())));
+                        onView(save).perform(scrollTo(),click());ready(app);
+                        onView(withText(title+" · 0곡")).inRoot(isDialog()).perform(click());
+                        assertTrue("The batch save must reach the server",saveReceived.await(5,TimeUnit.SECONDS));
+                        app.recreate();
+                        pendingWriteVisible(app);
+                        onView(save).check(matches(not(isEnabled())));
+                        assertEquals(1,batchWrites.get());assertNull(serverFailure.get());
+                        saveRelease.countDown();ready(app);
+                        onView(withId(R.id.counter)).check(matches(withText("2 / 8")));
+                        onView(save).check(matches(withText("저장됨 · 추가")));
+                        onView(withId(R.id.next)).perform(click());ready(app);
+                        onView(save).perform(scrollTo(),click());ready(app);
+                        onView(withText("+ 새 플레이리스트")).inRoot(isDialog()).perform(click());
+                        onView(withHint("예: 비 오는 날의 음악")).inRoot(isDialog()).perform(replaceText(createdTitle),closeSoftKeyboard());
+                        onView(withText("만들기")).inRoot(isDialog()).perform(click());
+                        assertTrue("The playlist creation must reach the server",createReceived.await(5,TimeUnit.SECONDS));
+                        app.recreate();pendingWriteVisible(app);onView(save).check(matches(not(isEnabled())));
+                        assertEquals(1,createWrites.get());assertEquals(0,createdBatchWrites.get());assertNull(serverFailure.get());
+                        createRelease.countDown();ready(app);
+                        onView(withId(R.id.counter)).check(matches(withText("3 / 8")));
+                        onView(save).check(matches(withText("저장됨 · 추가")));
+                        assertEquals(1,createWrites.get());assertEquals(1,createdBatchWrites.get());
+                        onView(withId(R.id.next)).perform(click());ready(app);
+                        onView(save).perform(scrollTo(),click());ready(app);
+                        onView(withText("+ 새 플레이리스트")).inRoot(isDialog()).perform(click());
+                        onView(withHint("예: 비 오는 날의 음악")).inRoot(isDialog()).perform(replaceText(retryTitle),closeSoftKeyboard());
+                        onView(withText("만들기")).inRoot(isDialog()).perform(click());ready(app);
+                        onView(withHint("예: 비 오는 날의 음악")).inRoot(isDialog()).check((view,error)->{
+                            if(error!=null)throw error;
+                            android.widget.EditText name=(android.widget.EditText)view;
+                            assertEquals(retryTitle,name.getText().toString());assertEquals("첫 곡 저장 검사 오류",name.getError());assertFalse(name.isEnabled());
+                        });
+                        assertEquals(1,retryCreates.get());assertEquals(1,retryBatchWrites.get());
+                        onView(withText("저장 다시 시도")).inRoot(isDialog()).check(matches(isEnabled())).perform(click());ready(app);
+                        onView(withId(R.id.counter)).check(matches(withText("4 / 8")));
+                        onView(save).check(matches(withText("저장됨 · 추가")));
+                        assertEquals(1,retryCreates.get());assertEquals(2,retryBatchWrites.get());
+                        for(int i=0;i<3;i++){onView(withId(R.id.previous)).perform(click());ready(app);}
+                        onView(withId(R.id.counter)).check(matches(withText("1 / 8")));
+                        onView(withId(R.id.like)).check(matches(withText("좋아요 취소")));
+                        onView(withId(R.id.dislike)).perform(click());
+                        assertTrue("The failing feedback write must reach the server",failedFeedbackReceived.await(5,TimeUnit.SECONDS));
+                        app.recreate();pendingWriteVisible(app);onView(withId(R.id.dislike)).check(matches(not(isEnabled())));
+                        assertEquals(2,feedbackWrites.get());failedFeedbackRelease.countDown();ready(app);
+                        onView(withId(R.id.like)).check(matches(withText("좋아요 취소")));
+                        onView(withText("회전 중 반응 검사 오류")).check(matches(isDisplayed()));
+                        assertEquals(2,feedbackWrites.get());assertEquals(1,batchWrites.get());
+                        assertNull(serverFailure.get());assertEquals(previousFeedback,data.feedback());
+                    } finally {feedbackRelease.countDown();failedFeedbackRelease.countDown();saveRelease.countDown();createRelease.countDown();}
+                }
+            } finally {
+                running.set(false);feedbackRelease.countDown();failedFeedbackRelease.countDown();saveRelease.countDown();createRelease.countDown();server.close();
+                if(!data.feedback().equals(previousFeedback)) {
+                    data.clearFeedback();for(Map.Entry<String,Integer> reaction:previousFeedback.entrySet())data.react(reaction.getKey(),reaction.getValue());
+                }
+                SharedPreferences.Editor restore=settings.edit();
+                for(String key:new String[]{"server","prompt"}) {
+                    if(previousSettings.containsKey(key))restore.putString(key,(String)previousSettings.get(key));else restore.remove(key);
+                }
+                assertTrue(restore.commit());
+                SharedPreferences.Editor restoreCredential=credentials.edit();
+                if(previousCredential==null)restoreCredential.remove(base);else restoreCredential.putString(base,previousCredential);
+                assertTrue(restoreCredential.commit());accepting.get(2,TimeUnit.SECONDS);
+            }
+        } finally {running.set(false);feedbackRelease.countDown();failedFeedbackRelease.countDown();saveRelease.countDown();createRelease.countDown();serverWorkers.shutdownNow();data.close();}
+    }
+
     @Test public void playlistNameFailuresKeepDraftAndAllowRetry() throws Exception {
         Context context=InstrumentationRegistry.getInstrumentation().getTargetContext();
         if(android.os.Build.VERSION.SDK_INT>=37) InstrumentationRegistry.getInstrumentation().getUiAutomation()
@@ -444,6 +654,17 @@ public class ErrorRecoveryCheckTest {
             if(line.length()>8192)throw new java.io.IOException("Test HTTP header is too long");
         }
         throw new java.io.EOFException("Incomplete test HTTP header");
+    }
+
+    private void pendingWriteVisible(ActivityScenario<MainActivity> app) {
+        // Keep checking after native UI idle so a brief startup refresh cannot hide a pending write.
+        long until=SystemClock.uptimeMillis()+250;
+        do {
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync();
+            app.onActivity(activity->assertEquals(View.VISIBLE,activity.findViewById(R.id.progress).getVisibility()));
+            onView(withId(R.id.progress)).check(matches(withEffectiveVisibility(Visibility.VISIBLE)));
+            SystemClock.sleep(25);
+        } while(SystemClock.uptimeMillis()<until);
     }
 
     private void ready(ActivityScenario<MainActivity> app) {
