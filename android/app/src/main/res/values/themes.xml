@@ -97,8 +97,26 @@
         <item name="rippleColor">#33FFFFFF</item><item name="cornerRadius">8dp</item>
     </style>
     <style name="TapTap.BottomNavigation" parent="Widget.Material3.BottomNavigationView">
-        <item name="android:background">@color/deck_surface</item>
+        <item name="android:background">@color/navigation_surface</item>
+        <item name="android:minHeight">80dp</item><item name="elevation">0dp</item>
         <item name="itemIconTint">@color/deck_navigation</item><item name="itemTextColor">@color/deck_navigation</item>
+        <item name="itemIconSize">24dp</item><item name="itemHorizontalTranslationEnabled">false</item>
+        <item name="itemPaddingTop">10dp</item><item name="itemPaddingBottom">10dp</item>
+        <item name="activeIndicatorLabelPadding">6dp</item>
+        <item name="itemTextAppearanceActive">@style/TextAppearance.TapTap.Navigation</item>
+        <item name="itemTextAppearanceInactive">@style/TextAppearance.TapTap.Navigation</item>
+        <item name="itemTextAppearanceActiveBoldEnabled">false</item>
+        <item name="labelFontScalingEnabled">true</item><item name="labelMaxLines">2</item>
+        <item name="itemActiveIndicatorStyle">@style/TapTap.NavigationIndicator</item>
+        <item name="itemRippleColor">#26D9FF00</item>
+    </style>
+    <style name="TextAppearance.TapTap.Navigation" parent="TextAppearance.TapTap.LabelMedium">
+        <item name="android:textSize">13sp</item><item name="android:textStyle">normal</item>
+        <item name="android:letterSpacing">0</item>
+    </style>
+    <style name="TapTap.NavigationIndicator" parent="Widget.Material3.BottomNavigationView.ActiveIndicator">
+        <item name="android:width">52dp</item><item name="android:height">32dp</item>
+        <item name="android:color">@color/navigation_indicator</item>
     </style>
     <style name="TapTap.Outlined" parent="Widget.Material3.Button.OutlinedButton">
         <item name="android:minHeight">48dp</item><item name="cornerRadius">16dp</item>

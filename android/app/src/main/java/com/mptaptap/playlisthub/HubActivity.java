@@ -2,6 +2,7 @@ package com.mptaptap.playlisthub;
 
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
+import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
@@ -42,8 +43,8 @@ import org.json.JSONObject;
 
 /** Account, explicit-source creation and community flows; no imported metadata reaches AI. */
 public final class HubActivity extends AppCompatActivity {
-    private static final String[] PROVIDERS={"spotify","youtube","apple_music"};
-    private static final String[] PROVIDER_NAMES={"Spotify","YouTube Music","Apple Music"};
+    private static final String[] PROVIDERS={"spotify","youtube"};
+    private static final String[] PROVIDER_NAMES={"Spotify","YouTube Music"};
     private static final String[] SAVED_TEXT={"screen","importId","targetProvider","transferId","transferKey","saveId","sourceKey","importRequestId","conversionRequestId","publicationId","shareId","videoUrl","timeline","listUrl","listTitle","email","name","sourceProvider","query","sort","copyId","copyTitle","copyShare"};
     private HubRequest requests;
     private String base,mode;
@@ -76,15 +77,17 @@ public final class HubActivity extends AppCompatActivity {
         }
         if(callback){put("screen","account");put("authorizationPending",true);}
         LinearLayout root=new LinearLayout(this);root.setOrientation(LinearLayout.VERTICAL);root.setBackgroundColor(getColor(R.color.background));
-        setContentView(root);
+        setContentView(root);if(saved==null){root.setFocusableInTouchMode(true);root.requestFocus();}
         ViewCompat.setOnApplyWindowInsetsListener(root,(view,insets)->{
             Insets bars=insets.getInsets(WindowInsetsCompat.Type.systemBars()|WindowInsetsCompat.Type.displayCutout());
             view.setPadding(bars.left,bars.top,bars.right,Math.max(bars.bottom,insets.getInsets(WindowInsetsCompat.Type.ime()).bottom));return WindowInsetsCompat.CONSUMED;
         });
-        LinearLayout header=new LinearLayout(this);header.setGravity(Gravity.CENTER_VERTICAL);header.setPadding(dp(12),dp(4),dp(12),dp(4));
-        MaterialButton back=button("‹ 돌아가기",this::back);header.addView(back);
+        LinearLayout header=new LinearLayout(this);header.setGravity(Gravity.CENTER_VERTICAL);header.setPadding(dp(12),dp(8),dp(16),dp(8));
+        MaterialButton back=button("",this::back);back.setContentDescription("돌아가기");back.setIconResource(R.drawable.ic_previous);back.setIconTint(android.content.res.ColorStateList.valueOf(getColor(R.color.ink)));back.setIconPadding(0);back.setPadding(0,0,0,0);back.setMinWidth(0);back.setStrokeWidth(0);back.setBackgroundTintList(android.content.res.ColorStateList.valueOf(android.graphics.Color.TRANSPARENT));header.addView(back,new LinearLayout.LayoutParams(dp(48),dp(48)));
         TextView title=text(mode.equals("account")?"내 계정":mode.equals("community")?"음악 커뮤니티":"목록 만들기",20,true);
-        header.addView(title,new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1));root.addView(header);
+        LinearLayout.LayoutParams titleSize=new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1);titleSize.setMarginStart(dp(8));header.addView(title,titleSize);
+        if(mode.equals("create")){MaterialButton history=button("기록",()->{put("screen","history");render();reload();});history.setContentDescription("이전 변환 · 가져오기 · 전송 기록");history.setTextSize(13);history.setMinWidth(0);history.setStrokeWidth(0);history.setBackgroundTintList(android.content.res.ColorStateList.valueOf(android.graphics.Color.TRANSPARENT));history.setTextColor(getColor(R.color.muted));header.addView(history);}
+        root.addView(header);
         progress=new LinearProgressIndicator(this);progress.setIndeterminate(true);progress.setVisibility(View.GONE);root.addView(progress,new LinearLayout.LayoutParams(-1,dp(3)));
         NestedScrollView scroll=new NestedScrollView(this);scroll.setFillViewport(true);root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
         content=column();content.setPadding(dp(20),dp(12),dp(20),dp(24));scroll.addView(content);
@@ -139,7 +142,7 @@ public final class HubActivity extends AppCompatActivity {
         put("screen",mode);render();reload();
     }
     private void render() {
-        controls.clear();content.removeAllViews();status=text("",14,false);status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);content.addView(status);
+        controls.clear();content.removeAllViews();status=text("",14,false);status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);status.setVisibility(View.GONE);content.addView(status);
         if(base.isEmpty()) {heading("서버 연결이 필요해요");paragraph("기존 추천 화면의 설정에서 서버에 연결하면 계정, 영상 변환, 음악 서비스 연동과 커뮤니티를 사용할 수 있어요.");addButton(content,"추천 화면으로 돌아가기",this::finish);return;}
         switch(value("screen")) {
             case "account":account();break;
@@ -157,27 +160,27 @@ public final class HubActivity extends AppCompatActivity {
     }
 
     private void create() {
-        addButton(content,"이전 변환 · 가져오기 · 전송 기록",()->{put("screen","history");render();reload();});
-        heading("영상에서 음악 목록 만들기");paragraph("영상 주소와 사용자가 가진 설명의 시간표를 확인해 곡을 나눠요. 저장 전에 제목과 아티스트를 직접 수정할 수 있어요.");
-        EditText url=field(content,"YouTube 영상 주소","videoUrl",2048,false);
-        EditText timeline=field(content,"영상 설명의 시간표 붙여넣기 (선택)","timeline",65536,true);
-        addButton(content,"영상 시간표 확인",()->{
+        LinearLayout video=card(content);video.addView(text("영상에서 음악 목록 만들기",20,true));video.addView(text("영상 설명의 시간표를 곡 목록으로 정리해요. 저장 전에 곡 정보를 확인하고 수정할 수 있어요.",13,false));
+        EditText url=createField(video,"영상 주소","YouTube 영상 주소","videoUrl",2048,false);
+        EditText timeline=createField(video,"시간표 · 선택","영상 설명의 시간표 붙여넣기 (선택)","timeline",65536,true);
+        addPrimaryButton(video,"영상 시간표 확인",()->{
             if(url.getText().toString().trim().isEmpty()){url.setError("영상 주소를 입력해 주세요.");return;}
             beginSource("youtube:"+url.getText().toString().trim()+":"+timeline.getText(),"conversionRequestId");
             JSONObject body=json("id",value("conversionRequestId"),"url",url.getText().toString().trim());
             if(!timeline.getText().toString().trim().isEmpty())set(body,"timeline",timeline.getText().toString());
             put("edits",new JSONArray());put("selections",new JSONArray());send("conversion","POST","/conversions/youtube",body);
         });
-        heading("음악 서비스 목록 가져오기");providerPicker(content,"sourceProvider");
-        field(content,"플레이리스트 주소","listUrl",2048,false);field(content,"새 목록 이름","listTitle",80,false);
-        addButton(content,"플레이리스트 가져오기",()->{
+        LinearLayout service=card(content);service.addView(text("음악 서비스 목록 가져오기",20,true));service.addView(text("가져온 곡을 확인하고 원하는 음악 서비스로 옮겨요.",13,false));service.addView(text("음악 서비스",12,true));fillInput(providerPicker(service,"sourceProvider"));
+        createField(service,"목록 주소","플레이리스트 주소","listUrl",2048,false);createField(service,"목록 이름","새 목록 이름","listTitle",80,false);
+        addPrimaryButton(service,"플레이리스트 가져오기",()->{
+            if(provider("sourceProvider").isEmpty()){message("지원하는 음악 서비스를 선택해 주세요.");return;}
             if(value("listUrl").trim().isEmpty()){message("가져올 플레이리스트 주소를 입력해 주세요.");return;}
             beginSource(provider("sourceProvider")+":"+value("listUrl").trim()+":"+value("listTitle").trim(),"importRequestId");
             String id=value("importRequestId");
             put("edits",new JSONArray());put("selections",new JSONArray());
             send("import","POST","/imports/playlists",json("id",id,"provider",provider("sourceProvider"),"url",value("listUrl").trim(),"title",value("listTitle").trim()));
         });
-        addButton(content,"계정과 음악 서비스 연결",()->{put("screen","account");render();reload();});
+        MaterialButton connection=button("계정과 음악 서비스 연결",()->{put("screen","account");render();reload();});connection.setStrokeWidth(0);connection.setBackgroundTintList(android.content.res.ColorStateList.valueOf(android.graphics.Color.TRANSPARENT));connection.setTextColor(getColor(R.color.muted));content.addView(connection,new LinearLayout.LayoutParams(-1,-2));
     }
 
     private void history() {
@@ -284,11 +287,12 @@ public final class HubActivity extends AppCompatActivity {
         heading("다른 플랫폼으로 옮기기");providerPicker(content,"targetProvider");
         paragraph("수정하고 선택한 곡을 앱 목록에 저장한 뒤 대상 서비스에서 같은 곡을 찾아요.");
         addButton(content,"대상 플랫폼의 곡 후보 찾기",()->saveImport(true));
-        if(imported.has("reviews")&&!imported.optString("targetProvider").isEmpty())addButton(content,"저장된 곡 후보 검토 이어보기",()->{put("targetProvider",imported.optString("targetProvider"));send("review","GET","/matches/"+Uri.encode(value("importId"))+"?targetProvider="+Uri.encode(value("targetProvider")),null);});
-        if(!imported.has("entries"))addButton(content,"목록 변경 미리보기",()->send("sync","POST","/sync/"+Uri.encode(value("importId"))+"/preview",null));
+        if(imported.has("reviews")&&supportedProvider(imported.optString("targetProvider")))addButton(content,"저장된 곡 후보 검토 이어보기",()->{put("targetProvider",imported.optString("targetProvider"));send("review","GET","/matches/"+Uri.encode(value("importId"))+"?targetProvider="+Uri.encode(value("targetProvider")),null);});
+        if(!imported.has("entries")&&supportedProvider(imported.optString("provider")))addButton(content,"목록 변경 미리보기",()->send("sync","POST","/sync/"+Uri.encode(value("importId"))+"/preview",null));
     }
     private void saveImport(){saveImport(false);}
     private void saveImport(boolean thenMatch) {
+        if(thenMatch&&provider("targetProvider").isEmpty()){message("지원하는 음악 서비스를 선택해 주세요.");return;}
         String title=value("listTitle").trim();if(title.isEmpty()){message("새 목록 이름을 입력해 주세요.");return;}
         JSONObject imported=requests.data.optJSONObject("imported");JSONArray entries=previewEntries(imported),edits=new JSONArray();int included=0;
         for(int i=0;i<entries.length();i++) {
@@ -362,6 +366,7 @@ public final class HubActivity extends AppCompatActivity {
     private void transfer() {
         JSONObject transfer=requests.data.optJSONObject("transfer");heading("플레이리스트 전송 결과");
         if(transfer==null){paragraph("전송 기록을 확인하고 있어요.");addButton(content,"전송 상태 확인",()->send("transfer","GET","/transfers/"+Uri.encode(value("transferId")),null));return;}
+        if(!supportedProvider(transfer.optString("provider"))){paragraph("이 음악 서비스의 전송은 더 이상 지원하지 않아요.");return;}
         JSONArray items=transfer.optJSONArray("items");int failed=0,success=0,pending=0,unknown=0;
         if(items!=null)for(int i=0;i<items.length();i++) {
             JSONObject item=items.optJSONObject(i);if(item==null)continue;String state=item.optString("status");
@@ -373,9 +378,8 @@ public final class HubActivity extends AppCompatActivity {
         paragraph("완료 "+success+"곡 · 실패 "+failed+"곡 · 제외 "+excludedCount+"곡 · 대기 "+pending+"곡 · 확인 필요 "+unknown+"곡");
         if(!transfer.optString("notice").isEmpty())paragraph(transfer.optString("notice"));
         String playlistUrl=transfer.optString("playlistUrl");Uri playlist=Uri.parse(playlistUrl);String provider=transfer.optString("provider");
-        String host=provider.equals("spotify")?"open.spotify.com":provider.equals("youtube")?"www.youtube.com":provider.equals("apple_music")?"music.apple.com":"";
+        String host=provider.equals("spotify")?"open.spotify.com":provider.equals("youtube")?"www.youtube.com":"";
         if(!host.isEmpty()&&"https".equals(playlist.getScheme())&&host.equals(playlist.getHost())&&playlist.getUserInfo()==null&&(playlist.getPort()==-1||playlist.getPort()==443))addButton(content,"생성된 목록 열기",()->open(playlistUrl));
-        else if(provider.equals("apple_music")&&!transfer.optString("externalPlaylistId").isEmpty())paragraph("Apple Music 보관함에서 ‘"+transfer.optString("title")+"’ 목록을 확인해 주세요.");
         if(!transfer.optString("status").equals("RUNNING")&&!transfer.optString("status").equals("PENDING")&&(failed+pending+unknown)>0)addButton(content,"남은 곡 이어서 보내기",()->dialog().setTitle("남은 곡을 보낼까요?").setMessage("완료한 곡은 건너뛰고 대기·실패한 곡을 보내요. 결과가 불확실한 곡은 먼저 서비스에서 확인해요.").setPositiveButton("계속 보내기",(d,w)->{transferPolls=0;send("transfer","POST","/transfers/"+Uri.encode(value("transferId"))+"/retry",json("confirmed",true));}).setNegativeButton("취소",null).show());
         addButton(content,"전송 상태 새로고침",()->{transferPolls=0;send("transfer","GET","/transfers/"+Uri.encode(value("transferId")),null);});
     }
@@ -492,10 +496,10 @@ public final class HubActivity extends AppCompatActivity {
     private String transferKey(){JSONArray sorted=new JSONArray();JSONObject review=requests.data.optJSONObject("review");JSONArray items=review==null?null:review.optJSONArray("items");if(items!=null)for(int i=0;i<items.length();i++){JSONObject item=items.optJSONObject(i);JSONObject selected=item==null?null:find(array("selections"),"sourceIndex",item.optInt("sourceIndex",i));if(selected!=null)sorted.put(json("sourceIndex",selected.optInt("sourceIndex"),"targetId",selected.optString("targetId"),"excluded",selected.optBoolean("excluded")));}return UUID.nameUUIDFromBytes((value("importId")+":"+provider("targetProvider")+":"+value("listTitle").trim()+":"+sorted).getBytes(StandardCharsets.UTF_8)).toString();}
     private void restoreApprovals(JSONObject review){JSONArray items=review.optJSONArray("items");if(items==null)return;for(int i=0;i<items.length();i++){JSONObject item=items.optJSONObject(i);if(item==null||!item.optBoolean("approved")||find(array("selections"),"sourceIndex",item.optInt("sourceIndex",i))!=null)continue;boolean excluded=item.optString("status").equals("USER_EXCLUDED");if(excluded||item.optJSONObject("selected")!=null)select(item.optInt("sourceIndex",i),item.optJSONObject("selected"),excluded);}}
     private String selectionLabel(JSONObject item,JSONObject selection){if(!selection.optString("label").isEmpty())return selection.optString("label");JSONArray candidates=item.optJSONArray("candidates");if(candidates!=null)for(int i=0;i<candidates.length();i++){JSONObject candidate=candidates.optJSONObject(i),track=candidate==null?null:candidate.optJSONObject("track");if(track!=null&&track.optString("externalId").equals(selection.optString("targetId")))return song(track);}JSONObject selected=item.optJSONObject("selected");return selected!=null&&selected.optString("externalId").equals(selection.optString("targetId"))?song(selected):"곡 정보 확인 필요";}
-    private void scheduleTransferRefresh(){handler.removeCallbacks(transferRefresh);JSONObject transfer=requests.data.optJSONObject("transfer");if(resumed&&transfer!=null&&(transfer.optString("status").equals("RUNNING")||transfer.optString("status").equals("PENDING"))&&transferPolls<20)handler.postDelayed(transferRefresh,2000);}
-    private void send(String route,String method,String path,JSONObject body){if(base.isEmpty()){message("추천 화면의 설정에서 서버에 연결해 주세요.");return;}requests.send(getApplicationContext(),base,route,method,path,body);}
-    private void busy(boolean loading){if(progress==null)return;progress.setVisibility(loading?View.VISIBLE:View.GONE);for(View control:controls)control.setEnabled(!loading);if(loading&&status!=null)status.setText("처리 중이에요…");else if(status!=null&&status.getText().toString().equals("처리 중이에요…"))status.setText("");}
-    private void message(String message){if(status!=null)status.setText(message==null?"처리하지 못했어요.":message);}
+    private void scheduleTransferRefresh(){handler.removeCallbacks(transferRefresh);JSONObject transfer=requests.data.optJSONObject("transfer");if(resumed&&transfer!=null&&supportedProvider(transfer.optString("provider"))&&(transfer.optString("status").equals("RUNNING")||transfer.optString("status").equals("PENDING"))&&transferPolls<20)handler.postDelayed(transferRefresh,2000);}
+    private void send(String route,String method,String path,JSONObject body){if(base.isEmpty()){message("추천 화면의 설정에서 서버에 연결해 주세요.");return;}if(body!=null&&(body.has("provider")&&!supportedProvider(body.optString("provider"))||body.has("targetProvider")&&!supportedProvider(body.optString("targetProvider")))){message("지원하는 음악 서비스를 선택해 주세요.");return;}requests.send(getApplicationContext(),base,route,method,path,body);}
+    private void busy(boolean loading){if(progress==null)return;progress.setVisibility(loading?View.VISIBLE:View.GONE);for(View control:controls)control.setEnabled(!loading);if(loading)message("처리 중이에요…");else if(status!=null&&status.getText().toString().equals("처리 중이에요…")){status.setText("");status.setVisibility(View.GONE);}}
+    private void message(String message){if(status!=null){status.setText(message==null?"처리하지 못했어요.":message);status.setVisibility(View.VISIBLE);}}
 
     private LinearLayout column(){LinearLayout box=new LinearLayout(this);box.setOrientation(LinearLayout.VERTICAL);return box;}
     private LinearLayout card(LinearLayout parent){MaterialCardView card=new MaterialCardView(this);card.setRadius(dp(16));card.setCardBackgroundColor(getColor(R.color.surface));card.setStrokeWidth(dp(1));card.setStrokeColor(getColor(R.color.line));LinearLayout.LayoutParams params=new LinearLayout.LayoutParams(-1,-2);params.setMargins(0,dp(12),0,dp(8));parent.addView(card,params);LinearLayout box=column();box.setPadding(dp(16),dp(12),dp(16),dp(12));card.addView(box);return box;}
@@ -504,14 +508,24 @@ public final class HubActivity extends AppCompatActivity {
     private void paragraph(String label){content.addView(text(label,14,false));}
     private MaterialButton button(String label,Runnable action){MaterialButton button=new MaterialButton(this,null,com.google.android.material.R.attr.materialButtonOutlinedStyle);button.setText(label);button.setTextSize(14);button.setMinHeight(dp(48));button.setCornerRadius(dp(14));button.setOnClickListener(v->{if(!requests.busy())action.run();});controls.add(button);return button;}
     private void addButton(LinearLayout box,String label,Runnable action){box.addView(button(label,action),new LinearLayout.LayoutParams(-1,-2));}
+    private void addPrimaryButton(LinearLayout box,String label,Runnable action){MaterialButton button=button(label,action);button.setMinHeight(dp(56));button.setStrokeWidth(0);button.setBackgroundTintList(android.content.res.ColorStateList.valueOf(getColor(R.color.accent)));button.setTextColor(getColor(R.color.on_accent));LinearLayout.LayoutParams size=new LinearLayout.LayoutParams(-1,-2);size.setMargins(0,dp(12),0,0);box.addView(button,size);}
+    private EditText createField(LinearLayout box,String label,String hint,String key,int max,boolean multiline){TextView caption=text(label,12,true);LinearLayout.LayoutParams spacing=new LinearLayout.LayoutParams(-1,-2);spacing.setMargins(0,dp(10),0,dp(4));box.addView(caption,spacing);EditText view=field(box,hint,key,max,multiline);fillInput(view);view.setTextColor(getColor(R.color.ink));view.setHintTextColor(getColor(R.color.muted));view.setId(View.generateViewId());caption.setLabelFor(view.getId());return view;}
+    private void fillInput(View view){if(view instanceof MaterialButton){MaterialButton button=(MaterialButton)view;button.setBackgroundTintList(android.content.res.ColorStateList.valueOf(getColor(R.color.background)));button.setStrokeWidth(0);button.setCornerRadius(dp(12));}else{GradientDrawable background=new GradientDrawable();background.setColor(getColor(R.color.background));background.setCornerRadius(dp(12));view.setBackground(background);}view.setPadding(dp(14),dp(12),dp(14),dp(12));view.setMinimumHeight(dp(56));}
     private EditText field(LinearLayout box,String hint,String key,int max,boolean multiline){AppCompatEditText view=input(hint,max,multiline);view.setText(value(key));view.addTextChangedListener(watcher(text->put(key,text)));controls.add(view);box.addView(view);return view;}
     private EditText rowField(LinearLayout box,String hint,JSONObject row,String key){AppCompatEditText view=input(hint,key.equals("seconds")?8:300,false);view.setText(row.optString(key));if(!view.getText().toString().equals(row.optString(key))){set(row,key,view.getText().toString());set(row,"edited",true);}view.addTextChangedListener(watcher(text->{set(row,key,text);set(row,"edited",true);}));controls.add(view);box.addView(view);return view;}
     private AppCompatEditText input(String hint,int max,boolean multiline){AppCompatEditText view=new AppCompatEditText(this);view.setHint(hint);view.setMinHeight(dp(48));view.setTextSize(16);view.setFilters(new InputFilter[]{new InputFilter.LengthFilter(max)});view.setSingleLine(!multiline);if(multiline){view.setMinLines(3);view.setMaxLines(6);view.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_FLAG_MULTI_LINE);view.setGravity(Gravity.TOP);}return view;}
     private EditText secret(LinearLayout box,String hint){AppCompatEditText view=input(hint,128,false);view.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_PASSWORD);view.setSaveEnabled(false);controls.add(view);box.addView(view);return view;}
     private TextWatcher watcher(java.util.function.Consumer<String> action){return new TextWatcher(){public void beforeTextChanged(CharSequence s,int start,int count,int after){}public void onTextChanged(CharSequence s,int start,int before,int count){action.accept(s.toString());}public void afterTextChanged(Editable s){}};}
-    private void providerPicker(LinearLayout box,String key){Spinner picker=new Spinner(this);picker.setMinimumHeight(dp(48));picker.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,PROVIDER_NAMES));for(int i=0;i<PROVIDERS.length;i++)if(PROVIDERS[i].equals(provider(key)))picker.setSelection(i);picker.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){public void onItemSelected(android.widget.AdapterView<?> parent,View view,int position,long id){put(key,PROVIDERS[position]);}public void onNothingSelected(android.widget.AdapterView<?> parent){}});controls.add(picker);box.addView(picker);}
-    private String provider(String key){String selected=value(key);for(String provider:PROVIDERS)if(provider.equals(selected))return selected;return "spotify";}
-    private String providerName(String provider){for(int i=0;i<PROVIDERS.length;i++)if(PROVIDERS[i].equals(provider))return PROVIDER_NAMES[i];return "음악 서비스";}
+    private View providerPicker(LinearLayout box,String key){
+        if(!value(key).isEmpty()&&!supportedProvider(value(key))){
+            box.addView(text("이전에 선택한 서비스는 지원하지 않아요. 음악 서비스를 다시 선택해 주세요.",13,false));
+            MaterialButton choose=button("음악 서비스 선택",()->dialog().setTitle("음악 서비스를 선택해 주세요").setItems(PROVIDER_NAMES,(d,which)->{put(key,PROVIDERS[which]);render();}).setNegativeButton("취소",null).show());box.addView(choose,new LinearLayout.LayoutParams(-1,-2));return choose;
+        }
+        Spinner picker=new Spinner(this);picker.setMinimumHeight(dp(48));picker.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,PROVIDER_NAMES));for(int i=0;i<PROVIDERS.length;i++)if(PROVIDERS[i].equals(provider(key)))picker.setSelection(i);picker.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){public void onItemSelected(android.widget.AdapterView<?> parent,View view,int position,long id){if(position>=0&&position<PROVIDERS.length)put(key,PROVIDERS[position]);}public void onNothingSelected(android.widget.AdapterView<?> parent){}});controls.add(picker);box.addView(picker);return picker;
+    }
+    private boolean supportedProvider(String provider){for(String supported:PROVIDERS)if(supported.equals(provider))return true;return false;}
+    private String provider(String key){String selected=value(key);return selected.isEmpty()?"spotify":supportedProvider(selected)?selected:"";}
+    private String providerName(String provider){for(int i=0;i<PROVIDERS.length;i++)if(PROVIDERS[i].equals(provider))return PROVIDER_NAMES[i];return "지원하지 않는 음악 서비스";}
     private String serverBase(){String selected=getSharedPreferences("settings",MODE_PRIVATE).getString("server","");if(!selected.isEmpty())try{return ApiClient.validate(selected);}catch(IllegalArgumentException ignored){}return "";}
     private MaterialAlertDialogBuilder dialog(){return new MaterialAlertDialogBuilder(this){@Override public AlertDialog create(){AlertDialog dialog=super.create();dialogs.add(dialog);return dialog;}};}
     private void open(String url){try{Uri uri=Uri.parse(url);if(uri.getHost()==null||!(uri.getScheme().equals("https")||uri.getScheme().equals("http")&&ApiClient.localHost(uri.getHost())))throw new IllegalArgumentException();startActivity(new Intent(Intent.ACTION_VIEW,uri).addCategory(Intent.CATEGORY_BROWSABLE));}catch(ActivityNotFoundException e){message("주소를 열 앱이나 브라우저가 없어요.");}catch(Exception e){message("연결 주소를 확인할 수 없어요.");}}

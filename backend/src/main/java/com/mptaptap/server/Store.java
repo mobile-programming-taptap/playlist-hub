@@ -336,7 +336,7 @@ public class Store {
     }
 
     public synchronized void unlinkExternal(String user, String provider) {
-        if (provider==null || !List.of("spotify","youtube","youtube_music","apple_music").contains(provider)) throw new IllegalArgumentException("음악 서비스 정보를 확인해 주세요.");
+        if (provider==null || !List.of("spotify","youtube","youtube_music").contains(provider)) throw new IllegalArgumentException("음악 서비스 정보를 확인해 주세요.");
         tx.executeWithoutResult(status -> {
             for (Map<String,Object> row : db.query("SELECT i.id,i.track_json FROM playlist_items i JOIN playlists p ON p.id=i.playlist_id WHERE p.user_id=? AND i.track_id IS NULL AND i.track_json IS NOT NULL",(rs,index)->Map.<String,Object>of("id",rs.getString(1),"snapshot",rs.getString(2)),user)) {
                 if (externalProvider(readMap((String)row.get("snapshot")),provider)) db.update("DELETE FROM playlist_items WHERE id=?",row.get("id"));
@@ -394,7 +394,7 @@ public class Store {
             Map<String,Object> snapshot = new LinkedHashMap<>();
             String provider = text(row.getOrDefault("sourceProvider",row.get("platform")),32,false);
             String id = text(row.getOrDefault("sourceId",row.get("externalId")),200,false);
-            if (!provider.matches("[a-z_]{1,32}")) throw new IllegalArgumentException("음악 서비스 정보를 확인해 주세요.");
+            if (!List.of("spotify","youtube","youtube_music").contains(provider)) throw new IllegalArgumentException("음악 서비스 정보를 확인해 주세요.");
             snapshot.put("sourceProvider",provider); snapshot.put("platform",provider);
             snapshot.put("sourceId",id); snapshot.put("externalId",id);
             snapshot.put("title",text(row.get("title"),300,false)); snapshot.put("artist",text(row.get("artist"),300,true));
@@ -437,7 +437,6 @@ public class Store {
             return switch(provider) {
                 case "spotify" -> host.equals("open.spotify.com");
                 case "youtube_music", "youtube" -> List.of("music.youtube.com","www.youtube.com","youtube.com","youtu.be").contains(host);
-                case "apple_music" -> host.equals("music.apple.com");
                 default -> false;
             };
         } catch (IllegalArgumentException error) { return false; }

@@ -24,7 +24,7 @@ import tools.jackson.databind.ObjectMapper;
 /** Official API endpoints only. External data never enters the recommendation catalogue. */
 @Component
 public class PlatformClient {
-    static final List<String> PROVIDERS=List.of("spotify","youtube","apple_music");
+    static final List<String> PROVIDERS=List.of("spotify","youtube");
     static final int MAX_ITEMS=500;
     public record Tokens(String accessToken,String refreshToken,String accountId,String scopes,Instant expiresAt) {}
     public record SkippedItem(int sourceIndex,String reason) {}
@@ -44,20 +44,19 @@ public class PlatformClient {
     private final HttpClient http=HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).followRedirects(HttpClient.Redirect.NEVER).build();
 
     @Autowired PlatformClient(Environment env,ObjectMapper json) {
-        this(json,configuration(env),Map.of("spotify","https://api.spotify.com/v1","spotify_auth","https://accounts.spotify.com","youtube","https://www.googleapis.com/youtube/v3","google_auth","https://oauth2.googleapis.com","google_authorize","https://accounts.google.com/o/oauth2/v2/auth","apple_music","https://api.music.apple.com/v1"));
+        this(json,configuration(env),Map.of("spotify","https://api.spotify.com/v1","spotify_auth","https://accounts.spotify.com","youtube","https://www.googleapis.com/youtube/v3","google_auth","https://oauth2.googleapis.com","google_authorize","https://accounts.google.com/o/oauth2/v2/auth"));
     }
     // Package-only endpoint injection keeps local HTTP tests outside the production config surface.
     PlatformClient(ObjectMapper json,Map<String,String> config,Map<String,String> endpoints) { this.json=json;this.config=Map.copyOf(config);this.endpoints=Map.copyOf(endpoints); }
     private static Map<String,String> configuration(Environment env) {
         Map<String,String> values=new LinkedHashMap<>();
-        for(String key:List.of("SPOTIFY_CLIENT_ID","SPOTIFY_REDIRECT_URI","GOOGLE_CLIENT_ID","GOOGLE_CLIENT_SECRET","GOOGLE_REDIRECT_URI","YOUTUBE_API_KEY","PUBLIC_BASE_URL","APPLE_MUSIC_DEVELOPER_TOKEN","APPLE_MUSIC_STOREFRONT")) values.put(key,env.getProperty(key,""));
+        for(String key:List.of("SPOTIFY_CLIENT_ID","SPOTIFY_REDIRECT_URI","GOOGLE_CLIENT_ID","GOOGLE_CLIENT_SECRET","GOOGLE_REDIRECT_URI","YOUTUBE_API_KEY","PUBLIC_BASE_URL")) values.put(key,env.getProperty(key,""));
         return values;
     }
     static String provider(String provider) { if(provider==null||!PROVIDERS.contains(provider))throw new IllegalArgumentException("지원하는 플랫폼을 선택해 주세요.");return provider; }
     String setting(String key) { return config.getOrDefault(key,""); }
     boolean configured(String provider) {
         provider(provider);
-        if(provider.equals("apple_music"))return !setting("APPLE_MUSIC_DEVELOPER_TOKEN").isBlank()&&validRedirect(provider);
         String prefix=provider.equals("spotify")?"SPOTIFY":"GOOGLE";
         return !setting(prefix+"_CLIENT_ID").isBlank()&&(provider.equals("spotify")||!setting(prefix+"_CLIENT_SECRET").isBlank())&&validRedirect(provider);
     }
@@ -68,9 +67,9 @@ public class PlatformClient {
             return secure&&!(provider.equals("spotify")&&"localhost".equals(base.getHost()))&&base.getHost()!=null&&base.getUserInfo()==null&&base.getQuery()==null&&base.getFragment()==null&&redirect.toString().equals(base.toString().replaceAll("/$","")+"/connections/"+provider+"/callback");
         }catch(IllegalArgumentException error){return false;}
     }
-    private String redirect(String provider) { return provider.equals("apple_music")?setting("PUBLIC_BASE_URL").replaceAll("/$","")+"/connections/apple_music/callback":setting((provider.equals("spotify")?"SPOTIFY":"GOOGLE")+"_REDIRECT_URI"); }
+    private String redirect(String provider) { provider(provider);return setting((provider.equals("spotify")?"SPOTIFY":"GOOGLE")+"_REDIRECT_URI"); }
     String authorize(String provider,String state,String challenge) {
-        if(!configured(provider)||provider.equals("apple_music"))throw new IllegalArgumentException("플랫폼 연결 환경을 먼저 설정해 주세요.");
+        if(!configured(provider))throw new IllegalArgumentException("플랫폼 연결 환경을 먼저 설정해 주세요.");
         Map<String,String> params=new LinkedHashMap<>(Map.of("client_id",setting((provider.equals("spotify")?"SPOTIFY":"GOOGLE")+"_CLIENT_ID"),"response_type","code","redirect_uri",redirect(provider),"state",state,"code_challenge",challenge,"code_challenge_method","S256"));
         params.put("scope",provider.equals("spotify")?"playlist-read-private playlist-read-collaborative playlist-modify-private":"https://www.googleapis.com/auth/youtube.force-ssl");
         if(provider.equals("youtube")){params.put("access_type","offline");params.put("prompt","consent");}
@@ -84,25 +83,21 @@ public class PlatformClient {
         return new Tokens(access,reply.path("refresh_token").asString(""),account(provider,access),reply.path("scope").asString(""),Instant.now().plusSeconds(Math.max(30,reply.path("expires_in").asLong(3600))));
     }
     Tokens refresh(String provider,Tokens previous) {
-        if(provider.equals("apple_music")||previous.refreshToken().isEmpty())throw new Failure(401);
+        provider(provider);if(previous.refreshToken().isEmpty())throw new Failure(401);
         Map<String,String> params=new LinkedHashMap<>(Map.of("grant_type","refresh_token","refresh_token",previous.refreshToken(),"client_id",setting((provider.equals("spotify")?"SPOTIFY":"GOOGLE")+"_CLIENT_ID")));
         if(provider.equals("youtube"))params.put("client_secret",setting("GOOGLE_CLIENT_SECRET"));
         JsonNode reply=send("POST",tokenEndpoint(provider),null,form(params),"application/x-www-form-urlencoded");
         return new Tokens(required(reply,"access_token"),reply.path("refresh_token").asString(previous.refreshToken()),previous.accountId(),reply.path("scope").asString(previous.scopes()),Instant.now().plusSeconds(Math.max(30,reply.path("expires_in").asLong(3600))));
     }
     private String tokenEndpoint(String provider) { return provider.equals("spotify")?endpoints.get("spotify_auth")+"/api/token":endpoints.get("google_auth")+"/token"; }
-    Tokens appleToken(String userToken) {
-        if(!configured("apple_music")||userToken==null||userToken.isBlank()||userToken.length()>8192||userToken.chars().anyMatch(c->c<33||c>126))throw new IllegalArgumentException("MusicKit에서 허용한 Apple Music 사용자 토큰이 필요해요.");
-        String account=account("apple_music",userToken);
-        return new Tokens(userToken,"",account,"library",Instant.now().plus(Duration.ofDays(30)));
-    }
     void revoke(String provider,Tokens tokens) {
+        provider(provider);
         if(provider.equals("youtube"))send("POST",endpoints.get("google_auth")+"/revoke",null,form(Map.of("token",tokens.refreshToken().isEmpty()?tokens.accessToken():tokens.refreshToken())),"application/x-www-form-urlencoded");
-        // Spotify and Apple expose user-controlled revocation, not a documented token revoke endpoint.
+        // Spotify exposes user-controlled revocation, not a documented token revoke endpoint.
     }
     private String account(String provider,String token) {
         if(provider.equals("spotify"))return required(api(provider,"GET","/me",token,null),"id");
-        JsonNode rows=api(provider,"GET",provider.equals("youtube")?"/channels?part=id&mine=true":"/me/storefront",token,null).path(provider.equals("youtube")?"items":"data");
+        JsonNode rows=api(provider,"GET","/channels?part=id&mine=true",token,null).path("items");
         if(rows.isEmpty())throw new Failure(403);
         return required(rows.get(0),"id");
     }
@@ -126,23 +121,11 @@ public class PlatformClient {
             if(!detail.path("owner").path("id").asString().equals(tokens.accountId())&&!detail.path("collaborative").asBoolean())throw new Failure(403);
             return spotifyPlaylist(id,detail.path("name").asString(""),tokens.accessToken());
         }
-        if(provider.equals("youtube")) {
-            JsonNode rows=api(provider,"GET","/playlists?part=snippet,status,contentDetails&id="+id,tokens.accessToken(),null).path("items");
-            if(rows.isEmpty())throw new Failure(404);
-            JsonNode detail=rows.get(0);
-            if(!detail.path("snippet").path("channelId").asString().equals(tokens.accountId()))throw new Failure(403);
-            return youtubePlaylist(id,detail.path("snippet").path("title").asString(""),tokens.accessToken());
-        }
-        String libraryId=id;
-        if(!id.startsWith("p.")){
-            libraryId="";
-            for(int offset=0;offset<MAX_ITEMS;offset+=100){JsonNode page=api(provider,"GET","/me/library/playlists?limit=100&offset="+offset,tokens.accessToken(),null);for(JsonNode row:page.path("data"))if(id.equals(row.path("attributes").path("playParams").path("globalId").asString("")))libraryId=required(row,"id");if(!libraryId.isEmpty()||page.path("next").asString("").isEmpty())break;}
-            if(libraryId.isEmpty())throw new Failure(403);
-        }
-        JsonNode detail=api(provider,"GET","/me/library/playlists/"+libraryId,tokens.accessToken(),null).path("data");
-        if(detail.isEmpty())throw new Failure(404);
-        RemotePlaylist playlist=applePlaylist(libraryId,detail.get(0).path("attributes").path("name").asString(""),tokens.accessToken());
-        return new RemotePlaylist(id,playlist.title(),"https://music.apple.com/library/playlist/"+id,playlist.tracks(),playlist.truncated());
+        JsonNode rows=api(provider,"GET","/playlists?part=snippet,status,contentDetails&id="+id,tokens.accessToken(),null).path("items");
+        if(rows.isEmpty())throw new Failure(404);
+        JsonNode detail=rows.get(0);
+        if(!detail.path("snippet").path("channelId").asString().equals(tokens.accountId()))throw new Failure(403);
+        return youtubePlaylist(id,detail.path("snippet").path("title").asString(""),tokens.accessToken());
     }
     private RemotePlaylist spotifyPlaylist(String id,String title,String token) {
         List<PlatformTrack> tracks=new ArrayList<>();List<Integer> sourceIndices=new ArrayList<>();List<SkippedItem> skipped=new ArrayList<>();boolean more=false;
@@ -172,40 +155,29 @@ public class PlatformClient {
         }
         return new RemotePlaylist(id,title,"https://www.youtube.com/playlist?list="+id,tracks,!pageToken.isEmpty());
     }
-    private RemotePlaylist applePlaylist(String id,String title,String token) {
-        List<PlatformTrack> tracks=new ArrayList<>();boolean more=false;
-        for(int offset=0;offset<MAX_ITEMS;offset+=100) {
-            JsonNode page=api("apple_music","GET","/me/library/playlists/"+id+"/tracks?limit=100&offset="+offset,token,null);
-            for(JsonNode row:page.path("data"))tracks.add(appleTrack(row));
-            more=!page.path("next").asString("").isEmpty();if(!more)break;
-        }
-        return new RemotePlaylist(id,title,"https://music.apple.com/library/playlist/"+id,tracks,more);
-    }
     List<PlatformTrack> search(String provider,PlatformTrack source,Tokens tokens) {
+        provider(provider);
         String query=(source.title+" "+source.artist).strip();if(query.length()>300)query=query.substring(0,300);
         List<PlatformTrack> result=new ArrayList<>();
         if(provider.equals("spotify")) {
             if(source.isrc!=null&&!source.isrc.isEmpty())query="isrc:"+source.isrc;
             for(JsonNode row:api(provider,"GET","/search?type=track&limit=10&q="+encode(query),tokens.accessToken(),null).path("tracks").path("items"))result.add(spotifyTrack(row));
-        }else if(provider.equals("youtube")) {
+        }else {
             for(JsonNode row:api(provider,"GET","/search?part=snippet&type=video&maxResults=5&q="+encode(query),tokens.accessToken(),null).path("items")) {
                 String id=row.path("id").path("videoId").asString("");if(id.matches("[A-Za-z0-9_-]{11}"))result.add(track(provider,id,row.path("snippet").path("title").asString(""),row.path("snippet").path("channelTitle").asString(""),0,"",""));
             }
-        }else {
-            String storefront=setting("APPLE_MUSIC_STOREFRONT");if(!storefront.matches("[a-z]{2}"))storefront="us";
-            for(JsonNode row:api(provider,"GET","/catalog/"+storefront+"/search?types=songs&limit=10&term="+encode(query),tokens.accessToken(),null).path("results").path("songs").path("data"))result.add(appleTrack(row));
         }
         return result;
     }
     String findCreated(String provider,String marker,Tokens tokens) {
+        provider(provider);
         String pageToken="";
         for(int page=0;page<10;page++) {
-            String path=provider.equals("spotify")?"/me/playlists?limit=50&offset="+(page*50):provider.equals("youtube")?"/playlists?part=snippet&mine=true&maxResults=50"+(pageToken.isEmpty()?"":"&pageToken="+encode(pageToken)):"/me/library/playlists?limit=100&offset="+(page*100);
+            String path=provider.equals("spotify")?"/me/playlists?limit=50&offset="+(page*50):"/playlists?part=snippet&mine=true&maxResults=50"+(pageToken.isEmpty()?"":"&pageToken="+encode(pageToken));
             JsonNode reply=api(provider,"GET",path,tokens.accessToken(),null);
-            for(JsonNode p:reply.path(provider.equals("apple_music")?"data":"items")) {
-                JsonNode description=provider.equals("spotify")?p.path("description"):p.path(provider.equals("youtube")?"snippet":"attributes").path("description");
-                String text=description.isObject()?description.path("standard").asString(""):description.asString("");
-                if(text.equals(marker))return required(p,"id");
+            for(JsonNode p:reply.path("items")) {
+                String description=(provider.equals("spotify")?p.path("description"):p.path("snippet").path("description")).asString("");
+                if(description.equals(marker))return required(p,"id");
             }
             if(provider.equals("youtube")){pageToken=reply.path("nextPageToken").asString("");if(pageToken.isEmpty())break;}
             else if(reply.path("next").asString("").isEmpty())break;
@@ -213,33 +185,31 @@ public class PlatformClient {
         return "";
     }
     String createPrivate(String provider,String title,String marker,Tokens tokens) {
+        provider(provider);
         Object body;String path;
         if(provider.equals("spotify")){path="/me/playlists";body=Map.of("name",title,"public",false,"description",marker);}
-        else if(provider.equals("youtube")){path="/playlists?part=snippet,status";body=Map.of("snippet",Map.of("title",title,"description",marker),"status",Map.of("privacyStatus","private"));}
-        else{path="/me/library/playlists";body=Map.of("attributes",Map.of("name",title,"description",marker));}
+        else{path="/playlists?part=snippet,status";body=Map.of("snippet",Map.of("title",title,"description",marker),"status",Map.of("privacyStatus","private"));}
         JsonNode reply=api(provider,"POST",path,tokens.accessToken(),body);
-        return required(provider.equals("apple_music")?reply.path("data").get(0):reply,"id");
+        return required(reply,"id");
     }
     List<String> existingIds(String provider,String id,Tokens tokens) {
-        RemotePlaylist p=provider.equals("spotify")?spotifyPlaylist(id,"",tokens.accessToken()):provider.equals("youtube")?youtubePlaylist(id,"",tokens.accessToken()):applePlaylist(id,"",tokens.accessToken());
+        validPlaylistId(provider,id);
+        RemotePlaylist p=provider.equals("spotify")?spotifyPlaylist(id,"",tokens.accessToken()):youtubePlaylist(id,"",tokens.accessToken());
         if(p.truncated())throw new Failure(409);
         return p.tracks().stream().map(t->t.externalId).toList();
     }
     void add(String provider,String playlist,String externalId,Tokens tokens) {
         validPlaylistId(provider,playlist);validId(provider,externalId);
         if(provider.equals("spotify"))api(provider,"POST","/playlists/"+playlist+"/items",tokens.accessToken(),Map.of("uris",List.of("spotify:track:"+externalId)));
-        else if(provider.equals("youtube"))api(provider,"POST","/playlistItems?part=snippet",tokens.accessToken(),Map.of("snippet",Map.of("playlistId",playlist,"resourceId",Map.of("kind","youtube#video","videoId",externalId))));
-        else api(provider,"POST","/me/library/playlists/"+playlist+"/tracks",tokens.accessToken(),Map.of("data",List.of(Map.of("id",externalId,"type","songs"))));
+        else api(provider,"POST","/playlistItems?part=snippet",tokens.accessToken(),Map.of("snippet",Map.of("playlistId",playlist,"resourceId",Map.of("kind","youtube#video","videoId",externalId))));
     }
     private JsonNode api(String provider,String method,String path,String token,Object body) {
-        return send(method,endpoints.get(provider)+path,provider.equals("apple_music")?setting("APPLE_MUSIC_DEVELOPER_TOKEN"):token,body==null?null:json.writeValueAsString(body),"application/json",provider.equals("apple_music")?token:null);
+        provider(provider);return send(method,endpoints.get(provider)+path,token,body==null?null:json.writeValueAsString(body),"application/json");
     }
-    private JsonNode send(String method,String url,String token,String body,String contentType) { return send(method,url,token,body,contentType,null); }
-    private JsonNode send(String method,String url,String token,String body,String contentType,String musicUserToken) {
-        if((token!=null&&(!token.isEmpty())&&(token.length()>8192||token.chars().anyMatch(c->c<33||c>126)))||(musicUserToken!=null&&(musicUserToken.length()>8192||musicUserToken.chars().anyMatch(c->c<33||c>126))))throw new Failure(502);
+    private JsonNode send(String method,String url,String token,String body,String contentType) {
+        if(token!=null&&!token.isEmpty()&&(token.length()>8192||token.chars().anyMatch(c->c<33||c>126)))throw new Failure(502);
         HttpRequest.Builder request=HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofSeconds(15)).header("Accept","application/json");
         if(token!=null&&!token.isEmpty())request.header("Authorization","Bearer "+token);
-        if(musicUserToken!=null&&!musicUserToken.isEmpty())request.header("Music-User-Token",musicUserToken);
         if(body!=null)request.header("Content-Type",contentType);
         request.method(method,body==null?HttpRequest.BodyPublishers.noBody():HttpRequest.BodyPublishers.ofString(body));
         long deadline=System.nanoTime()+Duration.ofSeconds(15).toNanos();
@@ -257,7 +227,7 @@ public class PlatformClient {
         }catch(InterruptedException error){Thread.currentThread().interrupt();throw new Failure(503);}
         catch(IOException|tools.jackson.core.JacksonException error){throw new Failure(502);}
     }
-    static String playlistUrl(String provider,String id){if(id==null||id.isEmpty())return "";validPlaylistId(provider,id);return provider.equals("spotify")?"https://open.spotify.com/playlist/"+id:provider.equals("youtube")?"https://www.youtube.com/playlist?list="+id:"";}
+    static String playlistUrl(String provider,String id){provider(provider);if(id==null||id.isEmpty())return "";validPlaylistId(provider,id);return provider.equals("spotify")?"https://open.spotify.com/playlist/"+id:"https://www.youtube.com/playlist?list="+id;}
     static String playlistId(String provider,String url) {
         provider(provider);URI uri;
         try{uri=URI.create(url);}catch(RuntimeException error){throw new IllegalArgumentException("플랫폼의 원본 목록 URL을 입력해 주세요.");}
@@ -265,7 +235,6 @@ public class PlatformClient {
         String host=uri.getHost(),id="";
         if(provider.equals("spotify")&&"open.spotify.com".equals(host)&&uri.getPath().matches("/playlist/[A-Za-z0-9]+"))id=uri.getPath().substring(10);
         if(provider.equals("youtube")&&List.of("www.youtube.com","youtube.com","music.youtube.com").contains(host)&&"/playlist".equals(uri.getPath()))id=query(uri,"list");
-        if(provider.equals("apple_music")&&"music.apple.com".equals(host)&&uri.getPath().contains("/playlist/"))id=uri.getPath().substring(uri.getPath().lastIndexOf('/')+1);
         validPlaylistId(provider,id);return id;
     }
     static String videoId(String url) {
@@ -280,8 +249,8 @@ public class PlatformClient {
         if(uri.getRawQuery()!=null)for(String pair:uri.getRawQuery().split("&")){String[] parts=pair.split("=",2);if(parts.length==2&&parts[0].equals(key))return java.net.URLDecoder.decode(parts[1],StandardCharsets.UTF_8);}
         return "";
     }
-    static void validId(String provider,String id) { if(id==null||!id.matches(provider.equals("spotify")?"[A-Za-z0-9]{22}":provider.equals("youtube")?"[A-Za-z0-9_-]{11}":"[A-Za-z0-9.-]{1,100}"))throw new IllegalArgumentException("플랫폼 곡 ID를 확인해 주세요."); }
-    static void validPlaylistId(String provider,String id) { if(id==null||!id.matches(provider.equals("spotify")?"[A-Za-z0-9]{22}":provider.equals("apple_music")?"[A-Za-z0-9._-]{1,100}":"[A-Za-z0-9_-]{1,100}"))throw new IllegalArgumentException("플랫폼 목록 ID를 확인해 주세요."); }
+    static void validId(String provider,String id) { provider(provider);if(id==null||!id.matches(provider.equals("spotify")?"[A-Za-z0-9]{22}":"[A-Za-z0-9_-]{11}"))throw new IllegalArgumentException("플랫폼 곡 ID를 확인해 주세요."); }
+    static void validPlaylistId(String provider,String id) { provider(provider);if(id==null||!id.matches(provider.equals("spotify")?"[A-Za-z0-9]{22}":"[A-Za-z0-9_-]{1,100}"))throw new IllegalArgumentException("플랫폼 목록 ID를 확인해 주세요."); }
     private static String required(JsonNode row,String field) { if(row==null||row.path(field).asString("").isBlank())throw new Failure(502);return row.path(field).asString(); }
     static String encode(String value) { return URLEncoder.encode(value,StandardCharsets.UTF_8); }
     private static String form(Map<String,String> params) { return params.entrySet().stream().map(e->encode(e.getKey())+"="+encode(e.getValue())).collect(java.util.stream.Collectors.joining("&")); }
@@ -289,11 +258,8 @@ public class PlatformClient {
         List<String> names=new ArrayList<>();for(JsonNode artist:row.path("artists"))names.add(artist.path("name").asString(""));String artists=String.join(", ",names);
         return track("spotify",row.path("id").asString(""),row.path("name").asString(""),artists,row.path("duration_ms").asLong(0),row.path("external_ids").path("isrc").asString(""),row.path("album").path("name").asString(""));
     }
-    private static PlatformTrack appleTrack(JsonNode row) {
-        JsonNode a=row.path("attributes");return track("apple_music",a.path("playParams").path("catalogId").asString(row.path("id").asString("")),a.path("name").asString(""),a.path("artistName").asString(""),a.path("durationInMillis").asLong(0),a.path("isrc").asString(""),a.path("albumName").asString(""));
-    }
     private static PlatformTrack track(String platform,String id,String title,String artist,long duration,String isrc,String album) {
         PlatformTrack t=new PlatformTrack();t.platform=platform;t.externalId=id;t.title=title;t.artist=artist;t.durationMs=duration;t.isrc=isrc;t.album=album;t.version="";t.sourceUrl=trackUrl(platform,id);return t;
     }
-    private static String trackUrl(String provider,String id) { return provider.equals("spotify")?"https://open.spotify.com/track/"+id:provider.equals("youtube")?"https://www.youtube.com/watch?v="+id:"https://music.apple.com/song/"+id; }
+    private static String trackUrl(String provider,String id) { provider(provider);return provider.equals("spotify")?"https://open.spotify.com/track/"+id:"https://www.youtube.com/watch?v="+id; }
 }

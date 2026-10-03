@@ -56,5 +56,5 @@
             <LinearLayout android:id="@+id/library" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:padding="24dp" />
         </androidx.core.widget.NestedScrollView>
     </FrameLayout>
-    <com.google.android.material.bottomnavigation.BottomNavigationView android:id="@+id/navigation" android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="64dp" android:background="@color/deck_surface" app:itemIconTint="@color/deck_navigation" app:itemTextColor="@color/deck_navigation" app:itemIconSize="22dp" app:menu="@menu/bottom_nav" app:labelVisibilityMode="labeled" app:elevation="0dp" />
+    <com.google.android.material.bottomnavigation.BottomNavigationView android:id="@+id/navigation" style="@style/TapTap.BottomNavigation" android:layout_width="match_parent" android:layout_height="wrap_content" app:menu="@menu/bottom_nav" app:labelVisibilityMode="labeled" />
 </LinearLayout>

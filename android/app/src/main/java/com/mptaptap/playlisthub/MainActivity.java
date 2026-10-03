@@ -135,8 +135,8 @@ public class MainActivity extends AppCompatActivity {
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state); EdgeToEdge.enable(this); setContentView(R.layout.activity_main);
-        getWindow().setNavigationBarColor(getColor(R.color.deck_surface));
-        ((BottomNavigationView)findViewById(R.id.navigation)).setItemActiveIndicatorEnabled(false);
+        getWindow().setNavigationBarColor(getColor(R.color.navigation_surface));
+        ((BottomNavigationView)findViewById(R.id.navigation)).setItemActiveIndicatorEnabled(true);
         recommendation=new ViewModelProvider(this).get(RecommendationRequest.class);
         pendingTask=new ViewModelProvider(this).get(PendingTask.class);
         ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main), (v, insets) -> {
@@ -494,7 +494,7 @@ public class MainActivity extends AppCompatActivity {
                 }
             }
         }
-        LayerDrawable layers=new LayerDrawable(new Drawable[]{background,new ColorDrawable(getColor(R.color.deck_surface))});
+        LayerDrawable layers=new LayerDrawable(new Drawable[]{background,new ColorDrawable(getColor(R.color.navigation_surface))});
         layers.setLayerGravity(1,android.view.Gravity.BOTTOM);layers.setLayerHeight(1,navigationInset);
         findViewById(R.id.main).setBackground(layers);
         androidx.core.view.WindowInsetsControllerCompat bars=ViewCompat.getWindowInsetsController(findViewById(R.id.main));

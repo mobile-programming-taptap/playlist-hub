@@ -41,38 +41,28 @@ public class PlatformApi {
 
     @GetMapping("/connections/config") public Map<String,Object> config(@RequestHeader(value="Authorization",required=false)String auth){
         user(auth);List<Map<String,Object>> providers=new ArrayList<>();
-        for(String p:PlatformClient.PROVIDERS)providers.add(Map.of("provider",p,"configured",store.configured()&&remote.configured(p),"capabilities",List.of("import","match","transfer","explicit_sync"),"notice",p.equals("apple_music")?"MusicKit 계정 허용과 Apple 개발자 구성이 필요해요.":p.equals("spotify")?"Spotify의 앱 이용 모드·계정·읽기/쓰기 권한 제한이 적용돼요.":"YouTube Data API 권한·할당량이 적용돼요."));
+        for(String p:PlatformClient.PROVIDERS)providers.add(Map.of("provider",p,"configured",store.configured()&&remote.configured(p),"capabilities",List.of("import","match","transfer","explicit_sync"),"notice",p.equals("spotify")?"Spotify의 앱 이용 모드·계정·읽기/쓰기 권한 제한이 적용돼요.":"YouTube Data API 권한·할당량이 적용돼요."));
         return Map.of("providers",providers,"tokenStorageConfigured",store.configured());
     }
-    @GetMapping("/connections") public List<Map<String,Object>> connections(@RequestHeader(value="Authorization",required=false)String auth){return store.connections(user(auth));}
+    @GetMapping("/connections") public List<Map<String,Object>> connections(@RequestHeader(value="Authorization",required=false)String auth){return store.connections(user(auth)).stream().filter(row->PlatformClient.PROVIDERS.contains(row.get("provider"))).toList();}
     @PostMapping("/connections/{platform}/start") public Map<String,String> start(@RequestHeader(value="Authorization",required=false)String auth,@PathVariable String platform){
         String u=user(auth),p=provider(platform);if(!store.configured()||!remote.configured(p))throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"서버의 플랫폼 연결 환경과 암호화 키를 먼저 설정해 주세요.");
-        Map<String,String> state=store.start(u,p,auth);String url=p.equals("apple_music")?remote.setting("PUBLIC_BASE_URL").replaceAll("/$","")+"/connections/apple_music/authorize?state="+state.get("state"):remote.authorize(p,state.get("state"),state.get("challenge"));
+        Map<String,String> state=store.start(u,p,auth);String url=remote.authorize(p,state.get("state"),state.get("challenge"));
         return Map.of("authorizationUrl",url,"state",state.get("state"),"expiresAt",state.get("expiresAt"));
     }
     @GetMapping("/connections/{platform}/callback") public synchronized ResponseEntity<Void> callback(@PathVariable String platform,@RequestParam String state,@RequestParam(required=false)String code,@RequestParam(required=false)String error){
         String p=provider(platform);PlatformStore.Pending pending=store.pending(state,p,true);
         String status="error";
-        if(error==null&&code!=null&&!code.isBlank()&&code.length()<4096&&!p.equals("apple_music"))try{store.connection(pending.user(),p,remote.exchange(p,code,pending.verifier()));status="connected";}catch(RuntimeException ignored){}
+        if(error==null&&code!=null&&!code.isBlank()&&code.length()<4096)try{store.connection(pending.user(),p,remote.exchange(p,code,pending.verifier()));status="connected";}catch(RuntimeException ignored){}
         return ResponseEntity.status(302).location(URI.create("taptap://connected?provider="+p+"&status="+status)).build();
-    }
-    @GetMapping(value="/connections/apple_music/authorize",produces="text/html;charset=UTF-8") public ResponseEntity<String> appleAuthorize(@RequestParam String state){
-        store.pending(state,"apple_music",false);if(!remote.configured("apple_music"))throw new IllegalArgumentException("Apple Music 서버 구성이 필요해요.");
-        String developer=json.writeValueAsString(remote.setting("APPLE_MUSIC_DEVELOPER_TOKEN")).replace("<","\\u003c");
-        String callbackUrl=json.writeValueAsString(remote.setting("PUBLIC_BASE_URL").replaceAll("/$","")+"/connections/apple_music/callback").replace("<","\\u003c");
-        String html="<!doctype html><html lang='ko'><meta name='viewport' content='width=device-width,initial-scale=1'><title>TapTap · Apple Music 연결</title><body><h1>Apple Music 연결</h1><p>목록을 읽고 사용자가 확인한 목록을 저장하도록 허용합니다. 음악이나 계정 데이터를 AI에 보내지 않습니다. <a href=\"/privacy\">개인정보 처리 안내</a></p><button id='connect'>Apple Music으로 허용</button><p id='message' role='status'></p><script src='https://js-cdn.music.apple.com/musickit/v3/musickit.js'></script><script>document.addEventListener('musickitloaded',async function(){await MusicKit.configure({developerToken:"+developer+",app:{name:'TapTap',build:'1'}});document.getElementById('connect').onclick=async function(){this.disabled=true;try{const token=await MusicKit.getInstance().authorize();const response=await fetch("+callbackUrl+",{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({state:'"+state+"',musicUserToken:token})});if(!response.ok)throw Error();const result=await response.json();location.href=result.redirect;}catch(e){document.getElementById('message').textContent='연결하지 못했습니다. 앱에서 다시 연결해 주세요.';this.disabled=false;}};});</script></body></html>";
-        return ResponseEntity.ok().header("Cache-Control","no-store").header("Referrer-Policy","no-referrer").header("X-Content-Type-Options","nosniff").body(html);
-    }
-    public record AppleCallback(String state,String musicUserToken){}
-    @PostMapping("/connections/apple_music/callback") public synchronized Map<String,String> appleCallback(@RequestBody AppleCallback body){
-        PlatformStore.Pending pending=store.pending(body.state(),"apple_music",true);store.connection(pending.user(),"apple_music",remote.appleToken(body.musicUserToken()));return Map.of("redirect","taptap://connected?provider=apple_music&status=connected");
     }
     @DeleteMapping("/connections/{platform}") public synchronized Map<String,Object> unlink(@RequestHeader(value="Authorization",required=false)String auth,@PathVariable String platform){
         String u=user(auth),p=provider(platform);boolean revoked=false;
         try{remote.revoke(p,store.tokens(u,p));revoked=p.equals("youtube");}catch(RuntimeException ignored){}finally{store.unlink(u,p);users.unlinkExternal(u,p);}
-        return Map.of("unlinked",true,"providerRevocationRequired",!revoked,"manageAccessUrl",p.equals("spotify")?"https://www.spotify.com/account/apps/":p.equals("youtube")?"https://myaccount.google.com/connections":"https://support.apple.com/102303");
+        return Map.of("unlinked",true,"providerRevocationRequired",!revoked,"manageAccessUrl",p.equals("spotify")?"https://www.spotify.com/account/apps/":"https://myaccount.google.com/connections");
     }
     private synchronized PlatformClient.Tokens token(String u,String p){
+        p=provider(p);
         PlatformClient.Tokens token=store.tokens(u,p);
         if(!token.expiresAt().isAfter(Instant.now().plusSeconds(30))){token=remote.refresh(p,token);store.connection(u,p,token);}return token;
     }
@@ -100,14 +90,14 @@ public class PlatformApi {
         if(!remote.skippedItems().isEmpty()){String reasons=remote.skippedItems().stream().map(row->(row.sourceIndex()+1)+"번째 · "+row.reason()).collect(java.util.stream.Collectors.joining(" / "));notice+=(notice.isEmpty()?"":"\n")+"가져오지 못한 "+remote.skippedItems().size()+"개 항목: "+reasons;}
         value.put("notice",notice);return value;
     }
-    @GetMapping("/imports/playlists") public List<Map<String,Object>> imports(@RequestHeader(value="Authorization",required=false)String auth,@RequestParam(defaultValue="false")boolean summary){String u=user(auth);return summary?store.summaries(u,"import"):store.documents(u,"import");}
-    @GetMapping("/imports/playlists/{id}") public Map<String,Object> imported(@RequestHeader(value="Authorization",required=false)String auth,@PathVariable String id){return store.document(user(auth),id,"import");}
+    @GetMapping("/imports/playlists") public List<Map<String,Object>> imports(@RequestHeader(value="Authorization",required=false)String auth,@RequestParam(defaultValue="false")boolean summary){String u=user(auth);return (summary?store.summaries(u,"import"):store.documents(u,"import")).stream().filter(row->PlatformClient.PROVIDERS.contains(row.get("provider"))).toList();}
+    @GetMapping("/imports/playlists/{id}") public Map<String,Object> imported(@RequestHeader(value="Authorization",required=false)String auth,@PathVariable String id){Map<String,Object> data=store.document(user(auth),id,"import");provider((String)data.get("provider"));return data;}
     @DeleteMapping("/imports/playlists/{id}") public synchronized Map<String,Boolean> deleteImport(@RequestHeader(value="Authorization",required=false)String auth,@PathVariable String id){store.deleteImport(user(auth),id);return Map.of("deleted",true);}
     public record TimelineEdit(Integer sourceIndex,String title,String artist,Boolean excluded,Integer seconds){}
     public record SaveImport(String title,String playlistId,List<TimelineEdit> entries){}
     @PostMapping("/imports/playlists/{id}/save") public synchronized Map<String,Object> saveImport(@RequestHeader(value="Authorization",required=false)String auth,@PathVariable String id,@RequestBody SaveImport body){return saveImported(user(auth),id,body);}
     private Map<String,Object> saveImported(String u,String id,SaveImport body){
-        Map<String,Object> data=store.document(u,id,"import");List<Map<String,Object>> items=items(data,"items");Map<Integer,TimelineEdit> edits=new LinkedHashMap<>();
+        Map<String,Object> data=store.document(u,id,"import");provider((String)data.get("provider"));List<Map<String,Object>> items=items(data,"items");Map<Integer,TimelineEdit> edits=new LinkedHashMap<>();
         if(body.entries()!=null){if(body.entries().size()!=items.size())throw new IllegalArgumentException("모든 원본 행을 확인해 주세요.");for(TimelineEdit e:body.entries())if(e.sourceIndex()==null||edits.put(e.sourceIndex(),e)!=null)throw new IllegalArgumentException("원본 행을 중복 없이 지정해 주세요.");}
         List<Map<String,Object>> rows=new ArrayList<>(),reviewed=new ArrayList<>();
         for(Map<String,Object> item:items){
@@ -142,7 +132,7 @@ public class PlatformApi {
     }
     public record MatchBody(String importId,String targetProvider,Integer offset){}
     @PostMapping("/matches") public synchronized Map<String,Object> matches(@RequestHeader(value="Authorization",required=false)String auth,@RequestBody MatchBody body){
-        String u=user(auth),p=provider(body.targetProvider());Map<String,Object> data=store.document(u,body.importId(),"import");List<Map<String,Object>> source=items(data,data.containsKey("reviewedItems")?"reviewedItems":"items");List<Map<String,Object>> reviews=data.containsKey("reviews")&&p.equals(data.get("targetProvider"))?items(data,"reviews"):new ArrayList<>();
+        String u=user(auth),p=provider(body.targetProvider());Map<String,Object> data=store.document(u,body.importId(),"import");provider((String)data.get("provider"));List<Map<String,Object>> source=items(data,data.containsKey("reviewedItems")?"reviewedItems":"items");List<Map<String,Object>> reviews=data.containsKey("reviews")&&p.equals(data.get("targetProvider"))?items(data,"reviews"):new ArrayList<>();
         if(reviews.isEmpty())for(Map<String,Object> item:source){Map<String,Object> r=new LinkedHashMap<>();r.put("sourceIndex",item.get("sourceIndex"));r.put("source",item.get("track"));r.put("candidates",List.of());r.put("status","NOT_SEARCHED");r.put("selected",null);r.put("approved",false);reviews.add(r);}
         int offset=body.offset()==null?0:body.offset();if(offset<0||offset>=Math.max(1,source.size()))throw new IllegalArgumentException("곡 검토 위치를 확인해 주세요.");PlatformClient.Tokens token=token(u,p);int end=Math.min(source.size(),offset+20);
         for(int i=offset;i<end;i++){PlatformTrack track=json.convertValue(source.get(i).get("track"),PlatformTrack.class),scoring=track;
@@ -153,10 +143,10 @@ public class PlatformApi {
         data.put("reviews",reviews);data.put("targetProvider",p);data.put("nextOffset",end<source.size()?end:-1);store.update(u,body.importId(),"import",data);return Map.of("importId",body.importId(),"targetProvider",p,"items",reviews,"nextOffset",end<source.size()?end:-1);
     }
     public record Selection(Integer sourceIndex,String targetId,Boolean excluded){}
-    @GetMapping("/matches/{id}") public Map<String,Object> storedReview(@RequestHeader(value="Authorization",required=false)String auth,@PathVariable String id,@RequestParam String targetProvider){Map<String,Object> data=store.document(user(auth),id,"import");String p=provider(targetProvider);if(!p.equals(data.get("targetProvider")))throw new ResponseStatusException(HttpStatus.NOT_FOUND,"저장된 대상 플랫폼 검토가 없어요.");return Map.of("importId",id,"targetProvider",p,"items",items(data,"reviews"),"nextOffset",data.getOrDefault("nextOffset",0));}
+    @GetMapping("/matches/{id}") public Map<String,Object> storedReview(@RequestHeader(value="Authorization",required=false)String auth,@PathVariable String id,@RequestParam String targetProvider){Map<String,Object> data=store.document(user(auth),id,"import");provider((String)data.get("provider"));String p=provider(targetProvider);if(!p.equals(data.get("targetProvider")))throw new ResponseStatusException(HttpStatus.NOT_FOUND,"저장된 대상 플랫폼 검토가 없어요.");return Map.of("importId",id,"targetProvider",p,"items",items(data,"reviews"),"nextOffset",data.getOrDefault("nextOffset",0));}
     public record ReviewBody(String targetProvider,List<Selection> selections){}
     @PutMapping("/matches/{id}") public synchronized Map<String,Object> review(@RequestHeader(value="Authorization",required=false)String auth,@PathVariable String id,@RequestBody ReviewBody body){
-        String u=user(auth),p=provider(body.targetProvider());Map<String,Object> data=store.document(u,id,"import");if(!p.equals(data.get("targetProvider")))throw new IllegalArgumentException("먼저 대상 플랫폼의 곡 후보를 조회해 주세요.");List<Map<String,Object>> rows=items(data,"reviews");if(body.selections()==null||body.selections().size()>500)throw new IllegalArgumentException("검토할 곡을 지정해 주세요.");HashSet<Integer> seen=new HashSet<>();
+        String u=user(auth),p=provider(body.targetProvider());Map<String,Object> data=store.document(u,id,"import");provider((String)data.get("provider"));if(!p.equals(data.get("targetProvider")))throw new IllegalArgumentException("먼저 대상 플랫폼의 곡 후보를 조회해 주세요.");List<Map<String,Object>> rows=items(data,"reviews");if(body.selections()==null||body.selections().size()>500)throw new IllegalArgumentException("검토할 곡을 지정해 주세요.");HashSet<Integer> seen=new HashSet<>();
         for(Selection choice:body.selections()){if(choice.sourceIndex()==null||!seen.add(choice.sourceIndex()))throw new IllegalArgumentException("행을 중복 없이 지정해 주세요.");Map<String,Object> row=rows.stream().filter(r->((Number)r.get("sourceIndex")).intValue()==choice.sourceIndex()).findFirst().orElseThrow(()->new IllegalArgumentException("원본 행을 찾을 수 없어요."));if(Boolean.TRUE.equals(choice.excluded())){row.put("status","USER_EXCLUDED");row.put("selected",null);}else{Map<String,Object> selected=items(row,"candidates").stream().map(c->cast(c.get("track"))).filter(t->choice.targetId()!=null&&choice.targetId().equals(t.get("externalId"))).findFirst().orElseThrow(()->new IllegalArgumentException("제시된 후보 곡 중 하나를 선택해 주세요."));row.put("selected",selected);row.put("status","MATCHED");}row.put("approved",true);}
         store.update(u,id,"import",data);return Map.of("importId",id,"targetProvider",p,"items",rows);
     }
@@ -165,15 +155,15 @@ public class PlatformApi {
     @PostMapping("/transfers") public synchronized Map<String,Object> transfer(@RequestHeader(value="Authorization",required=false)String auth,@RequestBody TransferBody body){
         String u=user(auth),id=PlatformStore.uuid(body.id()),p=provider(body.targetProvider());confirmed(body.confirmed());String name=title(body.title());
         if(store.exists(u,id,"transfer")){Map<String,Object> existing=store.document(u,id,"transfer");if(!body.importId().equals(existing.get("importId"))||!p.equals(existing.get("provider"))||!name.equals(existing.get("title")))throw new ResponseStatusException(HttpStatus.CONFLICT,"같은 작업 ID로 원래 이전을 다시 시도해 주세요.");if(!"COMPLETED".equals(existing.get("status")))launch(u,id);return counted(existing);}
-        Map<String,Object> source=store.document(u,body.importId(),"import");if(!p.equals(source.get("targetProvider")))throw new IllegalArgumentException("대상 플랫폼의 곡 후보를 먼저 검토해 주세요.");List<Map<String,Object>> selected=new ArrayList<>();List<Integer> excluded=new ArrayList<>();
+        Map<String,Object> source=store.document(u,body.importId(),"import");provider((String)source.get("provider"));if(!p.equals(source.get("targetProvider")))throw new IllegalArgumentException("대상 플랫폼의 곡 후보를 먼저 검토해 주세요.");List<Map<String,Object>> selected=new ArrayList<>();List<Integer> excluded=new ArrayList<>();
         for(Map<String,Object> row:items(source,"reviews")){if(!Boolean.TRUE.equals(row.get("approved")))throw new IllegalArgumentException("모든 곡을 선택하거나 제외한 뒤 이전해 주세요.");if("USER_EXCLUDED".equals(row.get("status"))){excluded.add(((Number)row.get("sourceIndex")).intValue());continue;}Map<String,Object> track=cast(row.get("selected"));Map<String,Object> item=new LinkedHashMap<>(Map.of("sourceIndex",row.get("sourceIndex"),"targetId",track.get("externalId"),"status","PENDING","message",""));selected.add(item);}
         if(selected.isEmpty())throw new IllegalArgumentException("이전할 곡을 하나 이상 선택해 주세요.");token(u,p);Map<String,Object> job=new LinkedHashMap<>(Map.of("id",id,"importId",body.importId(),"provider",p,"title",name,"status","PENDING","externalPlaylistId","","items",selected,"createStarted",false,"playlistUrl","","notice","사용자가 확인한 곡만 비공개 목록으로 이전합니다."));job.put("excludedSourceIndices",excluded);store.create(u,id,"transfer",p,counted(job));launch(u,id);return job;
     }
-    @GetMapping("/transfers") public List<Map<String,Object>> transferHistory(@RequestHeader(value="Authorization",required=false)String auth,@RequestParam(defaultValue="false")boolean summary){String u=user(auth);List<Map<String,Object>> jobs=summary?store.summaries(u,"transfer"):store.documents(u,"transfer");for(Map<String,Object> job:jobs){if(!summary)counted(job);job.put("playlistUrl",PlatformClient.playlistUrl((String)job.get("provider"),(String)job.getOrDefault("externalPlaylistId","")));if(activeTransfers.contains(u+":"+job.get("id")))job.put("status","RUNNING");}return jobs;}
+    @GetMapping("/transfers") public List<Map<String,Object>> transferHistory(@RequestHeader(value="Authorization",required=false)String auth,@RequestParam(defaultValue="false")boolean summary){String u=user(auth);List<Map<String,Object>> jobs=(summary?store.summaries(u,"transfer"):store.documents(u,"transfer")).stream().filter(row->PlatformClient.PROVIDERS.contains(row.get("provider"))).toList();for(Map<String,Object> job:jobs){if(!summary)counted(job);job.put("playlistUrl",PlatformClient.playlistUrl((String)job.get("provider"),(String)job.getOrDefault("externalPlaylistId","")));if(activeTransfers.contains(u+":"+job.get("id")))job.put("status","RUNNING");}return jobs;}
     @GetMapping("/transfers/{id}") public Map<String,Object> transferStatus(@RequestHeader(value="Authorization",required=false)String auth,@PathVariable String id){return status(user(auth),id);}
     private Map<String,Object> status(String u,String id){Map<String,Object> job=counted(store.document(u,id,"transfer"));job.put("playlistUrl",PlatformClient.playlistUrl((String)job.get("provider"),(String)job.getOrDefault("externalPlaylistId","")));if(activeTransfers.contains(u+":"+id))job.put("status","RUNNING");return job;}
     @DeleteMapping("/transfers/{id}") public synchronized Map<String,Boolean> deleteTransfer(@RequestHeader(value="Authorization",required=false)String auth,@PathVariable String id){String u=user(auth);store.document(u,id,"transfer");if(activeTransfers.contains(u+":"+id))throw new ResponseStatusException(HttpStatus.CONFLICT,"진행 중인 전송은 완료된 뒤 기록을 지워 주세요.");store.delete(u,id,"transfer");return Map.of("deleted",true);}
-    @PostMapping("/transfers/{id}/retry") public Map<String,Object> retry(@RequestHeader(value="Authorization",required=false)String auth,@PathVariable String id,@RequestBody Confirm body){String u=user(auth);confirmed(body.confirmed());Map<String,Object> job=store.document(u,id,"transfer");if(!"COMPLETED".equals(job.get("status")))launch(u,id);return status(u,id);}
+    @PostMapping("/transfers/{id}/retry") public Map<String,Object> retry(@RequestHeader(value="Authorization",required=false)String auth,@PathVariable String id,@RequestBody Confirm body){String u=user(auth);confirmed(body.confirmed());Map<String,Object> job=store.document(u,id,"transfer");provider((String)job.get("provider"));if(!"COMPLETED".equals(job.get("status")))launch(u,id);return status(u,id);}
     private void launch(String u,String id){String key=u+":"+id;if(!activeTransfers.add(key))return;try{transfers.execute(()->{try{synchronized(transferLock){runTransfer(u,id);}}finally{activeTransfers.remove(key);}});}catch(java.util.concurrent.RejectedExecutionException closed){activeTransfers.remove(key);throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"서버가 종료 중이에요. 같은 작업으로 다시 시도해 주세요.");}}
     private void runTransfer(String u,String id){
         Map<String,Object> job;
@@ -211,7 +201,7 @@ public class PlatformApi {
         String u=user(auth);confirmed(body.confirmed());synchronized(users){synchronized(store){return tx.execute(status->{
             Map<String,Object> preview=store.document(u,body.previewId(),"sync"),current=store.document(u,id,"import");
             if(!id.equals(preview.get("importId"))||Instant.parse((String)preview.get("createdAt")).plusSeconds(900).isBefore(Instant.now())||!preview.get("beforeFingerprint").equals(PlatformStore.hash(json.writeValueAsString(currentItems(u,current)))))throw new ResponseStatusException(HttpStatus.CONFLICT,"목록이 바뀌었거나 확인이 만료됐어요. 다시 미리 보기를 열어주세요.");
-            Map<String,Object> fresh=cast(preview.get("after"));
+            Map<String,Object> fresh=cast(preview.get("after"));provider((String)current.get("provider"));provider((String)fresh.get("provider"));
             if(Boolean.TRUE.equals(current.get("saved"))){
                 String local=(String)current.get("localPlaylistId");List<Map<String,Object>> rows=new ArrayList<>();
                 for(Map<String,Object> item:items(fresh,"items")){Map<String,Object> row=new LinkedHashMap<>(cast(item.get("track")));row.put("sourceIndex",item.get("sourceIndex"));rows.add(row);}

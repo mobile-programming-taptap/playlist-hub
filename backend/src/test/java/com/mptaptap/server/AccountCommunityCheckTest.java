@@ -63,6 +63,7 @@ class AccountCommunityCheckTest {
                 assertTrue(page.headers().firstValue("Content-Security-Policy").orElse("").contains("default-src 'none'"));
                 assertTrue(page.headers().firstValue("Set-Cookie").isEmpty());
                 assertTrue(page.body().contains("href=\"/privacy\"")); assertTrue(page.body().contains("개발·시연"));
+                assertFalse(page.body().contains("Apple Music"));assertFalse(page.body().contains("MusicKit"));
                 assertTrue(page.body().contains("help&amp;demo@example.test")); assertTrue(page.body().contains("mailto:help%26demo@example.test"));
                 assertFalse(page.body().contains("<script"));
             }
