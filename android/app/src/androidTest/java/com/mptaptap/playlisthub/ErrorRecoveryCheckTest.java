@@ -4,8 +4,10 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.os.SystemClock;
 import android.view.View;
+import android.webkit.WebView;
 import androidx.test.core.app.ActivityScenario;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
+import androidx.test.filters.SdkSuppress;
 import androidx.test.platform.app.InstrumentationRegistry;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
@@ -105,6 +107,40 @@ public class ErrorRecoveryCheckTest {
                 restoreCredential.commit();
             }
         } finally {serverWorker.shutdownNow();data.close();}
+    }
+
+    @Test @SdkSuppress(minSdkVersion=28)
+    public void webViewInitializationFailureOffersExternalPlayback() throws Exception {
+        WebView.disableWebView();
+        Context context=InstrumentationRegistry.getInstrumentation().getTargetContext();
+        SharedPreferences settings=context.getSharedPreferences("settings",Context.MODE_PRIVATE);
+        Map<String,?> previousSettings=settings.getAll();
+        LocalStore data=new LocalStore(context);
+        Map<String,Integer> previousFeedback=data.feedback();
+        try {
+            settings.edit().remove("server").remove("prompt").commit();data.clearFeedback();
+            try(ActivityScenario<MainActivity> app=ActivityScenario.launch(MainActivity.class)) {
+                ready(app);
+                onView(withId(R.id.example_study)).perform(click());
+                onView(withId(R.id.recommend)).perform(scrollTo(),click());ready(app);
+                onView(withId(R.id.counter)).check(matches(withText("1 / 8")));
+                onView(allOf(withId(R.id.listen),isDisplayed())).perform(scrollTo(),click());
+                onView(withText("플레이어를 준비하지 못했어요. 외부에서 열어보세요.")).check(matches(isDisplayed()));
+                onView(withText("외부에서 열기")).perform(click());
+                onView(withText("Spotify · 곡 검색")).check(matches(isDisplayed()));
+                onView(withText("YouTube Music · 영상으로 연결")).check(matches(isDisplayed()));
+                onView(withText("취소")).perform(click());ready(app);
+                onView(withId(R.id.counter)).check(matches(withText("1 / 8")));
+                assertTrue("Playback failure must not create recommendation feedback",data.feedback().isEmpty());
+            }
+        } finally {
+            data.clearFeedback();for(Map.Entry<String,Integer> reaction:previousFeedback.entrySet())data.react(reaction.getKey(),reaction.getValue());
+            SharedPreferences.Editor restore=settings.edit();
+            for(String key:new String[]{"server","prompt"}) {
+                if(previousSettings.containsKey(key))restore.putString(key,(String)previousSettings.get(key));else restore.remove(key);
+            }
+            restore.commit();data.close();
+        }
     }
 
     private void ready(ActivityScenario<MainActivity> app) {

@@ -555,34 +555,41 @@ public class MainActivity extends AppCompatActivity {
                 .setPositiveButton("외부에서 검색",(d,w)->external(track)).setNegativeButton("닫기",null).show(); return;
         }
         LinearLayout box=column(); TextView status=text("YouTube 영상 연결 중…",14,false); box.addView(status);
-        player=new WebView(this); player.setContentDescription(track.title+" YouTube 공식 플레이어");
-        player.getSettings().setJavaScriptEnabled(true); player.getSettings().setDomStorageEnabled(true);
-        player.getSettings().setAllowFileAccess(false); player.getSettings().setAllowContentAccess(false);
-        player.getSettings().setMediaPlaybackRequiresUserGesture(true);
-        player.setWebChromeClient(new WebChromeClient(){ @Override public void onReceivedTitle(WebView view,String title){
-            if(title!=null&&title.startsWith("TapTap: "))status.setText(title.substring(8));
-        }});
-        player.setWebViewClient(new WebViewClient(){
-            @Override public boolean shouldOverrideUrlLoading(WebView view,WebResourceRequest request){
-                if(request.isForMainFrame()){openUrl(request.getUrl().toString());return true;}return false;
-            }
-            @Override public void onReceivedError(WebView view,WebResourceRequest request,WebResourceError error){
-                if(request.isForMainFrame())status.setText("영상을 연결하지 못했어요. 외부에서 열 수 있어요.");
-            }
-        });
-        box.addView(player,new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,dp(240)));
-        String origin="https://"+getPackageName();
         try {
+            player=new WebView(this); player.setContentDescription(track.title+" YouTube 공식 플레이어");
+            player.getSettings().setJavaScriptEnabled(true); player.getSettings().setDomStorageEnabled(true);
+            player.getSettings().setAllowFileAccess(false); player.getSettings().setAllowContentAccess(false);
+            player.getSettings().setMediaPlaybackRequiresUserGesture(true);
+            player.setWebChromeClient(new WebChromeClient(){ @Override public void onReceivedTitle(WebView view,String title){
+                if(title!=null&&title.startsWith("TapTap: "))status.setText(title.substring(8));
+            }});
+            player.setWebViewClient(new WebViewClient(){
+                @Override public boolean shouldOverrideUrlLoading(WebView view,WebResourceRequest request){
+                    if(request.isForMainFrame()){openUrl(request.getUrl().toString());return true;}return false;
+                }
+                @Override public void onReceivedError(WebView view,WebResourceRequest request,WebResourceError error){
+                    if(request.isForMainFrame())status.setText("영상을 연결하지 못했어요. 외부에서 열 수 있어요.");
+                }
+            });
+            box.addView(player,new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,dp(240)));
+            String origin="https://"+getPackageName();
             String html=ApiClient.read(getAssets().open("player.html")).replace("__VIDEO__",track.youtubeVideoId).replace("__ORIGIN__",origin);
             player.loadDataWithBaseURL(origin+"/",html,"text/html","UTF-8",null);
-        } catch(Exception e){status.setText("플레이어를 준비하지 못했어요. 외부에서 열어보세요.");}
+        } catch(Exception | LinkageError e){stopPlayer();status.setText("플레이어를 준비하지 못했어요. 외부에서 열어보세요.");}
         playerDialog=new MaterialAlertDialogBuilder(this).setTitle(track.title).setView(box)
             .setPositiveButton("외부에서 열기",(d,w)->external(track)).setNegativeButton("닫기",null).create();
         playerDialog.setOnDismissListener(d->stopPlayer()); playerDialog.show();
     }
 
     private void stopPlayer(){
-        if(player!=null){WebView view=player;player=null;view.stopLoading();view.loadUrl("about:blank");view.onPause();view.destroy();}
+        if(player!=null){
+            WebView view=player;player=null;
+            try {
+                if(view.getParent() instanceof ViewGroup)((ViewGroup)view.getParent()).removeView(view);
+                view.stopLoading();view.loadUrl("about:blank");view.onPause();
+            } catch(RuntimeException | LinkageError ignored){}
+            try {view.destroy();}catch(RuntimeException | LinkageError ignored){}
+        }
         if(playerDialog!=null){AlertDialog dialog=playerDialog;playerDialog=null;dialog.dismiss();}
     }
 
