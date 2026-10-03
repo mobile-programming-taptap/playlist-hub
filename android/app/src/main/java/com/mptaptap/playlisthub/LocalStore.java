@@ -87,6 +87,15 @@ final class LocalStore extends SQLiteOpenHelper {
     }
     void remove(String playlist, String item) { getWritableDatabase().delete("items", "playlist_id=? AND id=?", new String[]{playlist, item}); }
 
+    void saveAll(String playlist, List<Track> tracks) throws JSONException {
+        if (tracks == null || tracks.isEmpty() || tracks.size() > 10) throw new IllegalArgumentException("한 번에 1~10곡을 저장할 수 있어요.");
+        SQLiteDatabase db = getWritableDatabase(); db.beginTransaction();
+        try {
+            for (Track track : tracks) save(playlist, track);
+            db.setTransactionSuccessful();
+        } finally { db.endTransaction(); }
+    }
+
     void rename(String id, String title) throws JSONException {
         playlist(id);
         ContentValues values = new ContentValues(); values.put("title", title(title));

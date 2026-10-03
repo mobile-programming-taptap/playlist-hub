@@ -26,6 +26,7 @@ public class AppFlowCheckTest {
         SharedPreferences settings=context.getSharedPreferences("settings",Context.MODE_PRIVATE);
         Map<String,?> previousSettings=settings.getAll();
         String title="화면 검사 "+UUID.randomUUID().toString().substring(0,8);
+        String bulkTitle="전체 저장 검사 "+UUID.randomUUID().toString().substring(0,8);
         LocalStore data=new LocalStore(context);
         Map<String,Integer> previousFeedback=data.feedback();
         settings.edit().remove("server").remove("prompt").commit();
@@ -66,6 +67,14 @@ public class AppFlowCheckTest {
                 onView(allOf(withId(R.id.save),isDisplayed())).perform(scrollTo(),click());ready(app);
                 onView(withText(title+" · 1곡")).perform(click());ready(app);
                 assertEquals(2,ourPlaylist(data,title).getJSONArray("items").length());
+                onView(withId(R.id.save_results)).perform(scrollTo(),click());ready(app);
+                onView(withText("+ 새 플레이리스트")).perform(click());
+                onView(withHint("예: 비 오는 날의 음악")).perform(replaceText(bulkTitle),closeSoftKeyboard());
+                onView(withText("만들기")).perform(click());ready(app);
+                assertEquals(8,ourPlaylist(data,bulkTitle).getJSONArray("items").length());
+                onView(withId(R.id.save_results)).perform(scrollTo(),click());ready(app);
+                onView(withText(bulkTitle+" · 8곡")).perform(click());ready(app);
+                assertEquals(8,ourPlaylist(data,bulkTitle).getJSONArray("items").length());
             }
             try(ActivityScenario<MainActivity> app=ActivityScenario.launch(MainActivity.class)){
                 ready(app);
@@ -108,7 +117,7 @@ public class AppFlowCheckTest {
                 onView(withText("닫기")).perform(click());
             }
         } finally {
-            data.getWritableDatabase().delete("playlists","title IN (?,?)",new String[]{title,title+" 변경"});
+            data.getWritableDatabase().delete("playlists","title IN (?,?,?)",new String[]{title,title+" 변경",bulkTitle});
             data.clearFeedback();for(Map.Entry<String,Integer> reaction:previousFeedback.entrySet())data.react(reaction.getKey(),reaction.getValue());
             SharedPreferences.Editor restore=settings.edit();
             for(String key:new String[]{"server","prompt"}){
