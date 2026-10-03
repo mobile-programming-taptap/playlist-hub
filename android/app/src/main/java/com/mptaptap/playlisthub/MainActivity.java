@@ -578,7 +578,7 @@ public class MainActivity extends AppCompatActivity {
         } catch(Exception | LinkageError e){stopPlayer();status.setText("플레이어를 준비하지 못했어요. 외부에서 열어보세요.");}
         playerDialog=new MaterialAlertDialogBuilder(this).setTitle(track.title).setView(box)
             .setPositiveButton("외부에서 열기",(d,w)->external(track)).setNegativeButton("닫기",null).create();
-        playerDialog.setOnDismissListener(d->stopPlayer()); playerDialog.show();
+        playerDialog.setOnDismissListener(d->{if(playerDialog==d)stopPlayer();}); playerDialog.show();
     }
 
     private void stopPlayer(){
