@@ -15,8 +15,11 @@ cd android
 
 ```sh
 cd backend
-../android/gradlew bootRun
+../android/gradlew bootJar
+java -jar build/libs/taptap-backend.jar
 ```
+
+서버는 `backend/`를 현재 폴더로 실행한다. `.env`와 `data/`의 상대 경로가 이 폴더를 기준으로 정해진다. 개발 중 바로 실행하려면 같은 폴더에서 `../android/gradlew bootRun`을 사용할 수 있다.
 
 앱 설정에서 `http://10.0.2.2:8080`을 입력하면 Android 에뮬레이터가 로컬 서버에 연결된다. 서버 연결 시 서버의 별도 반응·목록을 사용한다. 기기에 저장한 기본 추천 데이터와 자동 합치지 않는다. 연결을 해제하면 기기 데이터를 다시 볼 수 있다.
 
@@ -50,7 +53,7 @@ AI는 **사용자가 직접 작성한 500자 이하의 요청만** 입력받아 
 
 추천 결과의 ‘추천 N곡 모두 저장’으로 현재 추천을 기존 목록 또는 새 목록에 한 번에 담을 수 있다. `POST /playlists/{id}/items/batch`는 `trackIds`로 서로 다른 1~10곡을 받는다. 기기와 서버 모두 일괄 저장을 트랜잭션으로 처리하므로 일부 곡만 저장되는 실패를 방지한다. 같은 추천을 다시 저장해도 목록의 곡이 중복되지 않는다.
 
-PostgreSQL을 사용할 때 `DATABASE_URL`을 JDBC URL로, `DATABASE_USER`, `DATABASE_PASSWORD`를 환경에 설정한다. 동일한 SQL 스키마를 사용한다. 현재 검증 DB는 H2이며 PostgreSQL 실연결은 미검증이다. 단일 서버 프로토타입으로 쓰기를 직렬 처리하며 여러 서버로 확장할 때 DB upsert·호출 한도 동시성 검토가 필요하다.
+PostgreSQL을 사용할 때 `DATABASE_URL`을 JDBC URL로, `DATABASE_USER`, `DATABASE_PASSWORD`를 환경에 설정한다. 동일한 SQL 스키마를 사용한다. H2와 실제 PostgreSQL 15에서 저장·소유권·중복 방지·목록 순서·동시 조회/삭제·서버 재시작을 확인했다. 단일 서버 프로토타입으로 쓰기를 직렬 처리하며 여러 서버로 확장할 때 DB upsert·호출 한도 동시성 검토가 필요하다. 호출 한도는 기존 ISO 시간 기록을 `Instant`로 비교하여 UTC 자정 직후와 서로 다른 소수점 정밀도에서도 정확히 계산한다.
 
 ## 추천 화면·수정
 
@@ -73,16 +76,28 @@ PostgreSQL을 사용할 때 `DATABASE_URL`을 JDBC URL로, `DATABASE_USER`, `DAT
 ```sh
 cd backend
 ../android/gradlew test bootJar
+python3 ../tools/check_server.py build/libs/taptap-backend.jar
 
 cd ../android
 ./gradlew :app:lintDebug :app:connectedDebugAndroidTest --no-configuration-cache
+```
+
+`check_server.py`는 실제 JAR을 별도 임시 폴더의 파일 H2로 실행한다. 첫 JVM에서 세션·반응·목록·순서를 저장하고 완전히 종료한 뒤 새 JVM에서 같은 내용과 인증·중복 방지를 확인한다. 검사 데이터는 종료 시 삭제하며 실제 `.env`와 AI 키를 사용하지 않는다.
+
+PostgreSQL 검사는 **빈 전용 검사 DB**를 준비한 뒤 `backend/`에서 실행한다. 운영 DB 환경과 별도의 변수 이름을 사용하며, 같은 검사를 다시 실행할 때 검사 DB도 다시 비워야 한다.
+
+```sh
+TAPTAP_TEST_DATABASE_URL=jdbc:postgresql://127.0.0.1:5432/taptap_check \
+TAPTAP_TEST_DATABASE_USER=taptap_check \
+TAPTAP_TEST_DATABASE_PASSWORD=your-check-password \
+../android/gradlew test --rerun-tasks
 ```
 
 추천 조건·반응·출처 경계는 `RecommendationCheck`의 실행 가능한 assertion 검사로 확인한다. 서버 통신 검사는 사용자 소유권, 중복 저장, 재시작 보관, OpenAI JSON 계약과 호출 상한, 목록 동시 조회·삭제의 일관성을 확인한다. Android 검사는 별도 테스트 DB에서 중복 저장·반응 변경·취소·재열기 후 보관을 확인하며, 무효가 된 서버 세션으로 재연결하는 경로도 실제 HTTP 응답으로 검사한다. 테스트 DB는 종료 시 삭제한다. 기기 검사는 에뮬레이터가 필요하며 Gradle이 검사 후 대상 앱을 제거할 수 있으므로 시연 전에 디버그 APK를 다시 설치한다.
 
 `AppFlowCheckTest`는 추천·스와이프/버튼 탐색·반응 상태·새 목록 저장·중복 저장·추천 전체 저장·추천 곡 교체·임시 제외·되돌리기·조건 복원·목록 상세 복원·공유 화면 호출·화면 재생성·앱 재열기·출처 확인·곡 제거·이름 변경·순서 변경·목록 삭제·목록/곡 검색을 화면에서 이어 검사한다. 기존 반응과 설정은 검사 후 복구하고 검사에서 만든 목록만 제거한다. `ErrorRecoveryCheckTest`는 로컬 응답 서버로 실패한 서버 반응의 재시도가 기본 추천 모드의 기기 반응에 기록되지 않는지 확인한다. Android 9 이상에서는 테스트 프로세스의 WebView 초기화를 차단해 플레이어 실패 안내와 외부 선택창도 검사한다. 기기의 WebView 제공자 설정은 변경하지 않는다. 공유 화면 검사는 실제 전송 없이 선택 화면 호출만 가로채 확인한다. Android 7(API 24)에서는 해당하지 않는 WebView 차단 검사 한 개를 제외한 4개, Android 17(API 37)에서는 5개를 실제 에뮬레이터에서 통과했다. 작은 화면의 현재 카드에서 스크롤해 버튼을 찾고 저장 안내가 끝난 뒤 다음 저장을 검사한다. Gradle 화면 검사는 `animationsDisabled`를 적용하며, Android Studio에서 직접 검사할 때도 [공식 Espresso 환경 안내](https://developer.android.com/training/testing/espresso/setup#set-up-environment)에 따라 검사 기기의 애니메이션을 꺼야 한다.
 
-GitHub Actions는 초안 포함 PR과 main 브랜치의 변경에서 서버·추천 검사와 Android 디버그·릴리스 빌드·lint를 실행한다. 서버 검사는 Java 21, Android 빌드는 프로젝트 데몬 설정에 맞춘 Java 25를 사용한다. AI 키와 실제 외부 AI 호출은 필요하지 않다. 에뮬레이터 화면 검사는 위 명령으로 별도 실행한다.
+GitHub Actions는 초안 포함 PR과 main 브랜치의 변경에서 서버·추천 검사와 Android 디버그·릴리스 빌드·lint를 실행한다. 서버 검사는 Java 21에서 H2·[별도 PostgreSQL 서비스](https://docs.github.com/en/actions/tutorials/use-containerized-services/create-postgresql-service-containers)와 실제 JAR의 파일 DB 보관을 확인하고, Android 빌드는 프로젝트 데몬 설정에 맞춘 Java 25를 사용한다. AI 키와 실제 외부 AI 호출은 필요하지 않다. 에뮬레이터 화면 검사는 위 명령으로 별도 실행한다.
 
 공유 가능한 APK: `android/app/build/outputs/apk/debug/app-debug.apk`.
 실행 가능한 서버: `backend/build/libs/taptap-backend.jar`.

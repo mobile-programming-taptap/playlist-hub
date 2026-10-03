@@ -161,10 +161,20 @@ public class Store {
     }
 
     public synchronized boolean reserveAi(String user) {
-        Instant now = Instant.now();
-        db.update("DELETE FROM ai_usage WHERE used_at < ?", now.minus(2, ChronoUnit.DAYS).toString());
-        int daily = db.queryForObject("SELECT COUNT(*) FROM ai_usage WHERE used_at>=?", Integer.class, now.truncatedTo(ChronoUnit.DAYS).toString());
-        int hourly = db.queryForObject("SELECT COUNT(*) FROM ai_usage WHERE user_id=? AND used_at>=?", Integer.class, user, now.minus(1, ChronoUnit.HOURS).toString());
+        return reserveAi(user,Instant.now());
+    }
+
+    private record AiUsage(String user, Instant at) {}
+
+    synchronized boolean reserveAi(String user, Instant now) {
+        db.update("DELETE FROM ai_usage WHERE used_at < ?", now.minus(2, ChronoUnit.DAYS).toString().substring(0,10));
+        Instant day=now.truncatedTo(ChronoUnit.DAYS), hour=now.minus(1,ChronoUnit.HOURS);
+        int daily=0, hourly=0;
+        // ponytail: parse at most three days of capped usage; timestamp columns/SQL aggregates if limits grow.
+        for(AiUsage usage:db.query("SELECT user_id,used_at FROM ai_usage",(rs,row)->new AiUsage(rs.getString(1),Instant.parse(rs.getString(2))))) {
+            if(!usage.at().isBefore(day))daily++;
+            if(usage.user().equals(user)&&!usage.at().isBefore(hour))hourly++;
+        }
         if (daily >= dailyLimit || hourly >= hourlyLimit) return false;
         db.update("INSERT INTO ai_usage VALUES (?,?,?)", UUID.randomUUID().toString(), user, now.toString());
         return true;
