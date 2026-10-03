@@ -368,12 +368,19 @@ public class MainActivity extends AppCompatActivity {
         LinearLayout box = column(); box.addView(name);
         AlertDialog dialog = new MaterialAlertDialogBuilder(this).setTitle(id == null ? "새 플레이리스트" : "목록 이름 변경").setView(box).setPositiveButton(id == null ? "만들기" : "변경", null).setNegativeButton("취소", null).create();
         dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            if(busy)return;
             String title = name.getText().toString().trim();
             if (title.isEmpty()) { name.setError("이름을 입력해 주세요."); return; }
+            name.setError(null);dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(false);
             task(() -> {
-                if (id == null) return api == null ? local.create(title) : api.object("POST", "/playlists", new JSONObject().put("title", title));
-                if (api == null) local.rename(id, title); else api.request("PUT", "/playlists/"+id, new JSONObject().put("title", title));
-                return new JSONObject().put("id", id);
+                try {
+                    if (id == null) return api == null ? local.create(title) : api.object("POST", "/playlists", new JSONObject().put("title", title));
+                    if (api == null) local.rename(id, title); else api.request("PUT", "/playlists/"+id, new JSONObject().put("title", title));
+                    return new JSONObject().put("id", id);
+                } catch(Exception error) {
+                    runOnUiThread(()->{if(!isDestroyed()&&dialog.isShowing()){name.setError(errorMessage(error));dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(true);}});
+                    throw error;
+                }
             }, created -> {
                 dialog.dismiss();
                 if (id != null) openPlaylist(id);
@@ -485,18 +492,20 @@ public class MainActivity extends AppCompatActivity {
 
     private void searchCatalogue() {
         LinearLayout box=column(), rows=new LinearLayout(this); rows.setOrientation(LinearLayout.VERTICAL);
+        AlertDialog searchDialog=new MaterialAlertDialogBuilder(this).setTitle("곡 찾기").setView(scroll(box)).setNegativeButton("닫기",null).create();
         Consumer<String> render=q -> {
             rows.removeAllViews(); int count=0;
             for (Track t:catalogue) if (Track.matches(t.title+" "+t.artist, q)) {
                 count++; rows.addView(button(t.title+"\n"+t.artist, v -> new MaterialAlertDialogBuilder(this).setTitle(t.title)
                     .setItems(new String[]{"들어보기", "목록에 저장", "다른 플랫폼에서 열기", "곡 정보·출처"}, (d,w) -> {
+                        searchDialog.dismiss();
                         if (w==0) listen(t); else if (w==1) chooseSave(t); else if (w==2) external(t); else source(t);
                     }).setNegativeButton("닫기", null).show()));
             }
             rows.addView(text(count==0 ? "일치하는 곡이 없어요. 다른 곡명이나 아티스트를 입력해 보세요." : count+"곡 · 검증된 곡 목록에서 검색", 14, false));
         };
         box.addView(searchField("곡명 또는 아티스트 검색", render)); box.addView(rows); render.accept("");
-        new MaterialAlertDialogBuilder(this).setTitle("곡 찾기").setView(scroll(box)).setNegativeButton("닫기", null).show();
+        searchDialog.show();
     }
 
     private void itemActions(String id, String item, Track track, int index, int count) {
@@ -669,9 +678,9 @@ public class MainActivity extends AppCompatActivity {
         });
     }
     private void hideKeyboard(){
-        View focused=getCurrentFocus();
-        if(focused!=null)((InputMethodManager)getSystemService(INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(focused.getWindowToken(),0);
-        findViewById(R.id.main).requestFocus();
+        View root=findViewById(R.id.main);
+        ((InputMethodManager)getSystemService(INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(root.getWindowToken(),0);
+        root.requestFocus();
     }
     private String errorMessage(Exception error){String message=error instanceof java.io.IOException?"네트워크에 연결하지 못했어요. 설정과 연결 상태를 확인해 주세요.":error.getMessage();return message==null?"처리하지 못했어요. 다시 시도해 주세요.":message;}
     private void clearResults(){

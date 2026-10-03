@@ -18,6 +18,7 @@ import org.junit.runner.RunWith;
 import static androidx.test.espresso.Espresso.onView;
 import static androidx.test.espresso.Espresso.pressBack;
 import static androidx.test.espresso.action.ViewActions.*;
+import static androidx.test.espresso.assertion.ViewAssertions.doesNotExist;
 import static androidx.test.espresso.assertion.ViewAssertions.matches;
 import static androidx.test.espresso.matcher.ViewMatchers.*;
 import static org.hamcrest.Matchers.*;
@@ -167,6 +168,26 @@ public class AppFlowCheckTest {
                 onView(withText("곡명·아티스트로 찾기")).perform(scrollTo(),click());
                 onView(withHint("곡명 또는 아티스트 검색")).perform(replaceText("blackpink"),closeSoftKeyboard());
                 onView(withText("How You Like That\nBLACKPINK")).check(matches(isDisplayed()));
+                onView(withText("How You Like That\nBLACKPINK")).perform(scrollTo(),click());
+                onView(withText("목록에 저장")).perform(click());ready(app);
+                int catalogueBefore=ourPlaylist(data,bulkTitle).getJSONArray("items").length();
+                onView(withText(bulkTitle+" · "+catalogueBefore+"곡")).perform(click());ready(app);
+                onView(withText("플레이리스트에 1곡을 저장했어요.")).check(matches(isDisplayed()));
+                onView(withText("곡 찾기")).check(doesNotExist());
+                org.json.JSONArray catalogueItems=ourPlaylist(data,bulkTitle).getJSONArray("items");
+                boolean catalogueSaved=false;
+                for(int i=0;i<catalogueItems.length();i++) {
+                    org.json.JSONObject track=catalogueItems.getJSONObject(i).getJSONObject("track");
+                    if("How You Like That".equals(track.getString("title"))&&"BLACKPINK".equals(track.getString("artist")))catalogueSaved=true;
+                }
+                assertTrue("The selected catalogue track must be stored",catalogueSaved);
+                noticeGone(app);
+                onView(withHint("내 목록 이름 검색")).perform(replaceText(bulkTitle),closeSoftKeyboard());
+                onView(withText(startsWith(bulkTitle+"\n"))).perform(scrollTo(),click());ready(app);
+                onView(withText(catalogueItems.length()+"곡")).perform(scrollTo()).check(matches(isDisplayed()));
+                onView(withText(containsString("How You Like That\nBLACKPINK"))).perform(scrollTo()).check(matches(isDisplayed()));
+                onView(withText("‹ 내 목록으로")).perform(scrollTo(),click());ready(app);
+                onView(withText("곡명·아티스트로 찾기")).perform(scrollTo(),click());
                 onView(withHint("곡명 또는 아티스트 검색")).perform(replaceText("일치하지않는곡"),closeSoftKeyboard());
                 onView(withText("일치하는 곡이 없어요. 다른 곡명이나 아티스트를 입력해 보세요.")).check(matches(isDisplayed()));
                 onView(withText("닫기")).perform(click());
