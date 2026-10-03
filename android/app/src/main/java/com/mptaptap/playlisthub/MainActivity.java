@@ -7,6 +7,7 @@ import android.graphics.Typeface;
 import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.drawable.ColorDrawable;
+import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.LayerDrawable;
@@ -360,7 +361,11 @@ public class MainActivity extends AppCompatActivity {
         Drawable background;
         if(librarySelected)background=new ColorDrawable(getColor(R.color.background));
         else {
-            Bitmap photo=showing&&!picks.isEmpty()?artwork.peek(picks.get(Math.min(pager.getCurrentItem(),picks.size()-1)).track.youtubeVideoId):null;
+            String video=showing&&!picks.isEmpty()?picks.get(Math.min(pager.getCurrentItem(),picks.size()-1)).track.youtubeVideoId:null;
+            Bitmap photo=artwork.peek(video);
+            View visibleArtwork=video==null?null:pager.findViewWithTag(video);
+            if(photo==null&&visibleArtwork instanceof ImageView&&((ImageView)visibleArtwork).getDrawable() instanceof BitmapDrawable)
+                photo=((BitmapDrawable)((ImageView)visibleArtwork).getDrawable()).getBitmap();
             if(photo==null)background=getDrawable(R.drawable.discover_background);
             else {
                 float red=0,green=0,blue=0,total=0;float[] hsv=new float[3];
