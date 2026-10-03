@@ -1,6 +1,8 @@
 package com.mptaptap.playlisthub;
 
 import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.os.SystemClock;
 import android.view.View;
@@ -10,6 +12,7 @@ import androidx.test.platform.app.InstrumentationRegistry;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import static androidx.test.espresso.Espresso.onView;
@@ -36,12 +39,41 @@ public class AppFlowCheckTest {
                 ready(app);
                 onView(withId(R.id.recommend)).perform(click());
                 onView(withId(R.id.prompt_layout)).check((view,error)->assertEquals("듣고 싶은 음악을 1~500자로 입력해 주세요.",((com.google.android.material.textfield.TextInputLayout)view).getError()));
+                app.recreate();ready(app);
+                onView(withId(R.id.results)).check(matches(withEffectiveVisibility(Visibility.GONE)));
                 onView(withId(R.id.example_study)).perform(click());
                 onView(withId(R.id.recommend)).perform(scrollTo(),click());ready(app);
                 onView(withId(R.id.counter)).check(matches(withText("1 / 8")));
                 onView(allOf(withId(R.id.artwork),isDisplayed())).perform(scrollTo(),swipeLeft());ready(app);
                 onView(withId(R.id.counter)).check(matches(withText("2 / 8")));
                 assertTrue("Swiping must not record feedback",data.feedback().isEmpty());
+                AtomicReference<String> beforeEdit=new AtomicReference<>();
+                onView(allOf(withId(R.id.track_title),isDisplayed())).check((view,error)->beforeEdit.set(((android.widget.TextView)view).getText().toString()));
+                onView(withId(R.id.condition_summary)).check(matches(withText(containsString("가사 없는"))));
+                onView(allOf(withId(R.id.edit_result),isDisplayed())).perform(scrollTo(),click());
+                onView(withText("같은 조건의 다른 곡")).perform(click());ready(app);
+                onView(withId(R.id.counter)).check(matches(withText("2 / 8")));
+                onView(allOf(withId(R.id.track_title),isDisplayed())).check(matches(not(withText(beforeEdit.get()))));
+                assertTrue("Replacing a result must not record feedback",data.feedback().isEmpty());
+                onView(withText("되돌리기")).perform(click());ready(app);
+                onView(allOf(withId(R.id.track_title),isDisplayed())).check(matches(withText(beforeEdit.get())));
+                onView(allOf(withId(R.id.edit_result),isDisplayed())).perform(scrollTo(),click());
+                onView(withText("이번 추천에서 제외")).perform(click());ready(app);
+                onView(withId(R.id.counter)).check(matches(withText("2 / 7")));
+                assertTrue("Temporary exclusion must not record a dislike",data.feedback().isEmpty());
+                onView(withText("되돌리기")).perform(click());ready(app);
+                onView(withId(R.id.counter)).check(matches(withText("2 / 8")));
+                onView(allOf(withId(R.id.edit_result),isDisplayed())).perform(scrollTo(),click());
+                onView(withText("이번 추천에서 제외")).perform(click());ready(app);
+                app.recreate();ready(app);
+                onView(withId(R.id.counter)).check(matches(withText("2 / 7")));
+                onView(withId(R.id.condition_summary)).check(matches(withText(containsString("가사 없는"))));
+                assertTrue(data.feedback().isEmpty());
+                onView(withId(R.id.edit_request)).perform(scrollTo(),click());
+                onView(withId(R.id.prompt)).check(matches(hasFocus())).perform(closeSoftKeyboard());
+                onView(withId(R.id.recommend)).perform(scrollTo(),click());ready(app);
+                onView(withId(R.id.counter)).check(matches(withText("1 / 8")));
+                onView(withId(R.id.next)).perform(scrollTo(),click());ready(app);
                 onView(allOf(withId(R.id.like),isDisplayed())).perform(scrollTo(),click());ready(app);
                 assertEquals(1,data.feedback().size());
                 onView(withId(R.id.previous)).perform(scrollTo(),click());ready(app);
@@ -50,7 +82,7 @@ public class AppFlowCheckTest {
                 onView(withId(R.id.counter)).check(matches(withText("2 / 8")));
                 app.recreate();ready(app);
                 onView(withId(R.id.counter)).check(matches(withText("2 / 8")));
-                onView(allOf(withId(R.id.like),isDisplayed())).check(matches(withText("♥ 좋아요 취소")));
+                onView(allOf(withId(R.id.like),isDisplayed())).check(matches(withText("좋아요 취소")));
                 onView(allOf(withId(R.id.external),isDisplayed())).perform(scrollTo(),click());
                 onView(withText("Spotify · 곡 검색")).check(matches(isDisplayed()));
                 onView(withText("YouTube Music · 영상으로 연결")).check(matches(isDisplayed()));
@@ -75,6 +107,12 @@ public class AppFlowCheckTest {
                 onView(withId(R.id.save_results)).perform(scrollTo(),click());ready(app);
                 onView(withText(bulkTitle+" · 8곡")).perform(click());ready(app);
                 assertEquals(8,ourPlaylist(data,bulkTitle).getJSONArray("items").length());
+                onView(withId(R.id.edit_request)).perform(scrollTo(),click());
+                onView(withId(R.id.prompt)).perform(replaceText("일본어 노래 추천"),closeSoftKeyboard());
+                onView(withId(R.id.recommend)).perform(scrollTo(),click());ready(app);
+                onView(withId(R.id.counter)).check(matches(withText("0 / 0")));
+                onView(withId(R.id.card_navigation)).check(matches(withEffectiveVisibility(Visibility.GONE)));
+                onView(withId(R.id.empty)).perform(scrollTo()).check(matches(isDisplayed()));
             }
             try(ActivityScenario<MainActivity> app=ActivityScenario.launch(MainActivity.class)){
                 ready(app);
@@ -93,8 +131,20 @@ public class AppFlowCheckTest {
                 onView(withText("아래로 이동")).perform(click());ready(app);
                 assertEquals(first,data.playlist(id).getJSONArray("items").getJSONObject(1).getString("id"));
                 app.recreate();ready(app);
-                onView(withText(title+" 변경\n2곡 · 앱 추천에서 저장")).perform(scrollTo(),click());ready(app);
+                onView(withText(title+" 변경")).check(matches(isDisplayed()));
+                onView(withText("2곡")).check(matches(isDisplayed()));
                 assertEquals(first,data.playlist(id).getJSONArray("items").getJSONObject(1).getString("id"));
+                android.app.Instrumentation instrumentation=InstrumentationRegistry.getInstrumentation();
+                android.app.Instrumentation.ActivityMonitor share=instrumentation.addMonitor(new IntentFilter(Intent.ACTION_CHOOSER),new android.app.Instrumentation.ActivityResult(android.app.Activity.RESULT_CANCELED,null),true);
+                try {
+                    onView(withText("목록 텍스트 공유")).perform(scrollTo(),click());ready(app);
+                    assertEquals("Sharing must launch the native chooser without sending a message",1,share.getHits());
+                    assertEquals(1,data.feedback().size());
+                } finally { instrumentation.removeMonitor(share); }
+                onView(withId(R.id.nav_recommend)).perform(click());
+                app.recreate();ready(app);
+                onView(withId(R.id.nav_library)).perform(click());ready(app);
+                onView(withText(title+" 변경\n2곡 · 앱 추천에서 저장")).perform(scrollTo(),click());ready(app);
                 onView(withText(startsWith("1. "))).perform(scrollTo(),click());
                 onView(withText("곡 정보·출처")).perform(click());
                 onView(withText(containsString("MusicBrainz 핵심 메타데이터 · CC0"))).check(matches(isDisplayed()));

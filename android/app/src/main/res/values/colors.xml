@@ -1,6 +1,7 @@
 <resources>
-    <color name="accent">#6450B8</color><color name="on_accent">#FFFFFF</color>
-    <color name="background">#F7F5FA</color><color name="surface">#FFFFFF</color>
-    <color name="ink">#262333</color><color name="muted">#6C687C</color>
-    <color name="line">#E6E0EF</color><color name="soft_accent">#EFE9FC</color>
+    <color name="accent">#C53442</color><color name="on_accent">#FFFFFF</color>
+    <color name="background">#F6F7FB</color><color name="surface">#FFFFFF</color>
+    <color name="ink">#1E293B</color><color name="muted">#5D6B80</color>
+    <color name="line">#DCE3EF</color><color name="soft_accent">#FFE8EB</color>
+    <color name="teal">#13746B</color><color name="on_teal">#FFFFFF</color><color name="soft_teal">#DDF4EF</color>
 </resources>

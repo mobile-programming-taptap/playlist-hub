@@ -4,7 +4,6 @@ import com.mptaptap.core.Recommender;
 import com.mptaptap.core.Track;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -123,15 +122,12 @@ public class Api {
     }
 
     @GetMapping("/playlists/{id}")
+    @SuppressWarnings("unchecked")
     public Map<String, Object> playlist(@RequestHeader(value="Authorization", required=false) String auth, @PathVariable String id) {
-        String user = store.user(auth); Map<String, Object> result = new LinkedHashMap<>(store.ownedPlaylist(user, id));
-        List<Map<String, Object>> items = new ArrayList<>();
-        for (Map<String, Object> item : store.items(user, id)) {
-            Map<String, Object> withTrack = new LinkedHashMap<>(item);
-            if (!withTrack.containsKey("track")) withTrack.put("track", track((String)item.get("trackId")));
-            items.add(withTrack);
-        }
-        result.put("items", items); return result;
+        Map<String, Object> result = store.playlist(store.user(auth), id);
+        for (Map<String, Object> item : (List<Map<String, Object>>)result.get("items"))
+            if (!item.containsKey("track")) item.put("track", track((String)item.get("trackId")));
+        return result;
     }
 
     @PostMapping("/playlists/{id}/items")

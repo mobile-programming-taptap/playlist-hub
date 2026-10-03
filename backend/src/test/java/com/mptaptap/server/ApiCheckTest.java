@@ -8,10 +8,15 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.boot.web.server.context.WebServerApplicationContext;
@@ -144,6 +149,9 @@ class ApiCheckTest {
                 assertEquals(0,db.queryForObject("SELECT COUNT(*) FROM playlist_items WHERE playlist_id=?",Integer.class,managed));
                 assertEquals(1,value("GET","/me/saved-tracks",token,null,200).size());
                 assertEquals(0,value("GET","/me/feedback",token,null,200).size());
+                List<String> catalogueIds=new ArrayList<>();
+                for(JsonNode track:value("GET","/catalogue",token,null,200))if(catalogueIds.size()<10)catalogueIds.add(track.path("id").asString());
+                coherentReadsDuringDeletion(token,catalogueIds);
             }
             try(ConfigurableApplicationContext context=start(database,endpoint)) {
                 base="http://127.0.0.1:"+((WebServerApplicationContext)context).getWebServer().getPort();
@@ -156,8 +164,44 @@ class ApiCheckTest {
         } finally { stub.stop(0); }
     }
 
+    private void coherentReadsDuringDeletion(String token,List<String> trackIds) throws Exception {
+        try(var workers=Executors.newFixedThreadPool(9)) {
+            for(int round=0;round<40;round++) {
+                String id=value("POST","/playlists",token,Map.of("title","Concurrent detail check"),201).path("id").asString();
+                String path="/playlists/"+id;
+                value("POST",path+"/items/batch",token,Map.of("trackIds",trackIds),200);
+                assertEquals(trackIds.size(),value("GET",path,token,null,200).path("items").size());
+                CountDownLatch ready=new CountDownLatch(9),start=new CountDownLatch(1);
+                List<Future<HttpResponse<String>>> reads=new ArrayList<>();
+                for(int reader=0;reader<8;reader++)reads.add(workers.submit(()->{
+                    ready.countDown();assertTrue(start.await(5,TimeUnit.SECONDS));return request("GET",path,token,null);
+                }));
+                Future<HttpResponse<String>> deletion=workers.submit(()->{
+                    ready.countDown();assertTrue(start.await(5,TimeUnit.SECONDS));return request("DELETE",path,token,null);
+                });
+                assertTrue(ready.await(5,TimeUnit.SECONDS));start.countDown();
+                assertEquals(204,deletion.get(10,TimeUnit.SECONDS).statusCode());
+                for(Future<HttpResponse<String>> read:reads) {
+                    HttpResponse<String> response=read.get(10,TimeUnit.SECONDS);
+                    assertTrue(response.statusCode()==200||response.statusCode()==404,response.body());
+                    if(response.statusCode()==200) {
+                        JsonNode detail=json.readTree(response.body()),items=detail.path("items");
+                        assertEquals("Concurrent detail check",detail.path("title").asString());
+                        assertEquals(trackIds.size(),items.size(),"A successful detail must contain its complete pre-deletion snapshot");
+                        for(int i=0;i<items.size();i++) {
+                            assertEquals(i,items.get(i).path("position").asInt());
+                            assertEquals(trackIds.get(i),items.get(i).path("track").path("id").asString());
+                            assertEquals("https://musicbrainz.org/recording/"+trackIds.get(i),items.get(i).path("track").path("sourceUrl").asString());
+                        }
+                    }
+                }
+                value("GET",path,token,null,404);
+            }
+        }
+    }
+
     private ConfigurableApplicationContext start(String database,String endpoint) {
-        return new SpringApplicationBuilder(TapTapApplication.class).run("--server.port=0","--server.address=127.0.0.1",
+        return new SpringApplicationBuilder(TapTapApplication.class).run("--spring.config.import=","--server.port=0","--server.address=127.0.0.1",
             "--spring.datasource.url="+database,"--taptap.openai.key=check-only","--taptap.openai.endpoint="+endpoint,
             "--taptap.ai.daily-limit=3","--logging.level.root=WARN","--spring.main.banner-mode=off");
     }

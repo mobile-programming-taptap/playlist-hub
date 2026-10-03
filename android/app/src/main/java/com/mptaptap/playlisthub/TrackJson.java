@@ -40,4 +40,15 @@ final class TrackJson {
         }
         return result;
     }
+
+    static Recommender.Conditions conditions(JSONObject value) throws JSONException {
+        Recommender.Conditions c = new Recommender.Conditions();
+        JSONArray tags=value.getJSONArray("tags"), excluded=value.getJSONArray("excludedTags");
+        for (int i=0;i<tags.length();i++) c.tags.add(tags.getString(i));
+        for (int i=0;i<excluded.length();i++) c.excludedTags.add(excluded.getString(i));
+        c.language=value.getString("language"); return Recommender.validate(c);
+    }
+    static JSONObject conditions(Recommender.Conditions c) throws JSONException {
+        return new JSONObject().put("tags", new JSONArray(c.tags)).put("excludedTags", new JSONArray(c.excludedTags)).put("language", c.language);
+    }
 }
