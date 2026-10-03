@@ -80,6 +80,9 @@ public class MainActivity extends AppCompatActivity {
     private String storageIdentity="";
     private boolean returningFromHub;
     private boolean foregroundSeen;
+    private boolean foregroundActive;
+    private ApiClient foregroundRefreshSource;
+    private String foregroundRefreshIdentity;
     private List<String> conversation=new ArrayList<>();
     private EditText refinementPrompt;
     private Map<String,android.widget.CheckBox> refinementChoices=new HashMap<>();
@@ -364,11 +367,21 @@ public class MainActivity extends AppCompatActivity {
     }
 
     @Override protected void onResume() {
-        super.onResume();boolean initial=!foregroundSeen;foregroundSeen=true;
-        if(settings==null||!returningFromHub&&(initial||api==null||!metadataReady||busy))return;returningFromHub=false;
+        super.onResume();foregroundActive=true;boolean initial=!foregroundSeen;foregroundSeen=true;
+        if(settings==null||!returningFromHub&&(initial||api==null||!metadataReady))return;returningFromHub=false;
+        foregroundRefreshSource=api;foregroundRefreshIdentity=RecommendationRequest.identity(api);
+        findViewById(R.id.main).post(this::refreshForeground);
+    }
+    @Override protected void onPause(){foregroundActive=false;super.onPause();}
+    private void refreshForeground() {
+        if(!foregroundActive||isDestroyed()||isFinishing()||busy||foregroundRefreshIdentity==null)return;
+        ApiClient source=foregroundRefreshSource;String owner=foregroundRefreshIdentity;
+        foregroundRefreshSource=null;foregroundRefreshIdentity=null;
+        String selected=settings.getString("server","").trim().replaceAll("/+$","");
+        if(api!=source||!owner.equals(RecommendationRequest.identity(source))||!selected.equals(source==null?"":source.base))return;
         String identity=api==null?"local":api.identity();
         if(!identity.equals(storageIdentity)){storageIdentity=identity;conversation.clear();settings.edit().remove("conversation").apply();clearStorageResults();}
-        if(!busy)refreshData(()->{storageIdentity=api==null?"local":api.identity();if(librarySelected){if(playlistId==null)loadLibrary();else openPlaylist(playlistId);}});
+        refreshData(()->{storageIdentity=api==null?"local":api.identity();if(librarySelected){if(playlistId==null)loadLibrary();else openPlaylist(playlistId);}});
     }
 
     private void showRecommendation(Object[] result) {
@@ -1028,6 +1041,7 @@ public class MainActivity extends AppCompatActivity {
         android.view.Menu menu=((BottomNavigationView)findViewById(R.id.navigation)).getMenu();
         for(int i=0;i<menu.size();i++)menu.getItem(i).setEnabled(!busy);
         updateMode();updateCounter();cards.notifyDataSetChanged();
+        if(!busy&&foregroundRefreshIdentity!=null)findViewById(R.id.main).post(this::refreshForeground);
     }
     private Snackbar snackbar(String message,int duration){
         View anchor=findViewById(R.id.card_navigation);

@@ -274,7 +274,11 @@ public final class HubActivity extends AppCompatActivity {
             rowField(box,"곡명",edit,"title");rowField(box,"아티스트",edit,"artist");
             if(timeline){if(!edit.has("seconds"))set(edit,"seconds",row.optInt("seconds",row.optInt("startSeconds",-1)));EditText time=rowField(box,"시작 시간 (초)",edit,"seconds");time.setInputType(InputType.TYPE_CLASS_NUMBER|InputType.TYPE_NUMBER_FLAG_SIGNED);}
             String sourceUrl=row.optString("sourceUrl",track==null?"":track.optString("sourceUrl"));
-            if(!sourceUrl.isEmpty())addButton(box,timeline?"원본 영상의 이 시간 열기":"원본 곡 열기",()->open(sourceUrl));
+            if(timeline)addButton(box,"원본 영상의 이 시간 열기",()->{
+                try{String video=imported.optString("videoId");if(!video.matches("[A-Za-z0-9_-]{11}"))throw new IllegalArgumentException("영상 주소를 확인해 주세요.");open("https://www.youtube.com/watch?v="+video+"&t="+timelineSeconds(imported,edit)+"s");}
+                catch(IllegalArgumentException error){message(error.getMessage());}
+            });
+            else if(!sourceUrl.isEmpty())addButton(box,"원본 곡 열기",()->open(sourceUrl));
         }
         addButton(content,"선택한 곡을 앱 목록에 저장",this::saveImport);
         heading("다른 플랫폼으로 옮기기");providerPicker(content,"targetProvider");
@@ -291,7 +295,7 @@ public final class HubActivity extends AppCompatActivity {
             JSONObject row=entries.optJSONObject(i);if(row==null)continue;JSONObject track=row.optJSONObject("track"),edit=edit(row.optInt("sourceIndex",i),track==null?row:track);
             if(!edit.optBoolean("excluded")) {
                 if(edit.optString("title").trim().isEmpty()||edit.optString("artist").trim().isEmpty()){message("포함할 곡의 곡명과 아티스트를 입력하거나 곡을 제외해 주세요.");return;}
-                if(imported.has("entries")){int seconds;try{seconds=Integer.parseInt(edit.optString("seconds"));}catch(Exception error){message("시작 시간을 초 단위로 입력하거나 곡을 제외해 주세요.");return;}int duration=imported.optInt("durationSeconds",-1);if(seconds<0||seconds>(duration>=0?duration:21600)){message("시작 시간이 영상 범위를 벗어났어요. 시간을 수정하거나 곡을 제외해 주세요.");return;}set(edit,"seconds",seconds);}
+                if(imported.has("entries"))try{set(edit,"seconds",timelineSeconds(imported,edit));}catch(IllegalArgumentException error){message(error.getMessage());return;}
                 included++;
             }
             JSONObject checked=json("sourceIndex",edit.optInt("sourceIndex"),"title",edit.optString("title"),"artist",edit.optString("artist"),"excluded",edit.optBoolean("excluded"));
@@ -301,6 +305,10 @@ public final class HubActivity extends AppCompatActivity {
         if(included==0){message("저장할 곡을 한 곡 이상 포함해 주세요.");return;}
         if(value("saveId").isEmpty())put("saveId",UUID.randomUUID().toString());
         send(thenMatch?"savedForMatch":"saved","POST","/imports/playlists/"+Uri.encode(value("importId"))+"/save",json("title",title,"playlistId",value("saveId"),"entries",edits));
+    }
+    private int timelineSeconds(JSONObject imported,JSONObject edit) {
+        int seconds;try{seconds=Integer.parseInt(edit.optString("seconds"));}catch(NumberFormatException error){throw new IllegalArgumentException("시작 시간을 초 단위로 입력하거나 곡을 제외해 주세요.");}
+        int duration=imported.optInt("durationSeconds",-1);if(seconds<0||seconds>(duration>=0?duration:21600))throw new IllegalArgumentException("시작 시간이 영상 범위를 벗어났어요. 시간을 수정하거나 곡을 제외해 주세요.");return seconds;
     }
 
     private void review() {

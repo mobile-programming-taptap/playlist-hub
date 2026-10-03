@@ -762,9 +762,11 @@ public class ErrorRecoveryCheckTest {
         for(Recommender.Pick pick:result.tracks)picks.put(new JSONObject().put("track",TrackJson.write(pick.track)).put("reason",pick.reason));
         String recommendation=new JSONObject().put("tracks",picks).put("mode",result.mode).put("notice",result.notice)
             .put("conditions",TrackJson.conditions(result.conditions)).toString();
+        String first=result.tracks.get(0).track.id;
         CountDownLatch received=new CountDownLatch(1),release=new CountDownLatch(1),refreshed=new CountDownLatch(1);
         CountDownLatch secondReceived=new CountDownLatch(1),secondRelease=new CountDownLatch(1);
-        AtomicBoolean running=new AtomicBoolean(true);
+        CountDownLatch thirdReceived=new CountDownLatch(1),thirdRelease=new CountDownLatch(1),foregroundRefreshed=new CountDownLatch(1);
+        AtomicBoolean running=new AtomicBoolean(true),remoteChanged=new AtomicBoolean();
         AtomicInteger posts=new AtomicInteger(),savedReads=new AtomicInteger();
         AtomicReference<Throwable> serverFailure=new AtomicReference<>();
         ExecutorService serverWorkers=Executors.newCachedThreadPool();
@@ -792,18 +794,18 @@ public class ErrorRecoveryCheckTest {
                             byte[] body=new byte[length];input.readFully(body);
                             String content;
                             if(request[1].equals("/recommendations")) {
-                                assertEquals("POST",request[0]);int number=posts.incrementAndGet();assertTrue(number<=2);
+                                assertEquals("POST",request[0]);int number=posts.incrementAndGet();assertTrue(number<=3);
                                 assertEquals(prompt,new JSONObject(new String(body,StandardCharsets.UTF_8)).getString("prompt"));
-                                (number==1?received:secondReceived).countDown();
-                                assertTrue("The test must release the delayed response",(number==1?release:secondRelease).await(15,TimeUnit.SECONDS));
+                                (number==1?received:number==2?secondReceived:thirdReceived).countDown();
+                                assertTrue("The test must release the delayed response",(number==1?release:number==2?secondRelease:thirdRelease).await(15,TimeUnit.SECONDS));
                                 content=recommendation;
                             } else {
                                 assertEquals("GET",request[0]);
                                 switch(request[1]) {
                                     case "/health": content="{\"status\":\"ok\"}";break;
                                     case "/catalogue": content=catalogue;break;
-                                    case "/me/feedback": content="{}";break;
-                                    case "/me/saved-tracks": content="[]";break;
+                                    case "/me/feedback": content=remoteChanged.get()?new JSONObject().put(first,1).toString():"{}";break;
+                                    case "/me/saved-tracks": content=remoteChanged.get()?new JSONArray().put(first).toString():"[]";break;
                                     default: throw new AssertionError("Unexpected test request: "+request[1]);
                                 }
                             }
@@ -811,7 +813,7 @@ public class ErrorRecoveryCheckTest {
                             String response="HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "+bytes.length+"\r\nConnection: close\r\n\r\n";
                             connection.getOutputStream().write(response.getBytes(StandardCharsets.UTF_8));
                             connection.getOutputStream().write(bytes);connection.getOutputStream().flush();
-                            if(request[1].equals("/me/saved-tracks")&&savedReads.incrementAndGet()>=2)refreshed.countDown();
+                            if(request[1].equals("/me/saved-tracks")){if(savedReads.incrementAndGet()>=2)refreshed.countDown();if(remoteChanged.get())foregroundRefreshed.countDown();}
                         } catch(Throwable error) { if(running.get())serverFailure.compareAndSet(null,error); }
                     });
                 } catch(SocketTimeoutException timeout) {
@@ -890,10 +892,22 @@ public class ErrorRecoveryCheckTest {
                         } finally {
                             InstrumentationRegistry.getInstrumentation().runOnMainSync(()->ActivityLifecycleMonitorRegistry.getInstance().removeLifecycleCallback(created));
                         }
-                    } finally { release.countDown();secondRelease.countDown(); }
+                        onView(withId(R.id.edit_request)).perform(scrollTo(),click());
+                        onView(withId(R.id.recommend)).perform(closeSoftKeyboard(),scrollTo(),click());
+                        assertTrue("The foreground request must be held",thirdReceived.await(5,TimeUnit.SECONDS));int readsBefore=savedReads.get();
+                        app.moveToState(Lifecycle.State.CREATED);remoteChanged.set(true);app.moveToState(Lifecycle.State.RESUMED);
+                        pendingWriteVisible(app);assertEquals("Busy foreground must defer its metadata read",readsBefore,savedReads.get());
+                        thirdRelease.countDown();assertTrue("Read fresh metadata after the held request finishes",foregroundRefreshed.await(5,TimeUnit.SECONDS));ready(app);
+                        onView(withId(R.id.counter)).check(matches(withText("1 / 8")));
+                        onView(withId(R.id.like)).check(matches(withContentDescription("좋아요 취소")));
+                        onView(allOf(withId(R.id.save),isDescendantOfA(allOf(isAssignableFrom(android.widget.ScrollView.class),isDisplayed()))))
+                            .perform(scrollTo()).check(matches(withText("저장됨 · 추가")));
+                        assertEquals("Consume one deferred foreground metadata refresh",readsBefore+1,savedReads.get());assertEquals(3,posts.get());
+                        assertNull(serverFailure.get());assertEquals(previousFeedback,data.feedback());
+                    } finally { release.countDown();secondRelease.countDown();thirdRelease.countDown(); }
                 }
             } finally {
-                running.set(false);release.countDown();secondRelease.countDown();server.close();
+                running.set(false);release.countDown();secondRelease.countDown();thirdRelease.countDown();server.close();
                 if(!data.feedback().equals(previousFeedback)) {
                     data.clearFeedback();for(Map.Entry<String,Integer> reaction:previousFeedback.entrySet())data.react(reaction.getKey(),reaction.getValue());
                 }
@@ -907,7 +921,7 @@ public class ErrorRecoveryCheckTest {
                 assertTrue(restoreCredential.commit());
                 accepting.get(2,TimeUnit.SECONDS);
             }
-        } finally {running.set(false);release.countDown();secondRelease.countDown();serverWorkers.shutdownNow();data.close();}
+        } finally {running.set(false);release.countDown();secondRelease.countDown();thirdRelease.countDown();serverWorkers.shutdownNow();data.close();}
     }
 
     @Test public void serverRetryCannotWriteIntoLocalFeedbackAfterModeSwitch() throws Exception {
