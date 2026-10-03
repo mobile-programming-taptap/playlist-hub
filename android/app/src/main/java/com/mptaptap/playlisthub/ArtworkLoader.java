@@ -16,6 +16,7 @@ import java.net.URL;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.function.Consumer;
 import java.util.function.Function;
 
 /** Display-only artwork; this cache holds no Activity, view, or recommendation data. */
@@ -29,15 +30,21 @@ public final class ArtworkLoader implements AutoCloseable {
     private final Function<String,Bitmap> fetch;
     private volatile boolean closed;
 
-    public ArtworkLoader(){this(id->{try{return download(id);}catch(IOException error){return null;}});}
+    public ArtworkLoader(){this(ArtworkLoader::download);}
     ArtworkLoader(Function<String,Bitmap> fetch){this.fetch=fetch;}
 
     /** Resets the placeholder immediately; a successful tag contains the requested video ID. */
     @MainThread public void load(ImageView view,String videoId){
+        load(view,videoId,null);
+    }
+
+    /** Notifies on the UI thread only while this view still represents the requested artwork. */
+    @MainThread public void load(ImageView view,String videoId,Consumer<Bitmap> onReady){
         view.setImageResource(R.drawable.ic_artwork_placeholder);view.setTag(null);
-        if(closed||videoId==null||!videoId.matches("[A-Za-z0-9_-]{11}"))return;
-        Bitmap cached=CACHE.get(videoId);
-        if(cached!=null){view.setImageBitmap(cached);view.setTag(videoId);return;}
+        if(closed)return;
+        if(videoId==null||!videoId.matches("[A-Za-z0-9_-]{11}")){if(!closed&&onReady!=null)onReady.accept(null);return;}
+        Bitmap cached=peek(videoId);
+        if(cached!=null){view.setImageBitmap(cached);view.setTag(videoId);if(!closed&&onReady!=null)onReady.accept(cached);return;}
         Object binding=new Object();view.setTag(binding);
         WeakReference<ImageView> target=new WeakReference<>(view);
         try{worker.execute(()->{
@@ -51,16 +58,30 @@ public final class ArtworkLoader implements AutoCloseable {
                 if(closed||image==null||image.getTag()!=binding)return;
                 if(result!=null){image.setImageBitmap(result);image.setTag(videoId);}
                 else image.setTag(null);
+                if(!closed&&onReady!=null)onReady.accept(result);
             });
-        });}catch(RejectedExecutionException ignored){if(view.getTag()==binding)view.setTag(null);}
+        });}catch(RejectedExecutionException ignored){
+            if(view.getTag()==binding){view.setTag(null);if(!closed&&onReady!=null)onReady.accept(null);}
+        }
     }
+
+    public Bitmap peek(String videoId){return closed||videoId==null||!videoId.matches("[A-Za-z0-9_-]{11}")?null:CACHE.get(videoId);}
 
     @Override public void close(){closed=true;worker.shutdownNow();}
 
-    private static Bitmap download(String videoId) throws IOException {
-        HttpURLConnection connection=(HttpURLConnection)new URL("https://i.ytimg.com/vi/"+videoId+"/hqdefault.jpg").openConnection();
-        connection.setInstanceFollowRedirects(false);connection.setConnectTimeout(3500);connection.setReadTimeout(3500);
+    private static Bitmap download(String videoId){
         long deadline=System.nanoTime()+15_000_000_000L;
+        for(String size:new String[]{"maxresdefault","hqdefault"}){
+            if(Thread.currentThread().isInterrupted()||System.nanoTime()>deadline)return null;
+            try{Bitmap bitmap=downloadImage(videoId,size,deadline);if(bitmap!=null)return bitmap;}
+            catch(IOException ignored){}
+        }
+        return null;
+    }
+
+    private static Bitmap downloadImage(String videoId,String size,long deadline) throws IOException {
+        HttpURLConnection connection=(HttpURLConnection)new URL("https://i.ytimg.com/vi/"+videoId+"/"+size+".jpg").openConnection();
+        connection.setInstanceFollowRedirects(false);connection.setConnectTimeout(3500);connection.setReadTimeout(3500);
         try{
             if(connection.getResponseCode()!=200||connection.getContentLength()>MAX_BYTES)return null;
             byte[] content;

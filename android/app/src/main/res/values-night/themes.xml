@@ -21,6 +21,7 @@
         <item name="textAppearanceHeadlineSmall">@style/TextAppearance.TapTap.HeadlineSmall</item>
         <item name="android:navigationBarColor">@color/background</item>
         <item name="materialAlertDialogTheme">@style/ThemeOverlay.TapTap.Dialog</item>
+        <item name="bottomNavigationStyle">@style/TapTap.BottomNavigation</item>
         <item name="elevationOverlayEnabled">false</item>
     </style>
 </resources>
