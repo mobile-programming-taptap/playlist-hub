@@ -124,7 +124,11 @@ public class ErrorRecoveryCheckTest {
                 onView(withId(R.id.example_study)).perform(click());
                 onView(withId(R.id.recommend)).perform(scrollTo(),click());ready(app);
                 onView(withId(R.id.counter)).check(matches(withText("1 / 8")));
-                onView(allOf(withId(R.id.listen),isDisplayed())).perform(scrollTo(),click());
+                app.onActivity(activity->{
+                    // The earlier dialog's deferred dismiss must not close the new dialog.
+                    View listen=activity.findViewById(R.id.listen);
+                    listen.performClick();listen.performClick();
+                });
                 onView(withText("플레이어를 준비하지 못했어요. 외부에서 열어보세요.")).check(matches(isDisplayed()));
                 onView(withText("외부에서 열기")).perform(click());
                 onView(withText("Spotify · 곡 검색")).check(matches(isDisplayed()));
