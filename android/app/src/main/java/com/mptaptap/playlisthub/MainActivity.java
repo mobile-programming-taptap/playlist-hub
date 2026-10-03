@@ -3,9 +3,7 @@ package com.mptaptap.playlisthub;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.content.SharedPreferences;
-import android.graphics.Color;
 import android.graphics.Typeface;
-import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.text.InputFilter;
@@ -21,6 +19,7 @@ import android.webkit.WebResourceRequest;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.EditText;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -60,6 +59,7 @@ import org.json.JSONObject;
 
 public class MainActivity extends AppCompatActivity {
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
+    private final ArtworkLoader artwork = new ArtworkLoader();
     private List<Track> catalogue = new ArrayList<>();
     private List<Recommender.Pick> picks = new ArrayList<>();
     private Map<String, Integer> feedback = new HashMap<>();
@@ -370,10 +370,16 @@ public class MainActivity extends AppCompatActivity {
         findViewById(R.id.next).setAlpha(!busy && index>0 && index<picks.size() ? 1f : 0.45f);
         MaterialButton like=findViewById(R.id.like), dislike=findViewById(R.id.dislike);
         like.setEnabled(!busy && metadataReady && index>0);dislike.setEnabled(!busy && metadataReady && index>0);
+        MaterialButton listen=findViewById(R.id.listen);listen.setEnabled(!busy && index>0);
+        listen.setAlpha(!busy && index>0 ? 1f : 0.45f);
         if (index>0 && index<=picks.size()) {
             Track track=picks.get(index-1).track;int reaction=feedback.getOrDefault(track.id,0);
-            like.setText(reaction==1?"좋아요 취소":"♡ 좋아요");dislike.setText(reaction==-1?"싫어요 취소":"싫어요");
+            like.setContentDescription(reaction==1?"좋아요 취소":"좋아요");dislike.setContentDescription(reaction==-1?"싫어요 취소":"싫어요");
+            like.setIconResource(reaction==1?R.drawable.ic_heart_filled:R.drawable.ic_heart);
+            dislike.setIconResource(reaction==-1?R.drawable.ic_dislike_filled:R.drawable.ic_dislike);
+            like.setSelected(reaction==1);dislike.setSelected(reaction==-1);
             like.setOnClickListener(v->react(track,reaction==1?0:1));dislike.setOnClickListener(v->react(track,reaction==-1?0:-1));
+            listen.setContentDescription(track.title+" · YouTube로 듣기");listen.setOnClickListener(v->listen(track));
         }
     }
 
@@ -626,10 +632,16 @@ public class MainActivity extends AppCompatActivity {
     private void external(Track track) {
         String q = Uri.encode(track.title + " " + track.artist);
         boolean direct = !track.youtubeVideoId.isEmpty();
-        dialogBuilder().setTitle("어디에서 들을까요?")
-            .setItems(new String[]{"Spotify · 곡 검색", "YouTube Music · " + (direct ? "영상으로 연결" : "곡 검색")}, (d, choice) -> openUrl(choice==0 ?
-                "https://open.spotify.com/search/"+q : direct ? "https://music.youtube.com/watch?v="+track.youtubeVideoId : "https://music.youtube.com/search?q="+q))
-            .setNegativeButton("취소", null).show();
+        View choices=LayoutInflater.from(this).inflate(R.layout.platform_picker,null);
+        ((TextView)choices.findViewById(R.id.platform_track)).setText(track.title+" · "+track.artist);
+        ((TextView)choices.findViewById(R.id.youtube_music_detail)).setText(direct?"공식 영상으로 듣기":"곡명·아티스트로 검색");
+        AlertDialog dialog=dialogBuilder().setTitle("어디에서 들을까요?").setView(scroll(choices)).setNegativeButton("취소",null).create();
+        View spotify=choices.findViewById(R.id.spotify_option),youtube=choices.findViewById(R.id.youtube_music_option);
+        spotify.setContentDescription("Spotify · 곡명과 아티스트로 검색");
+        youtube.setContentDescription("YouTube Music · "+(direct?"공식 영상으로 듣기":"곡명과 아티스트로 검색"));
+        spotify.setOnClickListener(v->{dialog.dismiss();openUrl("https://open.spotify.com/search/"+q);});
+        youtube.setOnClickListener(v->{dialog.dismiss();openUrl(direct?"https://music.youtube.com/watch?v="+track.youtubeVideoId:"https://music.youtube.com/search?q="+q);});
+        dialog.show();
     }
 
     private void openUrl(String url) {
@@ -814,7 +826,14 @@ public class MainActivity extends AppCompatActivity {
     private void showError(String message,Runnable retry){Snackbar bar=snackbar(message,Snackbar.LENGTH_LONG);if(retry!=null)bar.setAction("재시도",v->retry.run());bar.show();}
 
     private final class CardAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder>{
-        @NonNull @Override public RecyclerView.ViewHolder onCreateViewHolder(@NonNull ViewGroup parent,int type){return new RecyclerView.ViewHolder(LayoutInflater.from(parent.getContext()).inflate(R.layout.track_card,parent,false)){};}
+        @NonNull @Override public RecyclerView.ViewHolder onCreateViewHolder(@NonNull ViewGroup parent,int type){
+            View card=LayoutInflater.from(parent.getContext()).inflate(R.layout.track_card,parent,false);
+            card.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->{
+                View image=v.findViewById(R.id.artwork);int height=Math.max(dp(80),Math.min(r-l,b-t-dp(200)));
+                if(image.getLayoutParams().height!=height){image.getLayoutParams().height=height;image.requestLayout();}
+            });
+            return new RecyclerView.ViewHolder(card){};
+        }
         @Override public int getItemCount(){return picks.size();}
         @Override public void onBindViewHolder(@NonNull RecyclerView.ViewHolder holder,int position){
             Recommender.Pick pick=picks.get(position);Track track=pick.track;View view=holder.itemView;
@@ -823,11 +842,10 @@ public class MainActivity extends AppCompatActivity {
             ((TextView)view.findViewById(R.id.reason)).setText(pick.reason);
             List<String> labels=new ArrayList<>();for(String tag:track.tags)if(Recommender.LABELS.containsKey(tag)&&labels.size()<3)labels.add(Recommender.LABELS.get(tag));
             ((TextView)view.findViewById(R.id.track_tags)).setText(android.text.TextUtils.join("  ·  ",labels));
-            int hash=Math.abs(track.id.hashCode()%4);int[][] colors={{0xFF33415C,0xFF7385A2},{0xFF256A65,0xFF71A69B},{0xFF9D515D,0xFFE5A48D},{0xFF475B73,0xFF9CABBF}};
-            GradientDrawable background=new GradientDrawable(GradientDrawable.Orientation.TL_BR,colors[hash]);background.setCornerRadius(dp(18));view.findViewById(R.id.artwork).setBackground(background);
+            artwork.load((ImageView)view.findViewById(R.id.track_artwork),track.youtubeVideoId);
             MaterialButton save=view.findViewById(R.id.save);
             save.setText(savedTracks.contains(track.id)?"저장됨 · 추가":"목록에 저장");save.setOnClickListener(v->chooseSave(track));
-            view.findViewById(R.id.listen).setOnClickListener(v->listen(track));view.findViewById(R.id.external).setOnClickListener(v->external(track));
+            view.findViewById(R.id.external).setOnClickListener(v->external(track));
             view.findViewById(R.id.track_title).setOnClickListener(v->source(track));
             view.findViewById(R.id.edit_result).setOnClickListener(v->editResult(track));view.findViewById(R.id.edit_result).setEnabled(!busy && metadataReady);
             save.setEnabled(!busy && metadataReady);
@@ -848,6 +866,7 @@ public class MainActivity extends AppCompatActivity {
     }
     @Override protected void onStop(){stopPlayer();super.onStop();}
     @Override protected void onDestroy(){
+        artwork.close();
         stopPlayer();for(AlertDialog dialog:dialogs)dialog.dismiss();dialogs.clear();
         worker.execute(local::close);worker.shutdown();super.onDestroy();
     }
