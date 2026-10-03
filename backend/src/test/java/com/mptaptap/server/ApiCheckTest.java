@@ -8,6 +8,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -43,6 +44,28 @@ class ApiCheckTest {
         return response.body().isEmpty()?json.createObjectNode():json.readTree(response.body());
     }
 
+    @Test void aiLimitsRespectPreciseInstants() {
+        try(ConfigurableApplicationContext context=start("jdbc:h2:mem:clock"+UUID.randomUUID()+";MODE=PostgreSQL","http://127.0.0.1:1/v1/responses")) {
+            var db=context.getBean(org.springframework.jdbc.core.JdbcTemplate.class);
+            var manager=context.getBean(org.springframework.transaction.PlatformTransactionManager.class);
+            Store capped=new Store(db,manager,json,2,1);
+            String first=capped.register().get("userId"), second=capped.register().get("userId"), third=capped.register().get("userId");
+            db.update("INSERT INTO ai_usage VALUES (?,?,?)",UUID.randomUUID().toString(),first,"2026-10-03T00:00:00.001Z");
+            Instant justAfterMidnight=Instant.parse("2026-10-03T00:00:01Z");
+            assertFalse(capped.reserveAi(first,justAfterMidnight),"An existing call counts toward the user cap.");
+            assertTrue(capped.reserveAi(second,justAfterMidnight));
+            assertFalse(capped.reserveAi(third,justAfterMidnight),"A fractional first-second call counts toward the UTC daily cap.");
+
+            Store hourly=new Store(db,manager,json,10,1);
+            db.update("DELETE FROM ai_usage");
+            db.update("INSERT INTO ai_usage VALUES (?,?,?)",UUID.randomUUID().toString(),first,"2026-10-03T09:00:00.123456Z");
+            assertFalse(hourly.reserveAi(first,Instant.parse("2026-10-03T10:00:00.123Z")),"A later instant stays inside the hour even with more decimal places.");
+            db.update("DELETE FROM ai_usage");
+            db.update("INSERT INTO ai_usage VALUES (?,?,?)",UUID.randomUUID().toString(),first,"2026-10-03T09:00:00.123Z");
+            assertTrue(hourly.reserveAi(first,Instant.parse("2026-10-03T10:00:00.123456Z")),"An earlier instant expires even with fewer decimal places.");
+        }
+    }
+
     @Test void recommendationOwnershipStorageAndOpenAiContract() throws Exception {
         List<JsonNode> aiRequests=new CopyOnWriteArrayList<>();
         HttpServer stub=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
@@ -53,7 +76,7 @@ class ApiCheckTest {
             byte[] reply=json.writeValueAsBytes(Map.of("status","completed","output",List.of(Map.of("type","message","content",List.of(Map.of("type","output_text","text",conditions))))));
             exchange.getResponseHeaders().set("Content-Type","application/json");exchange.sendResponseHeaders(200,reply.length);exchange.getResponseBody().write(reply);exchange.close();
         });stub.start();
-        String database="jdbc:h2:mem:check"+UUID.randomUUID()+";MODE=PostgreSQL;DB_CLOSE_DELAY=-1";
+        String database=System.getenv().getOrDefault("TAPTAP_TEST_DATABASE_URL","jdbc:h2:mem:check"+UUID.randomUUID()+";MODE=PostgreSQL;DB_CLOSE_DELAY=-1");
         String endpoint="http://127.0.0.1:"+stub.getAddress().getPort()+"/v1/responses";
         String token;
         String playlist;
@@ -61,6 +84,7 @@ class ApiCheckTest {
         try {
             try(ConfigurableApplicationContext context=start(database,endpoint)) {
                 base="http://127.0.0.1:"+((WebServerApplicationContext)context).getWebServer().getPort();
+                assertEquals(0,context.getBean(org.springframework.jdbc.core.JdbcTemplate.class).queryForObject("SELECT COUNT(*) FROM users",Integer.class),"Use an empty, dedicated test database.");
                 assertEquals(40,value("GET","/health",null,null,200).path("catalogueSize").asInt());
                 value("GET","/playlists",null,null,401);
                 token=value("POST","/sessions",null,null,201).path("token").asString();
@@ -202,7 +226,9 @@ class ApiCheckTest {
 
     private ConfigurableApplicationContext start(String database,String endpoint) {
         return new SpringApplicationBuilder(TapTapApplication.class).run("--spring.config.import=","--server.port=0","--server.address=127.0.0.1",
-            "--spring.datasource.url="+database,"--taptap.openai.key=check-only","--taptap.openai.endpoint="+endpoint,
+            "--spring.datasource.url="+database,"--spring.datasource.username="+System.getenv().getOrDefault("TAPTAP_TEST_DATABASE_USER","sa"),
+            "--spring.datasource.password="+System.getenv().getOrDefault("TAPTAP_TEST_DATABASE_PASSWORD",""),
+            "--taptap.openai.key=check-only","--taptap.openai.endpoint="+endpoint,
             "--taptap.ai.daily-limit=3","--logging.level.root=WARN","--spring.main.banner-mode=off");
     }
 }
