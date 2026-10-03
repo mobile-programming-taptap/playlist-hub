@@ -8,7 +8,7 @@ let player, waiting=true;
 function status(text){document.title='TapTap: '+text;}
 window.onYouTubeIframeAPIReady=function(){
     player=new YT.Player('player',{videoId:'__VIDEO__',width:'100%',height:'100%',
-        playerVars:{origin:'__ORIGIN__',playsinline:1},events:{
+        playerVars:{origin:'__ORIGIN__',playsinline:1,start:0},events:{
         onReady:()=>{waiting=false;status('플레이어의 재생 버튼을 눌러주세요.');},
         onStateChange:e=>status(({'-1':'재생 대기',0:'재생 종료',1:'재생 중',2:'일시정지',3:'버퍼링',5:'재생 버튼을 눌러주세요.'})[e.data]||'영상 준비 중'),
         onError:e=>{waiting=false;status('재생할 수 없어요 ('+e.data+'). 외부에서 열어보세요.');},

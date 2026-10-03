@@ -10,6 +10,8 @@ import java.util.Set;
 
 public final class RecommendationCheck {
     public static void main(String[] args) {
+        ImportMatchCheck.run();
+        ConversationCheck.run();
         assert Track.matches("How You Like That BLACKPINK", "ｂｌａｃｋｐｉｎｋ LIKE");
         assert Track.matches("비 오는 밤", "오는 비");
         assert Track.matches("Anything", " ");
@@ -35,6 +37,10 @@ public final class RecommendationCheck {
         Recommender.Result result = Recommender.recommend(tracks, conditions, feedback, "basic");
         assert result.tracks.size() == 8;
         assert result.tracks.stream().allMatch(p -> p.track.language.equals("none"));
+        Recommender.Result continued=Conversation.recommend(tracks,conditions,feedback,"basic",List.of(tracks.get(4).id),List.of(tracks.get(0).id));
+        assert continued.tracks.size()==8&&continued.tracks.get(0).track.id.equals(tracks.get(4).id);
+        assert continued.tracks.stream().noneMatch(p->p.track.id.equals(tracks.get(0).id));
+        assert continued.notice.contains("유지한 1곡")&&!continued.notice.contains("7곡");
         Set<String> unavailable = new HashSet<>();
         for (Recommender.Pick pick : result.tracks) unavailable.add(pick.track.id);
         Recommender.Result replacement = Recommender.recommend(tracks, conditions, feedback, "basic", unavailable);
@@ -65,6 +71,9 @@ public final class RecommendationCheck {
         assert vocals.tracks.size() == 3;
         assert vocals.tracks.stream().allMatch(p -> !p.track.language.equals("none"));
         assert Recommender.parse("K pop").tags.equals(Arrays.asList("kpop"));
+        Recommender.Conditions noLongerInstrumental=Conversation.parse(List.of("가사 없는 음악"),"연주곡 제외");
+        assert Recommender.recommend(tracks,noLongerInstrumental,feedback,"basic").tracks.size()==3:
+                "Removing an earlier no-vocals condition must allow vocal tracks again";
         assert Recommender.recommend(tracks, Recommender.parse("일본어 노래"), feedback, "basic").tracks.isEmpty();
         tracks.get(0).youtubeVideoId = "12345678901";
         String shared = PlaylistText.format("  공부 목록  ", tracks.subList(0, 2));

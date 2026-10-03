@@ -27,7 +27,7 @@ public final class Recommender {
             {"acoustic", "어쿠스틱", "어쿠스틱|acoustic"},
             {"ballad", "발라드", "발라드|ballad"},
             {"kpop", "K-pop", "케이팝|k[ -]?pop|아이돌"},
-            {"pop", "팝", "(?<!k[ -])(?<![a-z-])pop|팝송|팝 음악"},
+            {"pop", "팝", "(?<!k[ -])(?<![a-z-])pop|(?<![가-힣a-z-])팝(?=$|\\s|[.,!?]|송|음악|[은는을를으도가이만])"},
             {"rock", "록", "락|록|rock"},
             {"piano", "피아노", "피아노|piano"},
             {"instrumental", "가사 없는", "가사\\s*없는|가사\\s*없이|보컬\\s*없는|연주곡|instrumental|no vocals"},

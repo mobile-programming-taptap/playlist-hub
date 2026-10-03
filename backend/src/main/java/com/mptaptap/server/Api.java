@@ -1,6 +1,7 @@
 package com.mptaptap.server;
 
 import com.mptaptap.core.Recommender;
+import com.mptaptap.core.Conversation;
 import com.mptaptap.core.Track;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -44,7 +45,10 @@ public class Api {
         return catalogue.stream().filter(t -> Track.matches(t.title + " " + t.artist, q)).toList();
     }
 
-    public record Prompt(String prompt) {}
+    public record Prompt(String prompt, List<String> history, List<String> keptTrackIds, List<String> excludedTrackIds,
+            Recommender.Conditions previousConditions) {
+        public Prompt(String prompt,List<String> history,List<String> keptTrackIds,List<String> excludedTrackIds){this(prompt,history,keptTrackIds,excludedTrackIds,null);}
+    }
     public record Reaction(Integer reaction) {}
     public record PlaylistTitle(String title) {}
     public record PlaylistCreate(String title, String id) {}
@@ -55,16 +59,17 @@ public class Api {
     @PostMapping("/recommendations")
     public Recommender.Result recommendations(@RequestHeader(value="Authorization", required=false) String auth, @RequestBody Prompt body) {
         String user = store.user(auth);
-        Recommender.Conditions c = Recommender.parse(body.prompt());
+        Recommender.Conditions c = Conversation.parse(body.previousConditions(),body.history(),body.prompt());
+        Conversation.recommend(catalogue,c,store.feedback(user),"basic",body.keptTrackIds(),body.excludedTrackIds());
         String mode = "basic"; String fallback = "";
         if (ai.available()) {
             if (store.reserveAi(user)) {
-                try { c = ai.extract(body.prompt()); mode = "openai"; }
+                try { c = ai.extract(body.prompt(),body.history(),body.previousConditions()); mode = "openai"; }
                 catch (InterruptedException error) { Thread.currentThread().interrupt(); fallback = "AI 요청이 중단되어 기본 추천으로 이어갔어요."; }
                 catch (Exception error) { fallback = "AI 연결이 원활하지 않아 기본 추천으로 이어갔어요."; }
             } else fallback = "AI 요청 한도에 도달해 기본 추천으로 이어갔어요.";
         } else fallback = "현재는 기본 추천이에요. 서버에 OpenAI를 연결하면 자연어 해석을 더 넓게 지원해요.";
-        Recommender.Result result = Recommender.recommend(catalogue, c, store.feedback(user), mode);
+        Recommender.Result result = Conversation.recommend(catalogue,c,store.feedback(user),mode,body.keptTrackIds(),body.excludedTrackIds());
         return new Recommender.Result(result.tracks, c, mode, String.join(" ", List.of(fallback, result.notice)).trim());
     }
 
@@ -127,7 +132,7 @@ public class Api {
     public Map<String, Object> playlist(@RequestHeader(value="Authorization", required=false) String auth, @PathVariable String id) {
         Map<String, Object> result = store.playlist(store.user(auth), id);
         for (Map<String, Object> item : (List<Map<String, Object>>)result.get("items"))
-            if (!item.containsKey("track")) item.put("track", track((String)item.get("trackId")));
+            if (!item.containsKey("track") && item.get("trackId") != null) item.put("track", track((String)item.get("trackId")));
         return result;
     }
 

@@ -71,4 +71,4 @@ jobs:
 
       - name: Build Android debug and release and check lint
         working-directory: android
-        run: bash ./gradlew :app:assembleDebug :app:assembleRelease :app:lintDebug --no-daemon --no-configuration-cache
+        run: bash ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest :app:assembleRelease :app:lintDebug --no-daemon --no-configuration-cache
