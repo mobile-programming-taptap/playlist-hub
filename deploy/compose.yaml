@@ -27,6 +27,7 @@ services:
       - ${TAPTAP_ENV_FILE:-../backend/.env}
     environment:
       SERVER_ADDRESS: 0.0.0.0
+      SERVER_FORWARD_HEADERS_STRATEGY: native
       PORT: "8080"
       DATABASE_URL: jdbc:postgresql://database:5432/taptap
       DATABASE_USER: ${DATABASE_USER:-taptap}

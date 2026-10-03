@@ -49,13 +49,22 @@ docker compose --env-file backend/.env -f deploy/compose.yaml ps
 
 이미지는 기존 Gradle wrapper로 `backend`, `core`, `catalog`를 빌드하며 실행 단계에는 JAR과 Java 21 JRE만 들어간다. 서버는 UID 10001로 실행한다. Dockerfile 전용 ignore 파일은 비공개 환경 파일·DB·앱 빌드 결과·Git을 빌드 전송에서 제외한다. [Docker 빌드 단계](https://docs.docker.com/build/building/multi-stage/), [빌드 입력 제외](https://docs.docker.com/build/concepts/context/#dockerignore-files), [Temurin 공식 이미지](https://hub.docker.com/_/eclipse-temurin)
 
-앱과 DB는 호스트 포트를 공개하지 않고 Caddy만 80·443을 사용한다. DB 준비 확인 후 서버를 시작한다. 앱의 기본 게이트웨이는 외부 통신용 네트워크로 지정해 OpenAI와 음악 서비스에 연결하고, DB는 내부 네트워크에서만 접근한다. [Compose 게이트웨이 설정](https://docs.docker.com/reference/compose-file/services/#gw_priority) 서버가 준비되면 실제 HTTPS 주소로 확인한다.
+앱과 DB는 호스트 포트를 공개하지 않고 Caddy만 80·443을 사용한다. Caddy가 전달한 실제 접속 주소를 서버가 읽도록 설정해 사용자별 로그인 실패 제한이 프록시 주소 하나로 합산되지 않게 한다. Caddy는 외부 요청이 보낸 전달 헤더를 기본적으로 무시하므로 클라이언트가 주소를 위조해 제한을 우회할 수 없다. 앱 포트를 직접 공개하거나 Caddy 앞에 다른 프록시를 둘 때는 신뢰할 프록시 설정을 다시 확인해야 한다. [Spring 프록시 설정](https://docs.spring.io/spring-boot/how-to/webserver.html#howto.webserver.use-behind-a-proxy-server), [Caddy 전달 헤더](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy#defaults)
+
+DB 준비 확인 후 서버를 시작한다. 앱의 기본 게이트웨이는 외부 통신용 네트워크로 지정해 OpenAI와 음악 서비스에 연결하고, DB는 내부 네트워크에서만 접근한다. [Compose 게이트웨이 설정](https://docs.docker.com/reference/compose-file/services/#gw_priority) 서버가 준비되면 실제 HTTPS 주소로 확인한다.
 
 ```sh
 curl --fail https://실제도메인/health
 ```
 
 이 확인이 성공하면 Android 앱의 서버 설정에 같은 `https://실제도메인`을 입력한다. 계정·목록 저장과 다시 불러오기, 플랫폼 연결 콜백, 공개 목록의 실제 공유 링크까지 확인해야 해당 기능의 공개 배포를 확인한 것이다. 컨테이너 실행 성공은 실제 OAuth 승인 성공을 대신하지 않는다.
+
+공개 서버를 만들기 전에 로컬에서도 같은 구성을 검사할 수 있다. 아래 검사는 별도 임시 DB·인증서·프로젝트를 만들고 종료 시 제거하며, 호스트 인증서 신뢰 설정과 실제 키를 사용하지 않는다. Docker의 현재 연결 설정을 그대로 사용하고, HTTPS·재시작 보관·공유·로그인 제한을 확인한다. 로컬 성공은 공개 도메인과 실제 OAuth 검증을 대신하지 않는다.
+
+```sh
+docker build -f backend/Dockerfile -t taptap-deployment-check:local .
+python3 tools/check_deployment.py
+```
 
 ## 데이터 보관
 
