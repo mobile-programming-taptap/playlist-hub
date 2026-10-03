@@ -143,6 +143,7 @@ public class MainActivity extends AppCompatActivity {
         findViewById(R.id.recommend_scroll).addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob) -> resizeCard());
         pager.registerOnPageChangeCallback(new ViewPager2.OnPageChangeCallback() {
             @Override public void onPageSelected(int index) { stopPlayer(); updateCounter(); }
+            @Override public void onPageScrollStateChanged(int state) { if(state==ViewPager2.SCROLL_STATE_IDLE)updateDiscoverAppearance(); }
         });
         findViewById(R.id.recommend).setOnClickListener(v -> recommend());
         findViewById(R.id.edit_request).setOnClickListener(v -> {
