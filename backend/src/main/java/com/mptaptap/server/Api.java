@@ -40,12 +40,16 @@ public class Api {
     public Map<String, String> session() { return store.register(); }
 
     @GetMapping("/catalogue")
-    public List<Track> catalogue(@RequestHeader(value="Authorization", required=false) String auth) { store.user(auth); return catalogue; }
+    public List<Track> catalogue(@RequestHeader(value="Authorization", required=false) String auth, @RequestParam(defaultValue="") String q) {
+        store.user(auth); checkQuery(q);
+        return catalogue.stream().filter(t -> Track.matches(t.title + " " + t.artist, q)).toList();
+    }
 
     public record Prompt(String prompt) {}
     public record Reaction(Integer reaction) {}
     public record PlaylistTitle(String title) {}
     public record Item(String trackId) {}
+    public record Order(List<String> itemIds) {}
 
     @PostMapping("/recommendations")
     public Recommender.Result recommendations(@RequestHeader(value="Authorization", required=false) String auth, @RequestBody Prompt body) {
@@ -93,13 +97,28 @@ public class Api {
     }
 
     @GetMapping("/playlists")
-    public List<Map<String, Object>> playlists(@RequestHeader(value="Authorization", required=false) String auth) { return store.playlists(store.user(auth)); }
+    public List<Map<String, Object>> playlists(@RequestHeader(value="Authorization", required=false) String auth, @RequestParam(defaultValue="") String q) {
+        String user = store.user(auth); checkQuery(q);
+        return store.playlists(user).stream().filter(p -> Track.matches((String)p.get("title"), q)).toList();
+    }
 
     @PostMapping("/playlists") @ResponseStatus(HttpStatus.CREATED)
     public Map<String, Object> create(@RequestHeader(value="Authorization", required=false) String auth, @RequestBody PlaylistTitle body) {
         String user = store.user(auth);
-        if (body.title() == null || body.title().strip().isEmpty() || body.title().strip().length() > 80) throw new IllegalArgumentException("목록 이름을 1~80자로 입력해 주세요.");
-        return store.createPlaylist(user, body.title().strip());
+        return store.createPlaylist(user, title(body.title()));
+    }
+
+    @PutMapping("/playlists/{id}") @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void rename(@RequestHeader(value="Authorization", required=false) String auth, @PathVariable String id, @RequestBody PlaylistTitle body) {
+        String user = store.user(auth); store.rename(user, id, title(body.title()));
+    }
+
+    @DeleteMapping("/playlists/{id}") @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void delete(@RequestHeader(value="Authorization", required=false) String auth, @PathVariable String id) { store.delete(store.user(auth), id); }
+
+    @PutMapping("/playlists/{id}/items/order") @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void reorder(@RequestHeader(value="Authorization", required=false) String auth, @PathVariable String id, @RequestBody Order body) {
+        store.reorder(store.user(auth), id, body.itemIds());
     }
 
     @GetMapping("/playlists/{id}")
@@ -126,6 +145,15 @@ public class Api {
         Track t = tracks.get(id);
         if (t == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "곡을 찾을 수 없어요.");
         return t;
+    }
+
+    private static String title(String value) {
+        if (value == null || value.strip().isEmpty() || value.strip().length() > 80) throw new IllegalArgumentException("목록 이름을 1~80자로 입력해 주세요.");
+        return value.strip();
+    }
+
+    private static void checkQuery(String value) {
+        if (value.length() > 100) throw new IllegalArgumentException("검색어는 100자 이하로 입력해 주세요.");
     }
 
     @ExceptionHandler(IllegalArgumentException.class) @ResponseStatus(HttpStatus.BAD_REQUEST)

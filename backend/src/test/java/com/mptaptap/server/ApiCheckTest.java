@@ -60,6 +60,10 @@ class ApiCheckTest {
                 value("GET","/playlists",null,null,401);
                 token=value("POST","/sessions",null,null,201).path("token").asString();
                 String other=value("POST","/sessions",null,null,201).path("token").asString();
+                JsonNode found=value("GET","/catalogue?q=blackpink",token,null,200);
+                assertTrue(found.size()>0); for(JsonNode t:found)assertTrue(t.path("artist").asString().toLowerCase().contains("blackpink"));
+                assertEquals(0,value("GET","/catalogue?q=no-such-track",token,null,200).size());
+                value("GET","/catalogue?q="+"x".repeat(101),token,null,400);
                 value("POST","/recommendations",token,Map.of("prompt"," "),400);
                 JsonNode recovered=value("POST","/recommendations",token,Map.of("prompt","잘못된 AI 응답 검사"),200);
                 assertEquals("basic",recovered.path("mode").asString());
@@ -103,6 +107,31 @@ class ApiCheckTest {
                 value("DELETE","/playlists/"+playlist+"/items/"+first.path("id").asString(),other,null,404);
                 assertEquals(1,value("GET","/me/saved-tracks",token,null,200).size());
                 assertEquals("search",value("GET","/tracks/"+saved+"/links",token,null,200).get(0).path("kind").asString());
+                String managed=value("POST","/playlists",token,Map.of("title","Manage check"),201).path("id").asString();
+                String path="/playlists/"+managed;
+                JsonNode a=value("POST",path+"/items",token,Map.of("trackId",saved),200);
+                JsonNode b=value("POST",path+"/items",token,Map.of("trackId",dislike),200);
+                String aId=a.path("id").asString(), bId=b.path("id").asString();
+                value("PUT",path,other,Map.of("title","stolen"),404);
+                value("DELETE",path,other,null,404);
+                value("PUT",path+"/items/order",other,Map.of("itemIds",List.of(bId,aId)),404);
+                value("PUT",path,token,Map.of("title"," "),400);
+                value("PUT",path,token,Map.of("title","Renamed check"),204);
+                assertEquals("Renamed check",value("GET",path,token,null,200).path("title").asString());
+                assertEquals(1,value("GET","/playlists?q=RENAMED",token,null,200).size());
+                assertEquals(0,value("GET","/playlists?q=RENAMED",other,null,200).size());
+                value("PUT",path+"/items/order",token,Map.of("itemIds",List.of(aId,aId)),400);
+                value("PUT",path+"/items/order",token,Map.of("itemIds",List.of(aId)),400);
+                value("PUT",path+"/items/order",token,Map.of("itemIds",List.of(aId,first.path("id").asString())),400);
+                assertEquals(aId,value("GET",path,token,null,200).path("items").get(0).path("id").asString());
+                value("PUT",path+"/items/order",token,Map.of("itemIds",List.of(bId,aId)),204);
+                JsonNode reordered=value("GET",path,token,null,200).path("items");
+                assertEquals(bId,reordered.get(0).path("id").asString()); assertEquals(aId,reordered.get(1).path("id").asString());
+                assertEquals(saved,reordered.get(1).path("track").path("id").asString());
+                value("DELETE",path,token,null,204); value("GET",path,token,null,404);
+                assertEquals(0,db.queryForObject("SELECT COUNT(*) FROM playlist_items WHERE playlist_id=?",Integer.class,managed));
+                assertEquals(1,value("GET","/me/saved-tracks",token,null,200).size());
+                assertEquals(0,value("GET","/me/feedback",token,null,200).size());
             }
             try(ConfigurableApplicationContext context=start(database,endpoint)) {
                 base="http://127.0.0.1:"+((WebServerApplicationContext)context).getWebServer().getPort();

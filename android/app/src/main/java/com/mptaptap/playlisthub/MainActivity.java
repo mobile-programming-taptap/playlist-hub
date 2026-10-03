@@ -9,6 +9,8 @@ import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.text.InputFilter;
+import android.text.Editable;
+import android.text.TextWatcher;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -69,6 +71,7 @@ public class MainActivity extends AppCompatActivity {
     private boolean busy;
     private boolean librarySelected;
     private String playlistId;
+    private String libraryQuery = "";
     private String resultMode = "basic";
     private String resultNotice = "";
     private WebView player;
@@ -94,6 +97,7 @@ public class MainActivity extends AppCompatActivity {
         });
         local = new LocalStore(this); settings = getSharedPreferences("settings", MODE_PRIVATE);
         prompt = findViewById(R.id.prompt); prompt.setText(settings.getString("prompt", ""));
+        if (state != null) libraryQuery = state.getString("libraryQuery", "");
         pager = findViewById(R.id.pager); cards = new CardAdapter(); pager.setAdapter(cards);
         pager.registerOnPageChangeCallback(new ViewPager2.OnPageChangeCallback() {
             @Override public void onPageSelected(int index) { stopPlayer(); updateCounter(); }
@@ -234,15 +238,25 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void createPlaylist(Track firstTrack) {
+        editPlaylist(firstTrack, null, "");
+    }
+
+    private void editPlaylist(Track firstTrack, String id, String currentTitle) {
         EditText name = new EditText(this); name.setHint("예: 비 오는 날의 음악"); name.setFilters(new InputFilter[]{new InputFilter.LengthFilter(80)});
+        name.setSingleLine(true); name.setText(currentTitle); name.setSelection(name.length());
         LinearLayout box = column(); box.addView(name);
-        AlertDialog dialog = new MaterialAlertDialogBuilder(this).setTitle("새 플레이리스트").setView(box).setPositiveButton("만들기", null).setNegativeButton("취소", null).create();
+        AlertDialog dialog = new MaterialAlertDialogBuilder(this).setTitle(id == null ? "새 플레이리스트" : "목록 이름 변경").setView(box).setPositiveButton(id == null ? "만들기" : "변경", null).setNegativeButton("취소", null).create();
         dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
             String title = name.getText().toString().trim();
             if (title.isEmpty()) { name.setError("이름을 입력해 주세요."); return; }
-            task(() -> api == null ? local.create(title) : api.object("POST", "/playlists", new JSONObject().put("title", title)), created -> {
+            task(() -> {
+                if (id == null) return api == null ? local.create(title) : api.object("POST", "/playlists", new JSONObject().put("title", title));
+                if (api == null) local.rename(id, title); else api.request("PUT", "/playlists/"+id, new JSONObject().put("title", title));
+                return new JSONObject().put("id", id);
+            }, created -> {
                 dialog.dismiss();
-                if (firstTrack != null) save(firstTrack, created.optString("id")); else loadLibrary();
+                if (id != null) openPlaylist(id);
+                else if (firstTrack != null) save(firstTrack, created.optString("id")); else loadLibrary();
             }, null);
         })); dialog.show();
     }
@@ -267,11 +281,10 @@ public class MainActivity extends AppCompatActivity {
             box.addView(text("내 플레이리스트", 27, true));
             box.addView(text(api == null ? "좋아하는 음악을 이 기기에 모아두세요." : "내가 저장한 음악을 다시 들어보세요.", 14, false));
             box.addView(button("+ 새 플레이리스트", v -> createPlaylist(null)));
-            if (lists.length() == 0) box.addView(text("아직 저장한 목록이 없어요.\n추천 곡에서 ‘목록에 저장’을 눌러보세요.", 16, false));
-            for (int i=0;i<lists.length();i++) {
-                JSONObject row = lists.optJSONObject(i); String id = row.optString("id");
-                box.addView(button(row.optString("title") + "\n" + row.optInt("size") + "곡 · 앱 추천에서 저장", v -> openPlaylist(id)));
-            }
+            box.addView(button("곡명·아티스트로 찾기", v -> searchCatalogue()));
+            LinearLayout rows = new LinearLayout(this); rows.setOrientation(LinearLayout.VERTICAL);
+            EditText search = searchField("내 목록 이름 검색", q -> { libraryQuery=q; renderLists(rows, lists, q); });
+            box.addView(search); box.addView(rows); search.setText(libraryQuery); renderLists(rows, lists, libraryQuery);
         }, this::loadLibrary);
     }
 
@@ -283,22 +296,93 @@ public class MainActivity extends AppCompatActivity {
             box.addView(text(data.optString("title"), 27, true));
             JSONArray items = data.optJSONArray("items");
             box.addView(text(items.length() + "곡", 14, false));
+            box.addView(button("이름 변경", v -> editPlaylist(null, id, data.optString("title"))));
+            box.addView(button("목록 삭제", v -> new MaterialAlertDialogBuilder(this).setTitle("이 목록을 삭제할까요?")
+                .setMessage(data.optString("title") + "\n" + items.length() + "곡이 목록에서 제거돼요.")
+                .setPositiveButton("삭제", (d,w) -> deletePlaylist(id)).setNegativeButton("취소", null).show()));
             if (items.length() == 0) box.addView(text("아직 곡이 없어요. 추천 화면에서 음악을 담아보세요.", 16, false));
             for (int i=0;i<items.length();i++) {
                 JSONObject row = items.optJSONObject(i);
                 try {
-                    Track track = TrackJson.read(row.getJSONObject("track")); String item = row.getString("id");
-                    box.addView(button((i+1) + ". " + track.title + "\n" + track.artist, v -> new MaterialAlertDialogBuilder(this).setTitle(track.title)
-                        .setItems(new String[]{"들어보기", "다른 플랫폼에서 열기", "곡 정보·출처", "이 목록에서 제거"}, (d, choice) -> {
-                            if (choice == 0) listen(track);
-                            else if (choice == 1) external(track);
-                            else if (choice == 2) source(track);
-                            else new MaterialAlertDialogBuilder(this).setTitle("이 목록에서 제거할까요?").setMessage(track.title)
-                                .setPositiveButton("제거", (a,b) -> remove(id, item)).setNegativeButton("취소", null).show();
-                        }).setNegativeButton("닫기", null).show()));
+                    Track track = TrackJson.read(row.getJSONObject("track")); String item = row.getString("id"); int index=i;
+                    box.addView(button((i+1) + ". " + track.title + "\n" + track.artist, v -> itemActions(id, item, track, index, items.length())));
                 } catch (Exception e) { box.addView(text("곡 정보를 불러오지 못했어요.", 14, false)); }
             }
         }, () -> openPlaylist(id));
+    }
+
+    private void renderLists(LinearLayout rows, JSONArray lists, String query) {
+        rows.removeAllViews(); int count=0;
+        for (int i=0;i<lists.length();i++) {
+            JSONObject row=lists.optJSONObject(i);
+            if (!Track.matches(row.optString("title"), query)) continue;
+            String id=row.optString("id"); count++;
+            rows.addView(button(row.optString("title") + "\n" + row.optInt("size") + "곡 · 앱 추천에서 저장", v -> openPlaylist(id)));
+        }
+        if (count==0) rows.addView(text(query.trim().isEmpty() ? "아직 저장한 목록이 없어요.\n추천 곡에서 ‘목록에 저장’을 눌러보세요." : "검색한 이름의 목록이 없어요.", 16, false));
+    }
+
+    private EditText searchField(String hint, Consumer<String> change) {
+        EditText field=new EditText(this); field.setSingleLine(true); field.setHint(hint);
+        field.setFilters(new InputFilter[]{new InputFilter.LengthFilter(100)});
+        field.addTextChangedListener(new TextWatcher() {
+            public void beforeTextChanged(CharSequence s,int start,int count,int after) {}
+            public void onTextChanged(CharSequence s,int start,int before,int count) { change.accept(s.toString()); }
+            public void afterTextChanged(Editable text) {}
+        });
+        return field;
+    }
+
+    private void searchCatalogue() {
+        LinearLayout box=column(), rows=new LinearLayout(this); rows.setOrientation(LinearLayout.VERTICAL);
+        Consumer<String> render=q -> {
+            rows.removeAllViews(); int count=0;
+            for (Track t:catalogue) if (Track.matches(t.title+" "+t.artist, q)) {
+                count++; rows.addView(button(t.title+"\n"+t.artist, v -> new MaterialAlertDialogBuilder(this).setTitle(t.title)
+                    .setItems(new String[]{"들어보기", "목록에 저장", "다른 플랫폼에서 열기", "곡 정보·출처"}, (d,w) -> {
+                        if (w==0) listen(t); else if (w==1) chooseSave(t); else if (w==2) external(t); else source(t);
+                    }).setNegativeButton("닫기", null).show()));
+            }
+            rows.addView(text(count==0 ? "일치하는 곡이 없어요. 다른 곡명이나 아티스트를 입력해 보세요." : count+"곡 · 검증된 곡 목록에서 검색", 14, false));
+        };
+        box.addView(searchField("곡명 또는 아티스트 검색", render)); box.addView(rows); render.accept("");
+        new MaterialAlertDialogBuilder(this).setTitle("곡 찾기").setView(scroll(box)).setNegativeButton("닫기", null).show();
+    }
+
+    private void itemActions(String id, String item, Track track, int index, int count) {
+        List<String> actions=new ArrayList<>(java.util.Arrays.asList("들어보기", "다른 플랫폼에서 열기", "곡 정보·출처"));
+        if (index>0) actions.add("위로 이동"); if (index<count-1) actions.add("아래로 이동"); actions.add("이 목록에서 제거");
+        new MaterialAlertDialogBuilder(this).setTitle(track.title).setItems(actions.toArray(new String[0]), (d,w) -> {
+            String action=actions.get(w);
+            if (action.equals("들어보기")) listen(track);
+            else if (action.equals("다른 플랫폼에서 열기")) external(track);
+            else if (action.equals("곡 정보·출처")) source(track);
+            else if (action.equals("위로 이동") || action.equals("아래로 이동")) moveItem(id, item, action.equals("위로 이동") ? -1 : 1);
+            else new MaterialAlertDialogBuilder(this).setTitle("이 목록에서 제거할까요?").setMessage(track.title)
+                .setPositiveButton("제거", (a,b) -> remove(id, item)).setNegativeButton("취소", null).show();
+        }).setNegativeButton("닫기", null).show();
+    }
+
+    private void moveItem(String id, String item, int direction) {
+        task(() -> {
+            JSONArray items=playlist(id).getJSONArray("items"); List<String> order=new ArrayList<>();
+            for (int i=0;i<items.length();i++) order.add(items.getJSONObject(i).getString("id"));
+            int from=order.indexOf(item), to=from+direction;
+            if (from<0) throw new IllegalArgumentException("곡이 목록에서 제거됐어요. 목록을 다시 열어주세요.");
+            if (to>=0 && to<order.size()) {
+                java.util.Collections.swap(order, from, to);
+                if (api==null) local.reorder(id, order);
+                else api.request("PUT", "/playlists/"+id+"/items/order", new JSONObject().put("itemIds", new JSONArray(order)));
+            }
+            return true;
+        }, done -> openPlaylist(id), () -> openPlaylist(id));
+    }
+
+    private void deletePlaylist(String id) {
+        task(() -> {
+            if (api==null) local.delete(id); else api.request("DELETE", "/playlists/"+id, null);
+            return savedIds();
+        }, ids -> { savedTracks=ids; cards.notifyDataSetChanged(); playlistId=null; loadLibrary(); }, () -> deletePlaylist(id));
     }
 
     private void remove(String id, String item) {
@@ -466,6 +550,7 @@ public class MainActivity extends AppCompatActivity {
     @Override protected void onSaveInstanceState(@NonNull Bundle state){
         super.onSaveInstanceState(state);JSONArray rows=new JSONArray();try{for(Recommender.Pick p:picks)rows.put(new JSONObject().put("track",TrackJson.write(p.track)).put("reason",p.reason));}catch(Exception ignored){}
         state.putString("picks",rows.toString());state.putInt("index",pager.getCurrentItem());state.putString("mode",resultMode);state.putString("notice",resultNotice);state.putBoolean("library",librarySelected);
+        state.putString("libraryQuery", libraryQuery);
     }
     @Override protected void onStop(){stopPlayer();super.onStop();}
     @Override protected void onDestroy(){stopPlayer();worker.execute(local::close);worker.shutdown();super.onDestroy();}

@@ -38,7 +38,7 @@ public class AppFlowCheckTest {
                 onView(withId(R.id.example_study)).perform(click());
                 onView(withId(R.id.recommend)).perform(scrollTo(),click());ready(app);
                 onView(withId(R.id.counter)).check(matches(withText("1 / 8")));
-                onView(withId(R.id.pager)).perform(swipeLeft());ready(app);
+                onView(allOf(withId(R.id.artwork),isDisplayed())).perform(scrollTo(),swipeLeft());ready(app);
                 onView(withId(R.id.counter)).check(matches(withText("2 / 8")));
                 assertTrue("Swiping must not record feedback",data.feedback().isEmpty());
                 onView(allOf(withId(R.id.like),isDisplayed())).perform(scrollTo(),click());ready(app);
@@ -62,24 +62,53 @@ public class AppFlowCheckTest {
                 onView(allOf(withId(R.id.save),isDisplayed())).perform(click());ready(app);
                 onView(withText(title+" · 1곡")).perform(click());ready(app);
                 assertEquals(1,ourPlaylist(data,title).getJSONArray("items").length());
+                onView(withId(R.id.previous)).perform(scrollTo(),click());ready(app);
+                onView(allOf(withId(R.id.save),isDisplayed())).perform(scrollTo(),click());ready(app);
+                onView(withText(title+" · 1곡")).perform(click());ready(app);
+                assertEquals(2,ourPlaylist(data,title).getJSONArray("items").length());
             }
             try(ActivityScenario<MainActivity> app=ActivityScenario.launch(MainActivity.class)){
                 ready(app);
                 onView(withId(R.id.nav_library)).perform(click());ready(app);
-                onView(withText(title+"\n1곡 · 앱 추천에서 저장")).perform(click());ready(app);
-                onView(withText("1곡")).check(matches(isDisplayed()));
-                onView(withText(startsWith("1. "))).perform(click());
+                onView(withHint("내 목록 이름 검색")).perform(replaceText("일치하지않는검색어"),closeSoftKeyboard());
+                onView(withText("검색한 이름의 목록이 없어요.")).check(matches(isDisplayed()));
+                onView(withHint("내 목록 이름 검색")).perform(replaceText(title),closeSoftKeyboard());
+                onView(withText(title+"\n2곡 · 앱 추천에서 저장")).perform(scrollTo(),click());ready(app);
+                onView(withText("2곡")).check(matches(isDisplayed()));
+                onView(withText("이름 변경")).perform(scrollTo(),click());
+                onView(withHint("예: 비 오는 날의 음악")).perform(replaceText(title+" 변경"),closeSoftKeyboard());
+                onView(withText("변경")).perform(click());ready(app);
+                String id=ourPlaylist(data,title+" 변경").getString("id");
+                String first= data.playlist(id).getJSONArray("items").getJSONObject(0).getString("id");
+                onView(withText(startsWith("1. "))).perform(scrollTo(),click());
+                onView(withText("아래로 이동")).perform(click());ready(app);
+                assertEquals(first,data.playlist(id).getJSONArray("items").getJSONObject(1).getString("id"));
+                app.recreate();ready(app);
+                onView(withText(title+" 변경\n2곡 · 앱 추천에서 저장")).perform(scrollTo(),click());ready(app);
+                assertEquals(first,data.playlist(id).getJSONArray("items").getJSONObject(1).getString("id"));
+                onView(withText(startsWith("1. "))).perform(scrollTo(),click());
                 onView(withText("곡 정보·출처")).perform(click());
                 onView(withText(containsString("MusicBrainz 핵심 메타데이터 · CC0"))).check(matches(isDisplayed()));
                 onView(withText("닫기")).perform(click());
-                onView(withText(startsWith("1. "))).perform(click());
+                onView(withText(startsWith("1. "))).perform(scrollTo(),click());
                 onView(withText("이 목록에서 제거")).perform(click());
                 onView(withText("제거")).perform(click());ready(app);
-                onView(withText("0곡")).check(matches(isDisplayed()));
-                assertEquals(0,ourPlaylist(data,title).getJSONArray("items").length());
+                onView(withText("1곡")).check(matches(isDisplayed()));
+                assertEquals(1,data.playlist(id).getJSONArray("items").length());
+                onView(withText("목록 삭제")).perform(scrollTo(),click());
+                onView(withText("취소")).perform(click());assertEquals(1,data.playlist(id).getJSONArray("items").length());
+                onView(withText("목록 삭제")).perform(scrollTo(),click());
+                onView(withText("삭제")).perform(click());ready(app);
+                onView(withText("검색한 이름의 목록이 없어요.")).check(matches(isDisplayed()));
+                onView(withText("곡명·아티스트로 찾기")).perform(scrollTo(),click());
+                onView(withHint("곡명 또는 아티스트 검색")).perform(replaceText("blackpink"),closeSoftKeyboard());
+                onView(withText("How You Like That\nBLACKPINK")).check(matches(isDisplayed()));
+                onView(withHint("곡명 또는 아티스트 검색")).perform(replaceText("일치하지않는곡"),closeSoftKeyboard());
+                onView(withText("일치하는 곡이 없어요. 다른 곡명이나 아티스트를 입력해 보세요.")).check(matches(isDisplayed()));
+                onView(withText("닫기")).perform(click());
             }
         } finally {
-            data.getWritableDatabase().delete("playlists","title=?",new String[]{title});
+            data.getWritableDatabase().delete("playlists","title IN (?,?)",new String[]{title,title+" 변경"});
             data.clearFeedback();for(Map.Entry<String,Integer> reaction:previousFeedback.entrySet())data.react(reaction.getKey(),reaction.getValue());
             SharedPreferences.Editor restore=settings.edit();
             for(String key:new String[]{"server","prompt"}){
