@@ -3,6 +3,7 @@ package com.mptaptap.playlisthub;
 import android.content.Context;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.platform.app.InstrumentationRegistry;
+import com.mptaptap.core.Recommender;
 import com.mptaptap.core.Track;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -17,7 +18,7 @@ public class StorageCheckTest {
         if(android.os.Build.VERSION.SDK_INT>=37) InstrumentationRegistry.getInstrumentation().getUiAutomation()
             .grantRuntimePermission(context.getPackageName(),android.Manifest.permission.ACCESS_LOCAL_NETWORK);
         java.util.concurrent.ExecutorService worker=java.util.concurrent.Executors.newSingleThreadExecutor();
-        try(java.net.ServerSocket server=new java.net.ServerSocket(0,3,java.net.InetAddress.getByName("127.0.0.1"))){
+        try(java.net.ServerSocket server=new java.net.ServerSocket(0,4,java.net.InetAddress.getByName("127.0.0.1"))){
             server.setSoTimeout(5000);
             String base="http://127.0.0.1:"+server.getLocalPort();
             android.content.SharedPreferences credentials=context.getSharedPreferences("server_credentials",Context.MODE_PRIVATE);
@@ -25,15 +26,19 @@ public class StorageCheckTest {
             String fresh="BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
             java.util.concurrent.Future<?> replies=worker.submit(()->{
                 try{
-                    for(int i=0;i<3;i++)try(java.net.Socket socket=server.accept()){
+                    String[] paths={"/me/feedback","/health","/sessions","/playlists/already-gone"};
+                    String[] codes={"401 Unauthorized","200 OK","201 Created","404 Not Found"};
+                    for(int i=0;i<paths.length;i++)try(java.net.Socket socket=server.accept()){
                         socket.setSoTimeout(5000);
                         java.io.BufferedReader input=new java.io.BufferedReader(new java.io.InputStreamReader(socket.getInputStream(),java.nio.charset.StandardCharsets.UTF_8));
                         String request=input.readLine();
-                        assertTrue(request.contains(i==0?"/me/feedback":i==1?"/health":"/sessions"));
-                        while(!input.readLine().isEmpty()){}
-                        String body=i==0?"{\"message\":\"앱을 다시 연결해 주세요.\"}":i==1?"{\"status\":\"ok\"}":"{\"token\":\""+fresh+"\"}";
+                        assertTrue(request.contains(paths[i]));
+                        boolean authenticated=false;String line;
+                        while(!(line=input.readLine()).isEmpty())if(line.toLowerCase(java.util.Locale.ROOT).startsWith("authorization:"))authenticated=line.endsWith("Bearer "+fresh);
+                        if(i==3){assertTrue(request.startsWith("DELETE "));assertTrue("A 404 request must keep the restored session",authenticated);}
+                        String body=i==0?"{\"message\":\"앱을 다시 연결해 주세요.\"}":i==1?"{\"status\":\"ok\"}":i==2?"{\"token\":\""+fresh+"\"}":"{\"message\":\"목록을 찾을 수 없어요.\"}";
                         byte[] bytes=body.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-                        String header="HTTP/1.1 "+(i==0?"401 Unauthorized":i==1?"200 OK":"201 Created")+"\r\nContent-Type: application/json\r\nContent-Length: "+bytes.length+"\r\nConnection: close\r\n\r\n";
+                        String header="HTTP/1.1 "+codes[i]+"\r\nContent-Type: application/json\r\nContent-Length: "+bytes.length+"\r\nConnection: close\r\n\r\n";
                         socket.getOutputStream().write(header.getBytes(java.nio.charset.StandardCharsets.UTF_8));
                         socket.getOutputStream().write(bytes);socket.getOutputStream().flush();
                     }
@@ -41,9 +46,11 @@ public class StorageCheckTest {
             });
             try{
                 try{new ApiClient(context,base).object("GET","/me/feedback",null);fail("Invalid session accepted");}
-                catch(IllegalStateException expected){assertEquals("앱을 다시 연결해 주세요.",expected.getMessage());}
+                catch(ApiClient.ApiError expected){assertEquals(401,expected.statusCode);assertEquals("앱을 다시 연결해 주세요.",expected.getMessage());}
                 assertFalse(credentials.contains(base));
-                new ApiClient(context,base).connect();
+                ApiClient restored=new ApiClient(context,base);restored.connect();
+                try{restored.request("DELETE","/playlists/already-gone",null);fail("A missing playlist must preserve its HTTP status");}
+                catch(ApiClient.ApiError expected){assertEquals(404,expected.statusCode);assertEquals("목록을 찾을 수 없어요.",expected.getMessage());}
                 assertEquals(fresh,credentials.getString(base,""));
                 replies.get(10,java.util.concurrent.TimeUnit.SECONDS);
             }finally{credentials.edit().remove(base).commit();}
@@ -51,6 +58,16 @@ public class StorageCheckTest {
     }
 
     @Test public void duplicateSaveReactionUndoAndRestart() throws Exception {
+        Recommender.Conditions conditions=Recommender.parse("영어 잔잔한 팝 음악, 신나는 곡은 빼고");
+        JSONObject encoded=TrackJson.conditions(conditions);
+        Recommender.Conditions restored=TrackJson.conditions(new JSONObject(encoded.toString()));
+        assertEquals(conditions.tags,restored.tags);assertEquals(conditions.excludedTags,restored.excludedTags);assertEquals("en",restored.language);
+        for(String field:new String[]{"tags","excludedTags"}) {
+            JSONObject invalid=new JSONObject(encoded.toString()).put(field,new JSONArray().put("unsupported-tag"));
+            try{TrackJson.conditions(invalid);fail("Unknown condition tags must be rejected");}catch(IllegalArgumentException expected){}
+        }
+        try{TrackJson.conditions(new JSONObject(encoded.toString()).put("tags","calm"));fail("Malformed tag arrays must be rejected");}catch(org.json.JSONException expected){}
+        try{TrackJson.conditions(new JSONObject(encoded.toString()).put("language","fr"));fail("Unsupported condition language codes must be rejected");}catch(IllegalArgumentException expected){}
         Context context=InstrumentationRegistry.getInstrumentation().getTargetContext();
         String name="storage-check.db";context.deleteDatabase(name);
         Track track=TrackJson.read(new JSONArray(ApiClient.read(context.getAssets().open("tracks.json"))).getJSONObject(0));

@@ -99,15 +99,18 @@ public class Store {
         return rows.get(0);
     }
 
-    public List<Map<String, Object>> items(String user, String playlist) {
-        ownedPlaylist(user, playlist);
-        return db.query("SELECT id,track_id,position,track_json FROM playlist_items WHERE playlist_id=? ORDER BY position,id", (rs, row) -> {
+    // ponytail: share this server's write lock; database snapshot transactions for multiple instances.
+    public synchronized Map<String, Object> playlist(String user, String playlist) {
+        Map<String, Object> result = new LinkedHashMap<>(ownedPlaylist(user, playlist));
+        List<Map<String, Object>> items = db.query("SELECT id,track_id,position,track_json FROM playlist_items WHERE playlist_id=? ORDER BY position,id", (rs, row) -> {
             Map<String, Object> item = new LinkedHashMap<>();
             item.put("id", rs.getString(1)); item.put("trackId", rs.getString(2)); item.put("position", rs.getInt(3));
             String snapshot = rs.getString(4);
             if (snapshot != null) item.put("track", json.readValue(snapshot, Track.class));
             return item;
         }, playlist);
+        result.put("items", items);
+        return result;
     }
 
     public synchronized Map<String, Object> add(String user, String playlist, Track track) {

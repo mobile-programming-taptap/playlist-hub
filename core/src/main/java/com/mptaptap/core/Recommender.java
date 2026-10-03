@@ -104,7 +104,12 @@ public final class Recommender {
     }
 
     public static Result recommend(List<Track> catalogue, Conditions c, Map<String, Integer> feedback, String mode) {
+        return recommend(catalogue, c, feedback, mode, Collections.emptySet());
+    }
+
+    public static Result recommend(List<Track> catalogue, Conditions c, Map<String, Integer> feedback, String mode, Set<String> excludedTrackIds) {
         validate(c);
+        if (excludedTrackIds == null) throw new IllegalArgumentException("이번 추천에서 제외할 곡 정보를 확인해 주세요.");
         Map<String, Integer> likedTags = new LinkedHashMap<>();
         for (Track track : catalogue) {
             if (track.usable() && feedback.getOrDefault(track.id, 0) == 1)
@@ -116,7 +121,7 @@ public final class Recommender {
         List<String> genre = Arrays.asList("acoustic", "ballad", "kpop", "pop", "rock", "piano", "instrumental");
         List<String> mood = Arrays.asList("calm", "bright", "energetic", "warm", "sad");
         for (Track track : catalogue) {
-            if (!track.usable() || !seen.add(track.id) || feedback.getOrDefault(track.id, 0) == -1
+            if (!track.usable() || excludedTrackIds.contains(track.id) || !seen.add(track.id) || feedback.getOrDefault(track.id, 0) == -1
                     || !Collections.disjoint(track.tags, c.excludedTags)
                     || (!c.language.isEmpty() && !c.language.equals(track.language))) continue;
             if (!matchesGroup(c.tags, track.tags, genre) || !matchesGroup(c.tags, track.tags, mood)) continue;

@@ -13,6 +13,10 @@ import org.json.JSONObject;
 
 /** Blocking requests: called only from MainActivity's serial worker. */
 final class ApiClient {
+    static final class ApiError extends IllegalStateException {
+        final int statusCode;
+        ApiError(int statusCode, String message) { super(message); this.statusCode = statusCode; }
+    }
     final String base;
     private final SharedPreferences credentials;
     private String token;
@@ -66,7 +70,7 @@ final class ApiClient {
                 }
                 String message = code == 401 ? "서버 연결 정보가 만료되었어요. 설정에서 연결을 확인해 주세요." : "서버 요청에 실패했어요. 잠시 후 다시 시도해 주세요.";
                 try { message = new JSONObject(content).optString("message", message); } catch (Exception ignored) { }
-                throw new IllegalStateException(message);
+                throw new ApiError(code, message);
             }
             return content;
         } finally { connection.disconnect(); }
