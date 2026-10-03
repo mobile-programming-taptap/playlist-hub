@@ -36,7 +36,7 @@ public final class Conversation {
             if (request.matches("(?is).*(처음부터|새로 시작|조건 초기화|start over|reset).*")) result = new Recommender.Conditions();
             Recommender.Conditions next = Recommender.parse(request);
             for (List<String> group : List.of(List.of("calm","bright","energetic","warm","sad"),
-                    List.of("acoustic","ballad","kpop","pop","rock","piano"))) {
+                    Recommender.GENRES)) {
                 if (!Collections.disjoint(next.tags, group)) result.tags.removeAll(group);
             }
             result.tags.removeAll(next.excludedTags);
@@ -72,6 +72,8 @@ public final class Conversation {
         String notice = fresh.notice;
         if(keep.size()>0 && !conditions.language.equals("unsupported") && (!conditions.tags.isEmpty()||!conditions.language.isEmpty()))
             notice=picks.size()<7?"조건에 맞는 곡과 유지한 곡을 합해 "+picks.size()+"곡이에요. 조건을 줄이면 더 많은 곡을 찾을 수 있어요.":"";
+        if(!keep.isEmpty() && fresh.tracks.isEmpty() && !Collections.disjoint(conditions.tags,Recommender.GENRES))
+            notice="현재 카탈로그에서 요청한 장르 조건에 맞는 새 곡을 찾지 못했어요.";
         if(!keep.isEmpty()&&conditions.language.equals("unsupported"))notice="요청한 언어의 곡이 현재 카탈로그에 없어 새 추천을 찾지 못했어요.";
         if (!keep.isEmpty()) notice = "직접 유지한 "+keep.size()+"곡은 새 조건과 관계없이 남겼어요. " + notice;
         return new Recommender.Result(picks, conditions, mode, notice.trim());

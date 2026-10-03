@@ -50,7 +50,7 @@ public class PlatformClient {
     PlatformClient(ObjectMapper json,Map<String,String> config,Map<String,String> endpoints) { this.json=json;this.config=Map.copyOf(config);this.endpoints=Map.copyOf(endpoints); }
     private static Map<String,String> configuration(Environment env) {
         Map<String,String> values=new LinkedHashMap<>();
-        for(String key:List.of("SPOTIFY_CLIENT_ID","SPOTIFY_CLIENT_SECRET","SPOTIFY_REDIRECT_URI","GOOGLE_CLIENT_ID","GOOGLE_CLIENT_SECRET","GOOGLE_REDIRECT_URI","YOUTUBE_API_KEY","PUBLIC_BASE_URL","APPLE_MUSIC_DEVELOPER_TOKEN","APPLE_MUSIC_STOREFRONT")) values.put(key,env.getProperty(key,""));
+        for(String key:List.of("SPOTIFY_CLIENT_ID","SPOTIFY_REDIRECT_URI","GOOGLE_CLIENT_ID","GOOGLE_CLIENT_SECRET","GOOGLE_REDIRECT_URI","YOUTUBE_API_KEY","PUBLIC_BASE_URL","APPLE_MUSIC_DEVELOPER_TOKEN","APPLE_MUSIC_STOREFRONT")) values.put(key,env.getProperty(key,""));
         return values;
     }
     static String provider(String provider) { if(provider==null||!PROVIDERS.contains(provider))throw new IllegalArgumentException("지원하는 플랫폼을 선택해 주세요.");return provider; }

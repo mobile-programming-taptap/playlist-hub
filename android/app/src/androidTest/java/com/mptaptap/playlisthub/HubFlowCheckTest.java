@@ -309,6 +309,44 @@ public class HubFlowCheckTest {
                 assertTrue(client.object("GET","/public/playlists/"+shareId,null).getBoolean("favourited"));
                 onView(withText("즐겨찾기 해제")).check(matches(isDisplayed()));
             }
+            String zeroId=UUID.randomUUID().toString(),zeroTitle="길이 미확인 "+suffix.substring(0,8);
+            JSONObject zero=client.object("POST","/conversions/youtube",new JSONObject().put("id",zeroId)
+                .put("url","https://www.youtube.com/watch?v=dQw4w9WgXcQ").put("durationSeconds",0)
+                .put("timeline","01:00 First by Artist\n02:00 Second by Artist"));
+            assertEquals(0,zero.getInt("durationSeconds"));
+            assertFalse(zero.getJSONArray("entries").getJSONObject(0).getBoolean("needsReview"));
+            assertEquals(120,zero.getJSONArray("entries").getJSONObject(0).getInt("endSeconds"));
+            assertEquals(-1,zero.getJSONArray("entries").getJSONObject(1).getInt("endSeconds"));
+            try(ActivityScenario<HubActivity> app=launch(context,"create")) {
+                ready(app);onView(withText("이전 변환 · 가져오기 · 전송 기록")).perform(scrollTo(),click());ready(app);
+                onView(allOf(withText("목록 검토 · 변경 확인"),hasSibling(withText("사용자 타임라인")))).perform(scrollTo(),click());ready(app);
+                timelineOpen("1. 01:00","https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=60s");
+                onView(allOf(withHint("시작 시간 (초)"),hasSibling(withText("1. 01:00")))).perform(scrollTo(),replaceText("21601"),closeSoftKeyboard());
+                timelineOpen("1. 01:00",null);
+                onView(withText("선택한 곡을 앱 목록에 저장")).perform(scrollTo(),click());ready(app);
+                assertFalse("Out-of-range times must not be saved",client.object("GET","/imports/playlists/"+zeroId,null).getBoolean("saved"));
+                onView(allOf(withHint("시작 시간 (초)"),hasSibling(withText("1. 01:00")))).perform(scrollTo(),replaceText("90"),closeSoftKeyboard());
+                onView(allOf(withHint("곡명"),hasSibling(withText("1. 01:00")))).perform(scrollTo(),replaceText("Reviewed unknown length"),closeSoftKeyboard());
+                onView(withHint("새 목록 이름")).perform(scrollTo(),replaceText(zeroTitle),closeSoftKeyboard());
+                onView(withText("선택한 곡을 앱 목록에 저장")).perform(scrollTo(),click());ready(app);
+            }
+            JSONObject savedZero=client.object("GET","/imports/playlists/"+zeroId,null);
+            assertEquals(0,savedZero.getInt("durationSeconds"));
+            String zeroPlaylist=savedZero.getString("localPlaylistId");
+            JSONObject savedFirst=client.object("GET","/playlists/"+zeroPlaylist,null).getJSONArray("items").getJSONObject(0).getJSONObject("track");
+            assertEquals(90,savedFirst.getInt("timestamp"));assertEquals(0,savedFirst.getInt("videoDurationSeconds"));
+            assertEquals("Reviewed unknown length",savedFirst.getString("title"));
+            try(ActivityScenario<HubActivity> app=launch(context,"create")) {
+                ready(app);onView(withText("이전 변환 · 가져오기 · 전송 기록")).perform(scrollTo(),click());ready(app);
+                onView(allOf(withText("목록 검토 · 변경 확인"),hasSibling(withText(zeroTitle)))).perform(scrollTo(),click());ready(app);
+                onView(allOf(withHint("시작 시간 (초)"),hasSibling(withText("1. 01:00")))).check(matches(withText("90")));
+                onView(allOf(withHint("곡명"),hasSibling(withText("1. 01:00")))).check(matches(withText("Reviewed unknown length")));
+                timelineOpen("1. 01:00","https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=90s");
+                app.recreate();ready(app);focused(app);
+                onView(allOf(withHint("시작 시간 (초)"),hasSibling(withText("1. 01:00")))).check(matches(withText("90")));
+                timelineOpen("1. 01:00","https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=90s");
+            }
+            assertEquals(1,client.array("/me/saved-tracks").length());
             String accountOwner=client.identity();
             try(ActivityScenario<MainActivity> main=ActivityScenario.launch(MainActivity.class)) {
                 readyMain(main);credentials.edit().remove(base).commit();
@@ -333,12 +371,15 @@ public class HubFlowCheckTest {
         }
     }
     private static void timelineOpen(String expectedUrl) {
+        timelineOpen("1. 00:00",expectedUrl);
+    }
+    private static void timelineOpen(String rowLabel,String expectedUrl) {
         var instrumentation=InstrumentationRegistry.getInstrumentation();AtomicReference<Intent> sent=new AtomicReference<>();
         androidx.test.runner.intent.IntentCallback callback=intent->{if(Intent.ACTION_VIEW.equals(intent.getAction()))sent.set(new Intent(intent));};
         var intents=androidx.test.runner.intent.IntentMonitorRegistry.getInstance();IntentFilter filter=new IntentFilter(Intent.ACTION_VIEW);filter.addDataScheme("https");filter.addDataScheme("http");filter.addCategory(Intent.CATEGORY_BROWSABLE);
         var blocked=instrumentation.addMonitor(filter,new android.app.Instrumentation.ActivityResult(android.app.Activity.RESULT_CANCELED,null),true);intents.addIntentCallback(callback);
         try {
-            onView(allOf(withText("원본 영상의 이 시간 열기"),hasSibling(withText("1. 00:00")))).perform(scrollTo(),click());instrumentation.waitForIdleSync();
+            onView(allOf(withText("원본 영상의 이 시간 열기"),hasSibling(withText(rowLabel)))).perform(scrollTo(),click());instrumentation.waitForIdleSync();
             if(expectedUrl==null){assertNull("Invalid times must not launch an external activity",sent.get());assertEquals(0,blocked.getHits());}
             else{assertNotNull("Capture the actual external intent",sent.get());assertEquals(expectedUrl,sent.get().getDataString());assertEquals("Block the browser on both API24 and newer Android",1,blocked.getHits());}
         } finally {intents.removeIntentCallback(callback);instrumentation.removeMonitor(blocked);}

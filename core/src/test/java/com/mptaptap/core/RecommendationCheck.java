@@ -37,6 +37,20 @@ public final class RecommendationCheck {
         Recommender.Result result = Recommender.recommend(tracks, conditions, feedback, "basic");
         assert result.tracks.size() == 8;
         assert result.tracks.stream().allMatch(p -> p.track.language.equals("none"));
+        for (String request : List.of("재즈만 추천해줘", "가사 없는 jazz", "클래식", "hip-hop", "R&B", "EDM", "블루스", "메탈")) {
+            Recommender.Result absent = Recommender.recommend(tracks, Recommender.parse(request), feedback, "basic");
+            assert absent.tracks.isEmpty() && absent.notice.contains("장르") && absent.notice.contains("0곡") : request;
+        }
+        assert Recommender.recommend(tracks,Recommender.parse("재즈 장르는 제외하고 피아노"),feedback,"basic").tracks.size()==8;
+        Recommender.Conditions unlisted=new Recommender.Conditions();unlisted.tags.addAll(List.of("unsupported_genre","pop","instrumental"));
+        assert Recommender.recommend(tracks,unlisted,feedback,"openai").tracks.isEmpty():"An unlisted explicit genre must not be filled with a supported genre";
+        Recommender.Result keptJazz=Conversation.recommend(tracks,Recommender.parse("재즈"),feedback,"basic",List.of(tracks.get(4).id),List.of());
+        assert keptJazz.tracks.size()==1&&keptJazz.tracks.get(0).track.id.equals(tracks.get(4).id);
+        assert keptJazz.notice.contains("직접 유지한 1곡")&&keptJazz.notice.contains("장르")&&keptJazz.notice.contains("새 곡");
+        List<String> allKept=new ArrayList<>();for(Recommender.Pick pick:result.tracks)allKept.add(pick.track.id);
+        Recommender.Result allKeptJazz=Conversation.recommend(tracks,Recommender.parse("가사 없는 재즈"),feedback,"basic",allKept,List.of());
+        assert allKeptJazz.tracks.size()==8&&allKeptJazz.notice.contains("직접 유지한 8곡")&&allKeptJazz.notice.contains("새 곡");
+        assert feedback.isEmpty()&&tracks.stream().noneMatch(t->t.tags.contains("jazz")):"A missing genre must not alter feedback or catalogue tags";
         Recommender.Result continued=Conversation.recommend(tracks,conditions,feedback,"basic",List.of(tracks.get(4).id),List.of(tracks.get(0).id));
         assert continued.tracks.size()==8&&continued.tracks.get(0).track.id.equals(tracks.get(4).id);
         assert continued.tracks.stream().noneMatch(p->p.track.id.equals(tracks.get(0).id));
@@ -93,6 +107,6 @@ public final class RecommendationCheck {
         assert rejected;
         conditions.language = "fr";
         try { Recommender.validate(conditions); throw new AssertionError("Unknown language accepted"); } catch (IllegalArgumentException expected) { }
-        System.out.println("PASS: catalogue source boundary, 8 picks, temporary replacement, vocal/unsupported language filters, dislike exclusion/undo, like ranking, negation, input validation and playlist text sharing.");
+        System.out.println("PASS: catalogue source boundary, 8 picks, missing genre/kept boundaries, temporary replacement, vocal/unsupported language filters, dislike exclusion/undo, like ranking, negation, input validation and playlist text sharing.");
     }
 }

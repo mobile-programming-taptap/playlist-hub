@@ -51,6 +51,16 @@ public class ConversationFlowCheckTest {
             assertEquals(2,history.length());assertEquals("영어 팝으로 바꿔줘",history.getString(1));
             app.recreate();ready(app);
             onView(allOf(withId(R.id.track_title),isDisplayed())).perform(scrollTo()).check(matches(withText(title.get())));
+            onView(withId(R.id.edit_request)).perform(scrollTo(),click());
+            onView(withId(R.id.prompt)).perform(scrollTo(),replaceText("재즈만 추천해줘"),closeSoftKeyboard());
+            onView(withId(R.id.recommend)).perform(scrollTo(),click());ready(app);
+            onView(withId(R.id.counter)).check(matches(withText("0 / 0")));
+            onView(withId(R.id.empty)).perform(scrollTo()).check(matches(allOf(isDisplayed(),withText(containsString("조건")))));
+            onView(withId(R.id.edit_request)).perform(scrollTo(),click());
+            onView(withId(R.id.prompt)).perform(scrollTo(),replaceText("팝 음악"),closeSoftKeyboard());
+            onView(withId(R.id.recommend)).perform(scrollTo(),click());ready(app);
+            onView(withId(R.id.empty)).check(matches(not(isDisplayed())));
+            onView(allOf(withId(R.id.track_title),isDisplayed())).perform(scrollTo()).check(matches(withText(not(isEmptyOrNullString()))));
         } finally {
             data.clearFeedback();for(Map.Entry<String,Integer> row:feedback.entrySet())data.react(row.getKey(),row.getValue());data.close();
             SharedPreferences.Editor restore=settings.edit().clear();for(Map.Entry<String,?> row:old.entrySet()){

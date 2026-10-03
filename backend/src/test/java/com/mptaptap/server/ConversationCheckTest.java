@@ -22,7 +22,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class ConversationCheckTest {
     @Test void historyKeepsExclusionsAndAiBoundary() throws Exception {
         ObjectMapper json=new ObjectMapper();List<JsonNode> sent=new CopyOnWriteArrayList<>();AtomicBoolean unavailable=new AtomicBoolean();
-        AtomicReference<String> modelConditions=new AtomicReference<>("{\"tags\":[\"energetic\"],\"excludedTags\":[],\"language\":\"ko\"}");
+        AtomicReference<String> modelConditions=new AtomicReference<>("{\"tags\":[\"energetic\"],\"excludedTags\":[],\"language\":\"ko\",\"languageSpecified\":true}");
         HttpServer stub=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
         stub.createContext("/responses",exchange->{
             sent.add(json.readTree(exchange.getRequestBody().readAllBytes()));
@@ -43,6 +43,7 @@ class ConversationCheckTest {
             var response=client.send(request.POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(Map.of("prompt","더 신나게", "history",List.of("한국어 잔잔한 음악"),
                     "keptTrackIds",List.of(keep),"excludedTrackIds",List.of(skip))))).build(),HttpResponse.BodyHandlers.ofString());
             assertEquals(200,response.statusCode(),response.body());JsonNode result=json.readTree(response.body());
+            assertFalse(result.path("conditions").has("languageSpecified"),"The internal AI field must not reach the public conditions.");
             assertEquals("openai",result.path("mode").asString());assertEquals(keep,result.path("tracks").get(0).path("track").path("id").asString());
             for(JsonNode pick:result.path("tracks"))assertNotEquals(skip,pick.path("track").path("id").asString());
             assertEquals(1,sent.size());JsonNode body=sent.get(0);assertFalse(body.path("store").asBoolean());assertEquals(2,body.path("input").size());
@@ -64,12 +65,12 @@ class ConversationCheckTest {
                 var rejected=client.send(request.POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(Map.of("prompt","팝", "previousConditions",bad)))).build(),HttpResponse.BodyHandlers.ofString());
                 assertEquals(400,rejected.statusCode());assertEquals(2,sent.size(),"Unvalidated values must not reach AI");
             }
-            modelConditions.set("{\"tags\":[\"energetic\"],\"excludedTags\":[],\"language\":\"\"}");
+            modelConditions.set("{\"tags\":[\"energetic\"],\"excludedTags\":[],\"language\":\"\",\"languageSpecified\":false}");
             var initial=client.send(request.POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(Map.of("prompt","신나는 음악을 추천해줘")))).build(),HttpResponse.BodyHandlers.ofString());
             assertEquals(200,initial.statusCode(),initial.body());JsonNode first=json.readTree(initial.body());assertEquals("openai",first.path("mode").asString());
             assertTrue(first.path("tracks").size()>1);String retained=first.path("tracks").get(0).path("track").path("id").asString(),excluded=first.path("tracks").get(1).path("track").path("id").asString();
             // Valid model JSON can still omit the explicit genre, as the live Responses call did twice.
-            modelConditions.set("{\"tags\":[\"energetic\"],\"excludedTags\":[\"instrumental\"],\"language\":\"en\"}");
+            modelConditions.set("{\"tags\":[\"energetic\"],\"excludedTags\":[\"instrumental\"],\"language\":\"en\",\"languageSpecified\":true}");
             String refineBody=json.writeValueAsString(Map.of("prompt","영어 팝으로 바꿔줘, 연주곡은 제외","history",List.of("신나는 음악을 추천해줘"),
                     "previousConditions",first.path("conditions"),"keptTrackIds",List.of(retained),"excludedTrackIds",List.of(excluded)));
             for(int attempt=0;attempt<2;attempt++) {
@@ -81,18 +82,27 @@ class ConversationCheckTest {
                 assertEquals(retained,guarded.path("tracks").get(0).path("track").path("id").asString());
                 for(JsonNode pick:guarded.path("tracks"))assertNotEquals(excluded,pick.path("track").path("id").asString());
             }
-            modelConditions.set("{\"tags\":[\"warm\"],\"excludedTags\":[],\"language\":\"ko\"}");
+            modelConditions.set("{\"tags\":[\"warm\"],\"excludedTags\":[],\"language\":\"ko\",\"languageSpecified\":true}");
             var semanticReset=client.send(request.POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(Map.of("prompt","처음부터 영어 팝으로, 커피 한 잔과 어울리게",
                     "previousConditions",first.path("conditions"))))).build(),HttpResponse.BodyHandlers.ofString());
             assertEquals(200,semanticReset.statusCode(),semanticReset.body());JsonNode resetGuard=json.readTree(semanticReset.body());
             assertEquals("openai",resetGuard.path("mode").asString());assertEquals("en",resetGuard.path("conditions").path("language").asString());
             assertEquals("[\"warm\",\"pop\"]",resetGuard.path("conditions").path("tags").toString(),"Reset must preserve the model's new semantic mood while enforcing the explicit genre");
-            modelConditions.set("{\"tags\":[\"instrumental\"],\"excludedTags\":[],\"language\":\"none\"}");
+            modelConditions.set("{\"tags\":[\"instrumental\"],\"excludedTags\":[],\"language\":\"none\",\"languageSpecified\":false}");
             var explicitVocals=client.send(request.POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(Map.of("prompt","연주곡 제외","previousConditions",
                     Map.of("tags",List.of("instrumental"),"excludedTags",List.of(),"language","none"))))).build(),HttpResponse.BodyHandlers.ofString());
             assertEquals(200,explicitVocals.statusCode(),explicitVocals.body());JsonNode guardedVocals=json.readTree(explicitVocals.body());
             assertEquals("openai",guardedVocals.path("mode").asString());assertEquals("",guardedVocals.path("conditions").path("language").asString());
             assertEquals("[]",guardedVocals.path("conditions").path("tags").toString());assertEquals("[\"instrumental\"]",guardedVocals.path("conditions").path("excludedTags").toString());
+            for(String invalidLanguageFlag:List.of("{\"tags\":[\"calm\"],\"excludedTags\":[],\"language\":\"\"}",
+                    "{\"tags\":[\"calm\"],\"excludedTags\":[],\"language\":\"\",\"languageSpecified\":\"false\"}",
+                    "{\"tags\":[\"calm\"],\"excludedTags\":[],\"language\":\"fr\",\"languageSpecified\":false}")) {
+                modelConditions.set(invalidLanguageFlag);
+                var malformed=client.send(request.POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(Map.of("prompt","잔잔한 음악")))).build(),HttpResponse.BodyHandlers.ofString());
+                assertEquals(200,malformed.statusCode(),malformed.body());JsonNode restored=json.readTree(malformed.body());
+                assertEquals("basic",restored.path("mode").asString());assertTrue(restored.path("notice").asString().contains("AI 연결"));
+                assertFalse(restored.path("conditions").has("languageSpecified"));
+            }
             unavailable.set(true);
             var fallback=client.send(request.POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(Map.of("prompt","비 오는 날", "history",java.util.Collections.nCopies(8,"밤에도"),
                     "previousConditions",previous)))).build(),HttpResponse.BodyHandlers.ofString());
