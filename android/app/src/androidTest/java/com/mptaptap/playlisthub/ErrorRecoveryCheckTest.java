@@ -1,7 +1,10 @@
 package com.mptaptap.playlisthub;
 
+import android.app.Activity;
+import android.app.Application;
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.os.Bundle;
 import android.os.SystemClock;
 import android.view.View;
 import android.webkit.WebView;
@@ -15,9 +18,7 @@ import androidx.test.runner.lifecycle.ActivityLifecycleCallback;
 import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry;
 import androidx.test.runner.lifecycle.Stage;
 import com.mptaptap.core.Recommender;
-import java.io.BufferedReader;
 import java.io.DataInputStream;
-import java.io.InputStreamReader;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -43,6 +44,7 @@ import static androidx.test.espresso.assertion.ViewAssertions.matches;
 import static androidx.test.espresso.matcher.ViewMatchers.*;
 import static androidx.test.espresso.matcher.RootMatchers.isDialog;
 import static org.hamcrest.Matchers.allOf;
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.startsWith;
 import static org.junit.Assert.*;
@@ -372,6 +374,144 @@ public class ErrorRecoveryCheckTest {
         } finally {running.set(false);serverWorker.shutdownNow();data.close();}
     }
 
+    @Test public void failedServerMetadataKeepsLocalStoreAndRetryRestoresBundledCatalogue() throws Exception {
+        Context context=InstrumentationRegistry.getInstrumentation().getTargetContext();
+        if(android.os.Build.VERSION.SDK_INT>=37) InstrumentationRegistry.getInstrumentation().getUiAutomation()
+            .grantRuntimePermission(context.getPackageName(),android.Manifest.permission.ACCESS_LOCAL_NETWORK);
+        SharedPreferences settings=context.getSharedPreferences("settings",Context.MODE_PRIVATE);
+        SharedPreferences credentials=context.getSharedPreferences("server_credentials",Context.MODE_PRIVATE);
+        Map<String,?> previousSettings=settings.getAll();LocalStore data=new LocalStore(context);Map<String,Integer> previousFeedback=data.feedback();
+        String prompt="공부할 때 집중할 수 있는 가사 없는 피아노 음악";
+        java.util.List<com.mptaptap.core.Track> bundled=TrackJson.list(new JSONArray(ApiClient.read(context.getAssets().open("tracks.json"))));
+        assertEquals(40,bundled.size());com.mptaptap.core.Track track=Recommender.recommend(bundled,Recommender.parse(prompt),Collections.emptyMap(),"basic").tracks.get(0).track;
+        String catalogue=new JSONArray().put(TrackJson.write(track)).toString(),title="연결 실패에도 유지할 목록 "+java.util.UUID.randomUUID().toString().substring(0,8);
+        String[] localId=new String[1];AtomicBoolean running=new AtomicBoolean(true),failMetadata=new AtomicBoolean(true);
+        AtomicInteger savedReads=new AtomicInteger(),serverWrites=new AtomicInteger();AtomicReference<Throwable> serverFailure=new AtomicReference<>();
+        ExecutorService serverWorker=Executors.newSingleThreadExecutor();
+        try(ServerSocket server=new ServerSocket(0,5,InetAddress.getByName("127.0.0.1"))) {
+            server.setSoTimeout(500);String base="http://127.0.0.1:"+server.getLocalPort();
+            String previousCredential=credentials.getString(base,null),token="HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH";
+            Future<?> replies=serverWorker.submit(()->{
+                while(running.get())try(Socket socket=server.accept()) {
+                    socket.setSoTimeout(5000);DataInputStream input=new DataInputStream(socket.getInputStream());
+                    String[] request=httpLine(input).split(" ");String header;int length=0;boolean authenticated=false;
+                    while(!(header=httpLine(input)).isEmpty()) {
+                        String lower=header.toLowerCase(java.util.Locale.ROOT);
+                        if(lower.startsWith("content-length:"))length=Integer.parseInt(header.substring(header.indexOf(':')+1).trim());
+                        if(lower.startsWith("authorization:"))authenticated=header.endsWith("Bearer "+token);
+                    }
+                    assertTrue("The test must reuse its seeded session",authenticated);assertTrue(length>=0&&length<=4096);
+                    byte[] body=new byte[length];input.readFully(body);
+                    if(!request[0].equals("GET")){serverWrites.incrementAndGet();throw new AssertionError("Unexpected server write: "+request[0]+" "+request[1]);}
+                    String content,status="200 OK";
+                    switch(request[1]) {
+                        case "/health": content="{\"status\":\"ok\"}";break;
+                        case "/catalogue": content=catalogue;break;
+                        case "/me/feedback": content=new JSONObject().put(track.id,-1).toString();break;
+                        case "/me/saved-tracks":
+                            savedReads.incrementAndGet();
+                            if(failMetadata.get()){status="500 Internal Server Error";content="{\"message\":\"저장 상태 검사 오류\"}";}else content="[]";
+                            break;
+                        case "/playlists": content="[]";break;
+                        default: throw new AssertionError("Unexpected test request: "+request[1]);
+                    }
+                    byte[] bytes=content.getBytes(StandardCharsets.UTF_8);
+                    String response="HTTP/1.1 "+status+"\r\nContent-Type: application/json\r\nContent-Length: "+bytes.length+"\r\nConnection: close\r\n\r\n";
+                    socket.getOutputStream().write(response.getBytes(StandardCharsets.UTF_8));socket.getOutputStream().write(bytes);socket.getOutputStream().flush();
+                } catch(SocketTimeoutException timeout) {
+                    // The connection dialog stays open for a deliberate retry.
+                } catch(Throwable error) {if(running.get())serverFailure.compareAndSet(null,error);return;}
+            });
+            try {
+                data.clearFeedback();data.react(track.id,1);localId[0]=data.create(title).getString("id");data.save(localId[0],track);
+                assertTrue(credentials.edit().putString(base,token).commit());assertTrue(settings.edit().remove("server").remove("prompt").commit());
+                try(ActivityScenario<MainActivity> app=ActivityScenario.launch(MainActivity.class)) {
+                    ready(app);onView(withId(R.id.nav_library)).perform(closeSoftKeyboard(),click());ready(app);
+                    onView(withText(title+"\n1곡 · 앱 추천에서 저장")).perform(scrollTo()).check(matches(isDisplayed()));
+                    onView(withId(R.id.settings)).perform(click());
+                    onView(withHint("https://서버주소")).inRoot(isDialog()).perform(scrollTo(),replaceText(base),closeSoftKeyboard());
+                    onView(withText("서버에 연결")).inRoot(isDialog()).perform(scrollTo(),click());ready(app);
+                    assertNull("Test server failure",serverFailure.get());assertEquals(1,savedReads.get());
+                    assertEquals("A failed snapshot must preserve the active local store","",settings.getString("server",""));
+                    assertEquals(Collections.singletonMap(track.id,1),data.feedback());
+                    assertEquals(title,data.playlist(localId[0]).getString("title"));assertEquals(1,data.playlist(localId[0]).getJSONArray("items").length());
+                    onView(withText("서버에 연결하지 못했어요. 주소와 서버 실행 상태를 확인해 주세요.")).inRoot(isDialog()).check(matches(isDisplayed()));
+                    onView(withHint("https://서버주소")).inRoot(isDialog()).check(matches(withText(base)));
+                    onView(withText("곡 데이터와 이용 안내")).inRoot(isDialog()).perform(scrollTo(),click());
+                    onView(withText(containsString("검증한 40곡"))).inRoot(isDialog()).check(matches(isDisplayed()));
+                    androidx.test.espresso.Espresso.pressBack();
+                    onView(withText("좋아요·싫어요 관리 (1)")).inRoot(isDialog()).perform(scrollTo(),click());
+                    onView(withText("좋아요 · "+track.title+" — "+track.artist)).inRoot(isDialog()).check(matches(isDisplayed()));
+                    androidx.test.espresso.Espresso.pressBack();
+                    failMetadata.set(false);
+                    onView(withText("서버에 연결")).inRoot(isDialog()).check(matches(isEnabled())).perform(scrollTo(),click());ready(app);
+                    assertNull("Test server failure",serverFailure.get());assertTrue(savedReads.get()>=2);assertEquals(base,settings.getString("server",""));
+                    onView(withId(R.id.mode_label)).check(matches(withText(startsWith("온라인 추천"))));
+                    assertEquals(Collections.singletonMap(track.id,1),data.feedback());assertEquals(1,data.playlist(localId[0]).getJSONArray("items").length());
+                    onView(withId(R.id.settings)).perform(click());
+                    onView(withText("이 기기의 기본 추천 사용")).inRoot(isDialog()).perform(scrollTo(),click());ready(app);
+                    assertEquals("",settings.getString("server",""));
+                    onView(withText(title+"\n1곡 · 앱 추천에서 저장")).perform(scrollTo()).check(matches(isDisplayed()));
+                    onView(withId(R.id.settings)).perform(click());
+                    onView(withText("곡 데이터와 이용 안내")).inRoot(isDialog()).perform(scrollTo(),click());
+                    onView(withText(containsString("검증한 40곡"))).inRoot(isDialog()).check(matches(isDisplayed()));
+                    androidx.test.espresso.Espresso.pressBack();androidx.test.espresso.Espresso.pressBack();
+                    onView(withId(R.id.nav_recommend)).perform(click());ready(app);
+                    onView(withId(R.id.example_study)).perform(closeSoftKeyboard(),scrollTo(),click());
+                    onView(withId(R.id.recommend)).perform(scrollTo(),click());ready(app);
+                    onView(withId(R.id.counter)).check(matches(withText("1 / 8")));
+                    onView(withId(R.id.mode_label)).check(matches(withText(startsWith("기본 추천"))));
+                    Application application=(Application)context.getApplicationContext();AtomicBoolean changedStore=new AtomicBoolean();
+                    Application.ActivityLifecycleCallbacks switchAfterSave=new Application.ActivityLifecycleCallbacks(){
+                        @Override public void onActivitySaveInstanceState(Activity activity,Bundle state){
+                            if(activity instanceof MainActivity&&changedStore.compareAndSet(false,true))
+                                assertTrue(settings.edit().putString("server",base).commit());
+                        }
+                        @Override public void onActivityCreated(Activity activity,Bundle state){}
+                        @Override public void onActivityStarted(Activity activity){}
+                        @Override public void onActivityResumed(Activity activity){}
+                        @Override public void onActivityPaused(Activity activity){}
+                        @Override public void onActivityStopped(Activity activity){}
+                        @Override public void onActivityDestroyed(Activity activity){}
+                    };
+                    InstrumentationRegistry.getInstrumentation().runOnMainSync(()->application.registerActivityLifecycleCallbacks(switchAfterSave));
+                    failMetadata.set(true);
+                    try{app.recreate();}finally{
+                        InstrumentationRegistry.getInstrumentation().runOnMainSync(()->application.unregisterActivityLifecycleCallbacks(switchAfterSave));
+                    }
+                    assertTrue("The active store must change after the old screen saves its state",changedStore.get());ready(app);
+                    onView(withId(R.id.mode_label)).check(matches(withText(startsWith("온라인 추천"))));
+                    onView(withId(R.id.results)).check(matches(withEffectiveVisibility(Visibility.GONE)));
+                    onView(withId(R.id.card_navigation)).check(matches(withEffectiveVisibility(Visibility.GONE)));
+                    onView(withId(R.id.request_panel)).check(matches(withEffectiveVisibility(Visibility.VISIBLE)));
+                    app.onActivity(activity->assertEquals(0,((androidx.viewpager2.widget.ViewPager2)activity.findViewById(R.id.pager)).getAdapter().getItemCount()));
+                    onView(withId(R.id.recommend)).check(matches(not(isEnabled())));onView(withId(R.id.settings)).check(matches(isEnabled()));
+                    failMetadata.set(false);onView(withId(R.id.settings)).perform(click());
+                    onView(withHint("https://서버주소")).inRoot(isDialog()).check(matches(withText(base)));
+                    onView(withText("서버에 연결")).inRoot(isDialog()).perform(scrollTo(),click());ready(app);
+                    onView(withId(R.id.mode_label)).check(matches(withText(startsWith("온라인 추천"))));
+                    onView(withId(R.id.recommend)).check(matches(isEnabled()));
+                    onView(withId(R.id.settings)).perform(click());onView(withText("곡 데이터와 이용 안내")).inRoot(isDialog()).perform(scrollTo(),click());
+                    onView(withText(containsString("검증한 1곡"))).inRoot(isDialog()).check(matches(isDisplayed()));
+                    androidx.test.espresso.Espresso.pressBack();androidx.test.espresso.Espresso.pressBack();
+                    assertEquals(0,serverWrites.get());assertNull("Test server failure",serverFailure.get());
+                    assertEquals(Collections.singletonMap(track.id,1),data.feedback());assertEquals(1,data.playlist(localId[0]).getJSONArray("items").length());
+                }
+            } finally {
+                running.set(false);server.close();
+                if(localId[0]!=null)try{data.delete(localId[0]);}catch(IllegalArgumentException alreadyRemoved){}
+                data.clearFeedback();for(Map.Entry<String,Integer> reaction:previousFeedback.entrySet())data.react(reaction.getKey(),reaction.getValue());
+                SharedPreferences.Editor restore=settings.edit();
+                for(String key:new String[]{"server","prompt"}) {
+                    if(previousSettings.containsKey(key))restore.putString(key,(String)previousSettings.get(key));else restore.remove(key);
+                }
+                assertTrue(restore.commit());SharedPreferences.Editor restoreCredential=credentials.edit();
+                if(previousCredential==null)restoreCredential.remove(base);else restoreCredential.putString(base,previousCredential);
+                assertTrue(restoreCredential.commit());replies.get(2,TimeUnit.SECONDS);
+            }
+        } finally {running.set(false);serverWorker.shutdownNow();data.close();}
+    }
+
     @Test public void playlistNameFailuresKeepDraftAndAllowRetry() throws Exception {
         Context context=InstrumentationRegistry.getInstrumentation().getTargetContext();
         if(android.os.Build.VERSION.SDK_INT>=37) InstrumentationRegistry.getInstrumentation().getUiAutomation()
@@ -657,67 +797,71 @@ public class ErrorRecoveryCheckTest {
         LocalStore data=new LocalStore(context);
         Map<String,Integer> previousFeedback=data.feedback();
         String catalogue=ApiClient.read(context.getAssets().open("tracks.json"));
+        String prompt="공부할 때 집중할 수 있는 가사 없는 피아노 음악";
+        Recommender.Result result=Recommender.recommend(TrackJson.list(new JSONArray(catalogue)),Recommender.parse(prompt),Collections.emptyMap(),"openai");
+        assertEquals(8,result.tracks.size());JSONArray picks=new JSONArray();
+        for(Recommender.Pick pick:result.tracks)picks.put(new JSONObject().put("track",TrackJson.write(pick.track)).put("reason",pick.reason));
+        String recommendation=new JSONObject().put("tracks",picks).put("mode",result.mode).put("notice",result.notice)
+            .put("conditions",TrackJson.conditions(result.conditions)).toString();
+        String first=result.tracks.get(0).track.id;
         ExecutorService serverWorker=Executors.newSingleThreadExecutor();
         try(ServerSocket server=new ServerSocket(0,5,InetAddress.getByName("127.0.0.1"))) {
             server.setSoTimeout(8000);
             String base="http://127.0.0.1:"+server.getLocalPort();
             String previousCredential=credentials.getString(base,null);
             String token="CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC";
-            AtomicInteger feedbackWrites=new AtomicInteger();
-            settings.edit().remove("server").remove("prompt").commit();data.clearFeedback();
-            try(ActivityScenario<MainActivity> app=ActivityScenario.launch(MainActivity.class)) {
-                ready(app);
-                onView(withId(R.id.example_study)).perform(closeSoftKeyboard(),scrollTo(),click());
-                onView(withId(R.id.recommend)).perform(scrollTo(),click());ready(app);
-                onView(withId(R.id.counter)).check(matches(withText("1 / 8")));
+            AtomicInteger feedbackWrites=new AtomicInteger(),recommendationPosts=new AtomicInteger();
+            try {
+                assertTrue(credentials.edit().putString(base,token).commit());assertTrue(settings.edit().putString("server",base).remove("prompt").commit());data.clearFeedback();
                 Future<?> replies=serverWorker.submit(()->{
                     try {
-                        String[] paths={"/health","/catalogue","/me/feedback","/me/saved-tracks","/me/feedback/"};
+                        String[] methods={"GET","GET","GET","GET","POST","PUT"};
+                        String[] paths={"/health","/catalogue","/me/feedback","/me/saved-tracks","/recommendations","/me/feedback/"+first};
                         for(int i=0;i<paths.length;i++)try(Socket socket=server.accept()) {
                             socket.setSoTimeout(5000);
-                            BufferedReader input=new BufferedReader(new InputStreamReader(socket.getInputStream(),StandardCharsets.UTF_8));
-                            String request=input.readLine();
-                            assertTrue(request,request.startsWith((i==4?"PUT ":"GET ")+paths[i]));
+                            DataInputStream input=new DataInputStream(socket.getInputStream());
+                            String request=httpLine(input);assertTrue(request,request.startsWith(methods[i]+" "+paths[i]+" HTTP/"));
                             String header;int length=0;boolean authenticated=false;
-                            while((header=input.readLine())!=null&&!header.isEmpty()) {
+                            while(!(header=httpLine(input)).isEmpty()) {
                                 String lower=header.toLowerCase(java.util.Locale.ROOT);
                                 if(lower.startsWith("content-length:"))length=Integer.parseInt(header.substring(header.indexOf(':')+1).trim());
                                 if(lower.startsWith("authorization:"))authenticated=header.endsWith("Bearer "+token);
                             }
-                            assertTrue("Restored results must reuse the seeded server session",authenticated);
-                            assertTrue(length<=1000);
-                            char[] body=new char[length];int read=0;
-                            while(read<length){int count=input.read(body,read,length-read);if(count<0)throw new java.io.IOException("Incomplete test request");read+=count;}
-                            if(i==4){assertEquals(1,new JSONObject(new String(body)).getInt("reaction"));feedbackWrites.incrementAndGet();}
-                            String content=i==0?"{\"status\":\"ok\"}":i==1?catalogue:i==2?"{}":i==3?"[]":"{\"message\":\"재시도 검사 오류\"}";
+                            assertTrue("Recommendations must reuse the seeded server session",authenticated);assertTrue(length>=0&&length<=4096);
+                            byte[] body=new byte[length];input.readFully(body);
+                            if(i==4){assertEquals(prompt,new JSONObject(new String(body,StandardCharsets.UTF_8)).getString("prompt"));recommendationPosts.incrementAndGet();}
+                            if(i==5){assertEquals(1,new JSONObject(new String(body,StandardCharsets.UTF_8)).getInt("reaction"));feedbackWrites.incrementAndGet();}
+                            String content=i==0?"{\"status\":\"ok\"}":i==1?catalogue:i==2?"{}":i==3?"[]":i==4?recommendation:"{\"message\":\"재시도 검사 오류\"}";
                             byte[] bytes=content.getBytes(StandardCharsets.UTF_8);
-                            String response="HTTP/1.1 "+(i==4?"503 Service Unavailable":"200 OK")+"\r\nContent-Type: application/json\r\nContent-Length: "+bytes.length+"\r\nConnection: close\r\n\r\n";
+                            String response="HTTP/1.1 "+(i==5?"503 Service Unavailable":"200 OK")+"\r\nContent-Type: application/json\r\nContent-Length: "+bytes.length+"\r\nConnection: close\r\n\r\n";
                             socket.getOutputStream().write(response.getBytes(StandardCharsets.UTF_8));socket.getOutputStream().write(bytes);socket.getOutputStream().flush();
                         }
                     } catch(Exception error){throw new RuntimeException(error);}
                 });
-                credentials.edit().putString(base,token).commit();settings.edit().putString("server",base).commit();
-                app.recreate();ready(app);
-                onView(withId(R.id.counter)).check(matches(withText("1 / 8")));
-                onView(allOf(withId(R.id.like),isDisplayed())).perform(click());ready(app);
-                onView(withText("재시도 검사 오류")).check(matches(isDisplayed()));
-                replies.get(10,TimeUnit.SECONDS);
-                onView(withId(R.id.settings)).perform(click());
-                onView(withText("이 기기의 기본 추천 사용")).perform(scrollTo(),click());ready(app);
-                assertFalse(settings.contains("server"));
-                onView(withText("재시도")).perform(click());ready(app);
-                assertTrue("A failed server reaction must not be retried into local storage",data.feedback().isEmpty());
-                assertEquals("The stale action must not repeat its server request",1,feedbackWrites.get());
+                try(ActivityScenario<MainActivity> app=ActivityScenario.launch(MainActivity.class)) {
+                    ready(app);onView(withId(R.id.example_study)).perform(closeSoftKeyboard(),scrollTo(),click());
+                    onView(withId(R.id.recommend)).perform(scrollTo(),click());ready(app);
+                    onView(withId(R.id.counter)).check(matches(withText("1 / 8")));
+                    onView(withId(R.id.notice)).check(matches(withText(startsWith("AI 추천"))));
+                    onView(allOf(withId(R.id.like),isDisplayed())).perform(click());ready(app);
+                    onView(withText("재시도 검사 오류")).check(matches(isDisplayed()));replies.get(10,TimeUnit.SECONDS);
+                    onView(withId(R.id.settings)).perform(click());
+                    onView(withText("이 기기의 기본 추천 사용")).inRoot(isDialog()).perform(scrollTo(),click());ready(app);
+                    assertFalse(settings.contains("server"));onView(withText("재시도")).perform(click());ready(app);
+                    assertTrue("A failed server reaction must not be retried into local storage",data.feedback().isEmpty());
+                    assertEquals("The stale action must not repeat its server request",1,feedbackWrites.get());assertEquals(1,recommendationPosts.get());
+                }
             } finally {
+                server.close();
                 data.clearFeedback();for(Map.Entry<String,Integer> reaction:previousFeedback.entrySet())data.react(reaction.getKey(),reaction.getValue());
                 SharedPreferences.Editor restore=settings.edit();
                 for(String key:new String[]{"server","prompt"}) {
                     if(previousSettings.containsKey(key))restore.putString(key,(String)previousSettings.get(key));else restore.remove(key);
                 }
-                restore.commit();
+                assertTrue(restore.commit());
                 SharedPreferences.Editor restoreCredential=credentials.edit();
                 if(previousCredential==null)restoreCredential.remove(base);else restoreCredential.putString(base,previousCredential);
-                restoreCredential.commit();
+                assertTrue(restoreCredential.commit());
             }
         } finally {serverWorker.shutdownNow();data.close();}
     }
