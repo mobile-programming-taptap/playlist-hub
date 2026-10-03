@@ -62,7 +62,7 @@ PostgreSQL을 사용할 때 `DATABASE_URL`을 JDBC URL로, `DATABASE_USER`, `DAT
 
 `catalog/tracks.json`: MusicBrainz 공식 API에서 조회한 실제 녹음 ID·곡명·아티스트·원본 링크. [핵심 메타데이터 CC0](https://musicbrainz.org/doc/About/Data_License)만 사용하고 분위기·상황 태그는 TapTap 샘플로 직접 작성했다. 사용자 태그·평점·앨범 표지·가사·음원은 가져오지 않는다. 샘플 태그는 추천 품질 평가가 완료된 객관적 속성으로 간주하지 않는다.
 
-검증한 재생 링크가 있는 곡은 [공식 YouTube IFrame 플레이어](https://developers.google.com/youtube/iframe_api_reference)를 표시한다. 사용자가 플레이어의 재생을 눌러야 시작한다. 화면 이동·외부 앱 이동·백그라운드 진입 시 플레이어를 종료한다. 앱 ID를 `loadDataWithBaseURL` 출처로 사용해 [공식 클라이언트 식별 요구](https://developers.google.com/youtube/terms/required-minimum-functionality)를 적용한다. 곡의 공식 영상 링크가 없으면 검색으로 연결한다. 외부 Spotify 검색과 YouTube Music 영상·검색 연결을 구분한다. 지역·임베드 제한에 따른 재생은 대체 외부 열기로 복구한다.
+검증한 재생 링크가 있는 곡은 [공식 YouTube IFrame 플레이어](https://developers.google.com/youtube/iframe_api_reference)를 표시한다. 사용자가 플레이어의 재생을 눌러야 시작한다. 화면 이동·외부 앱 이동·백그라운드 진입 시 플레이어를 종료한다. 앱 ID를 `loadDataWithBaseURL` 출처로 사용해 [공식 클라이언트 식별 요구](https://developers.google.com/youtube/terms/required-minimum-functionality)를 적용한다. 곡의 공식 영상 링크가 없으면 검색으로 연결한다. 외부 Spotify 검색과 YouTube Music 영상·검색 연결을 구분한다. WebView 초기화 실패나 지역·임베드 제한에 따른 재생 실패는 안내와 외부 열기로 복구한다.
 
 카탈로그 재검증: `python3 tools/verify_catalog.py`. 이 작업은 명시적으로 실행할 때만 네트워크를 사용하며 MusicBrainz 요청 간격을 1초 이상 둔다. 동명 코멘터리·영어 버전·Live·Remix·Cover를 제외한다. YouTube oEmbed는 직접 고른 재생 링크의 존재 확인에만 사용하고 그 메타데이터를 추천 카탈로그에 등록하지 않는다.
 
@@ -80,7 +80,9 @@ cd ../android
 
 추천 조건·반응·출처 경계는 `RecommendationCheck`의 실행 가능한 assertion 검사로 확인한다. 서버 통신 검사는 사용자 소유권, 중복 저장, 재시작 보관, OpenAI JSON 계약과 호출 상한, 목록 동시 조회·삭제의 일관성을 확인한다. Android 검사는 별도 테스트 DB에서 중복 저장·반응 변경·취소·재열기 후 보관을 확인하며, 무효가 된 서버 세션으로 재연결하는 경로도 실제 HTTP 응답으로 검사한다. 테스트 DB는 종료 시 삭제한다. 기기 검사는 에뮬레이터가 필요하며 Gradle이 검사 후 대상 앱을 제거할 수 있으므로 시연 전에 디버그 APK를 다시 설치한다.
 
-`AppFlowCheckTest`는 추천·스와이프/버튼 탐색·반응 상태·새 목록 저장·중복 저장·추천 전체 저장·추천 곡 교체·임시 제외·되돌리기·조건 복원·목록 상세 복원·공유 화면 호출·화면 재생성·앱 재열기·출처 확인·곡 제거·이름 변경·순서 변경·목록 삭제·목록/곡 검색을 화면에서 이어 검사한다. 기존 반응과 설정은 검사 후 복구하고 검사에서 만든 목록만 제거한다. `ErrorRecoveryCheckTest`는 로컬 응답 서버로 실패한 서버 반응의 재시도가 기본 추천 모드의 기기 반응에 기록되지 않는지 확인한다. 공유 화면 검사는 실제 전송 없이 선택 화면 호출만 가로채 확인한다.
+`AppFlowCheckTest`는 추천·스와이프/버튼 탐색·반응 상태·새 목록 저장·중복 저장·추천 전체 저장·추천 곡 교체·임시 제외·되돌리기·조건 복원·목록 상세 복원·공유 화면 호출·화면 재생성·앱 재열기·출처 확인·곡 제거·이름 변경·순서 변경·목록 삭제·목록/곡 검색을 화면에서 이어 검사한다. 기존 반응과 설정은 검사 후 복구하고 검사에서 만든 목록만 제거한다. `ErrorRecoveryCheckTest`는 로컬 응답 서버로 실패한 서버 반응의 재시도가 기본 추천 모드의 기기 반응에 기록되지 않는지 확인한다. Android 9 이상에서는 테스트 프로세스의 WebView 초기화를 차단해 플레이어 실패 안내와 외부 선택창도 검사한다. 기기의 WebView 제공자 설정은 변경하지 않는다. 공유 화면 검사는 실제 전송 없이 선택 화면 호출만 가로채 확인한다.
+
+GitHub Actions는 초안 포함 PR과 main 브랜치의 변경에서 서버·추천 검사와 Android 디버그·릴리스 빌드·lint를 실행한다. 서버 검사는 Java 21, Android 빌드는 프로젝트 데몬 설정에 맞춘 Java 25를 사용한다. AI 키와 실제 외부 AI 호출은 필요하지 않다. 에뮬레이터 화면 검사는 위 명령으로 별도 실행한다.
 
 공유 가능한 APK: `android/app/build/outputs/apk/debug/app-debug.apk`.
 실행 가능한 서버: `backend/build/libs/taptap-backend.jar`.
