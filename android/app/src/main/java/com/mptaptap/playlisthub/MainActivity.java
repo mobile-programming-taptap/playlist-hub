@@ -94,6 +94,7 @@ public class MainActivity extends AppCompatActivity {
     private final ActivityResultLauncher<String> localPermission = registerForActivityResult(new ActivityResultContracts.RequestPermission(), this::completeLocalPermission);
 
     private void completeLocalPermission(boolean granted) {
+        if(android.os.Build.VERSION.SDK_INT>=37)granted=checkSelfPermission(android.Manifest.permission.ACCESS_LOCAL_NETWORK)==android.content.pm.PackageManager.PERMISSION_GRANTED;
         Runnable action=pendingConnection;pendingConnection=null;
         pendingPermissionBase=null;pendingServerConnection=false;
         if(granted){if(action!=null)action.run();return;}

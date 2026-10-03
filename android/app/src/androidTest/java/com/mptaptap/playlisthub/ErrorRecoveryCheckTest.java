@@ -3,11 +3,16 @@ package com.mptaptap.playlisthub;
 import android.app.Activity;
 import android.app.Application;
 import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.os.SystemClock;
 import android.view.View;
 import android.webkit.WebView;
+import androidx.activity.result.ActivityResultRegistry;
+import androidx.activity.result.contract.ActivityResultContract;
+import androidx.activity.result.contract.ActivityResultContracts;
+import androidx.core.app.ActivityOptionsCompat;
 import androidx.lifecycle.Lifecycle;
 import androidx.lifecycle.ViewModelProvider;
 import androidx.test.core.app.ActivityScenario;
@@ -41,6 +46,7 @@ import org.junit.runner.RunWith;
 import static androidx.test.espresso.Espresso.onView;
 import static androidx.test.espresso.action.ViewActions.*;
 import static androidx.test.espresso.assertion.ViewAssertions.matches;
+import static androidx.test.espresso.assertion.ViewAssertions.doesNotExist;
 import static androidx.test.espresso.matcher.ViewMatchers.*;
 import static androidx.test.espresso.matcher.RootMatchers.isDialog;
 import static org.hamcrest.Matchers.allOf;
@@ -510,6 +516,123 @@ public class ErrorRecoveryCheckTest {
                 assertTrue(restoreCredential.commit());replies.get(2,TimeUnit.SECONDS);
             }
         } finally {running.set(false);serverWorker.shutdownNow();data.close();}
+    }
+
+    @Test @SdkSuppress(minSdkVersion=37)
+    public void restoredDeniedResultCannotOverrideCurrentlyGrantedLocalPermission() throws Exception {
+        Context context=InstrumentationRegistry.getInstrumentation().getTargetContext();
+        InstrumentationRegistry.getInstrumentation().getUiAutomation()
+            .grantRuntimePermission(context.getPackageName(),android.Manifest.permission.ACCESS_LOCAL_NETWORK);
+        SharedPreferences settings=context.getSharedPreferences("settings",Context.MODE_PRIVATE);
+        SharedPreferences credentials=context.getSharedPreferences("server_credentials",Context.MODE_PRIVATE);
+        Map<String,?> previousSettings=settings.getAll();LocalStore data=new LocalStore(context);Map<String,Integer> previousFeedback=data.feedback();
+        com.mptaptap.core.Track track=TrackJson.list(new JSONArray(ApiClient.read(context.getAssets().open("tracks.json")))).get(0);
+        String catalogue=new JSONArray().put(TrackJson.write(track)).toString();
+        AtomicBoolean running=new AtomicBoolean(true),replayed=new AtomicBoolean();
+        AtomicInteger savedReads=new AtomicInteger(),serverWrites=new AtomicInteger();AtomicReference<Throwable> serverFailure=new AtomicReference<>();
+        CountDownLatch metadataReceived=new CountDownLatch(1),metadataRelease=new CountDownLatch(1);
+        ExecutorService serverWorker=Executors.newSingleThreadExecutor();
+        try(ServerSocket server=new ServerSocket(0,5,InetAddress.getByName("127.0.0.1"))) {
+            server.setSoTimeout(500);String base="http://127.0.0.1:"+server.getLocalPort();
+            String previousCredential=credentials.getString(base,null),token="IIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII";
+            Future<?> replies=serverWorker.submit(()->{
+                while(running.get())try(Socket socket=server.accept()) {
+                    socket.setSoTimeout(5000);DataInputStream input=new DataInputStream(socket.getInputStream());
+                    String[] request=httpLine(input).split(" ");String header;int length=0;boolean authenticated=false;
+                    while(!(header=httpLine(input)).isEmpty()) {
+                        String lower=header.toLowerCase(java.util.Locale.ROOT);
+                        if(lower.startsWith("content-length:"))length=Integer.parseInt(header.substring(header.indexOf(':')+1).trim());
+                        if(lower.startsWith("authorization:"))authenticated=header.endsWith("Bearer "+token);
+                    }
+                    assertTrue("The test must reuse its seeded session",authenticated);assertTrue(length>=0&&length<=4096);
+                    byte[] body=new byte[length];input.readFully(body);
+                    if(!request[0].equals("GET")){serverWrites.incrementAndGet();throw new AssertionError("Unexpected server write: "+request[0]+" "+request[1]);}
+                    String content;
+                    switch(request[1]) {
+                        case "/health": content="{\"status\":\"ok\"}";break;
+                        case "/catalogue": content=catalogue;break;
+                        case "/me/feedback": content=new JSONObject().put(track.id,-1).toString();break;
+                        case "/me/saved-tracks":
+                            if(savedReads.incrementAndGet()==2){metadataReceived.countDown();assertTrue(metadataRelease.await(15,TimeUnit.SECONDS));}
+                            content="[]";break;
+                        default: throw new AssertionError("Unexpected test request: "+request[1]);
+                    }
+                    byte[] bytes=content.getBytes(StandardCharsets.UTF_8);
+                    String response="HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "+bytes.length+"\r\nConnection: close\r\n\r\n";
+                    socket.getOutputStream().write(response.getBytes(StandardCharsets.UTF_8));socket.getOutputStream().write(bytes);socket.getOutputStream().flush();
+                } catch(SocketTimeoutException timeout) {
+                    // The last metadata response waits while the historical permission result arrives.
+                } catch(Throwable error) {if(running.get())serverFailure.compareAndSet(null,error);return;}
+            });
+            try {
+                data.clearFeedback();data.react(track.id,1);
+                assertTrue(credentials.edit().putString(base,token).commit());assertTrue(settings.edit().putString("server",base).remove("prompt").commit());
+                try(ActivityScenario<MainActivity> app=ActivityScenario.launch(MainActivity.class)) {
+                    ready(app);assertEquals(1,savedReads.get());AtomicReference<Bundle> historical=new AtomicReference<>();
+                    app.onActivity(activity->{
+                        Bundle registered=new Bundle();activity.getActivityResultRegistry().onSaveInstanceState(registered);
+                        java.util.ArrayList<String> keys=registered.getStringArrayList("KEY_COMPONENT_ACTIVITY_REGISTERED_KEYS");
+                        java.util.ArrayList<Integer> codes=registered.getIntegerArrayList("KEY_COMPONENT_ACTIVITY_REGISTERED_RCS");
+                        assertNotNull(keys);assertNotNull(codes);int index=keys.indexOf("activity_rq#0");
+                        assertTrue("The local-permission launcher must be registered",index>=0);
+                        ActivityResultRegistry stopped=new ActivityResultRegistry(){
+                            @Override public <I,O> void onLaunch(int requestCode,ActivityResultContract<I,O> contract,I input,ActivityOptionsCompat options){
+                                throw new AssertionError("A historical result must not launch a permission request");
+                            }
+                        };
+                        registered.putStringArrayList("KEY_COMPONENT_ACTIVITY_LAUNCHED_KEYS",new java.util.ArrayList<>(Collections.singletonList(keys.get(index))));
+                        stopped.onRestoreInstanceState(registered);
+                        Intent denied=new Intent().putExtra(ActivityResultContracts.RequestMultiplePermissions.EXTRA_PERMISSIONS,
+                            new String[]{android.Manifest.permission.ACCESS_LOCAL_NETWORK})
+                            .putExtra(ActivityResultContracts.RequestMultiplePermissions.EXTRA_PERMISSION_GRANT_RESULTS,
+                                new int[]{android.content.pm.PackageManager.PERMISSION_DENIED});
+                        assertFalse(new ActivityResultContracts.RequestPermission().parseResult(Activity.RESULT_OK,denied));
+                        // Raw results survive the Bundle round trip; the parsed Boolean overload does not.
+                        assertTrue(stopped.dispatchResult(codes.get(index),Activity.RESULT_OK,denied));
+                        Bundle saved=new Bundle();stopped.onSaveInstanceState(saved);
+                        assertTrue(saved.getBundle("KEY_COMPONENT_ACTIVITY_PENDING_RESULT").containsKey(keys.get(index)));historical.set(saved);
+                    });
+                    ActivityLifecycleCallback replay=(activity,stage)->{
+                        if(activity instanceof MainActivity&&stage==Stage.CREATED&&replayed.compareAndSet(false,true)) {
+                            assertEquals(android.content.pm.PackageManager.PERMISSION_GRANTED,
+                                activity.checkSelfPermission(android.Manifest.permission.ACCESS_LOCAL_NETWORK));
+                            ((MainActivity)activity).getActivityResultRegistry().onRestoreInstanceState(historical.get());
+                        }
+                    };
+                    InstrumentationRegistry.getInstrumentation().runOnMainSync(()->ActivityLifecycleMonitorRegistry.getInstance().addLifecycleCallback(replay));
+                    try {
+                        app.recreate();assertTrue("The historical result must be restored before START",replayed.get());
+                        assertTrue("The recreated screen must be reading server metadata",metadataReceived.await(5,TimeUnit.SECONDS));
+                        assertNull("Test server failure",serverFailure.get());
+                        assertEquals(android.content.pm.PackageManager.PERMISSION_GRANTED,context.checkSelfPermission(android.Manifest.permission.ACCESS_LOCAL_NETWORK));
+                        assertEquals("A historical denial must not remove a currently granted server",base,settings.getString("server",""));
+                        onView(withText("서버에 연결하지 않았어요")).check(doesNotExist());
+                        onView(withId(R.id.mode_label)).check(matches(withText(startsWith("온라인 추천"))));
+                        onView(withId(R.id.progress)).check(matches(withEffectiveVisibility(Visibility.VISIBLE)));
+                        metadataRelease.countDown();ready(app);
+                        assertEquals(base,settings.getString("server",""));onView(withId(R.id.mode_label)).check(matches(withText(startsWith("온라인 추천"))));
+                        onView(withId(R.id.recommend)).check(matches(isEnabled()));onView(withText("서버에 연결하지 않았어요")).check(doesNotExist());
+                        onView(withId(R.id.settings)).perform(click());onView(withText("곡 데이터와 이용 안내")).inRoot(isDialog()).perform(scrollTo(),click());
+                        onView(withText(containsString("검증한 1곡"))).inRoot(isDialog()).check(matches(isDisplayed()));
+                        androidx.test.espresso.Espresso.pressBack();androidx.test.espresso.Espresso.pressBack();
+                        assertEquals(Collections.singletonMap(track.id,1),data.feedback());assertEquals(0,serverWrites.get());assertEquals(2,savedReads.get());assertNull("Test server failure",serverFailure.get());
+                    } finally {
+                        metadataRelease.countDown();
+                        InstrumentationRegistry.getInstrumentation().runOnMainSync(()->ActivityLifecycleMonitorRegistry.getInstance().removeLifecycleCallback(replay));
+                    }
+                }
+            } finally {
+                running.set(false);metadataRelease.countDown();server.close();
+                data.clearFeedback();for(Map.Entry<String,Integer> reaction:previousFeedback.entrySet())data.react(reaction.getKey(),reaction.getValue());
+                SharedPreferences.Editor restore=settings.edit();
+                for(String key:new String[]{"server","prompt"}) {
+                    if(previousSettings.containsKey(key))restore.putString(key,(String)previousSettings.get(key));else restore.remove(key);
+                }
+                assertTrue(restore.commit());SharedPreferences.Editor restoreCredential=credentials.edit();
+                if(previousCredential==null)restoreCredential.remove(base);else restoreCredential.putString(base,previousCredential);
+                assertTrue(restoreCredential.commit());replies.get(2,TimeUnit.SECONDS);
+            }
+        } finally {running.set(false);metadataRelease.countDown();serverWorker.shutdownNow();data.close();}
     }
 
     @Test public void playlistNameFailuresKeepDraftAndAllowRetry() throws Exception {
