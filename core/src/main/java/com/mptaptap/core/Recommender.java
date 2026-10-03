@@ -17,7 +17,7 @@ import java.util.regex.Pattern;
 public final class Recommender {
     public static final Map<String, String> LABELS = new LinkedHashMap<>();
     private static final Map<String, String> WORDS = new LinkedHashMap<>();
-    static final List<String> GENRES = List.of("acoustic", "ballad", "kpop", "pop", "rock", "piano",
+    public static final List<String> GENRES = List.of("acoustic", "ballad", "kpop", "pop", "rock", "piano",
             "jazz", "classical", "hiphop", "rnb", "edm", "blues", "metal", "unsupported_genre");
     static {
         String[][] vocabulary = {
@@ -87,7 +87,7 @@ public final class Recommender {
                 +"|추천(?:해\\s*줘|해\\s*주세요|해주세요|해)?|으로|로|바꿔\\s*(?:줘|주세요)|듣고\\s*싶어"
                 +"|빼고|빼|제외하고|제외|말고|[은는을를가이도만와과]"
                 +"|하게|한|게|할|때|날|에|더"
-                +"|\\b(?:reset|start\\s+over|recommend|music|songs?|genre|please|only|instead|no|not|and|or)\\b)*");
+                +"|\\b(?:reset|start\\s+over|recommend|music|songs?|genre|please|only|instead|no|not|exclude|avoid|without|and|or)\\b)*");
     }
 
     public static Conditions parse(String request) {
@@ -99,9 +99,9 @@ public final class Recommender {
             java.util.regex.Matcher matcher = Pattern.compile(word.getValue()).matcher(input);
             while (matcher.find()) {
                 String tail = input.substring(matcher.end(), Math.min(input.length(), matcher.end() + 15));
-                String head = input.substring(Math.max(0, matcher.start() - 4), matcher.start());
+                String head = input.substring(0, matcher.start());
                 boolean negative = tail.matches("^[한은는을를가이도만\\s]*(?:음악|노래|곡|건|장르)?[은는을를가이도만\\s]*(?:빼|제외|말고|싫|아니|없).*" )
-                    || head.matches(".*(?:no |not )$");
+                    || head.matches("(?s).*\\b(?:no|not|exclude|avoid|without)\\s+$");
                 List<String> target = negative ? c.excludedTags : c.tags;
                 if (!target.contains(word.getKey())) target.add(word.getKey());
             }

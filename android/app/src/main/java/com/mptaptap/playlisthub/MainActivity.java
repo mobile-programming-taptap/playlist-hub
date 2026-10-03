@@ -79,6 +79,7 @@ public class MainActivity extends AppCompatActivity {
     private SharedPreferences settings;
     private String storageIdentity="";
     private boolean returningFromHub;
+    private Intent pendingHubPlaylist;
     private boolean foregroundSeen;
     private boolean foregroundActive;
     private ApiClient foregroundRefreshSource;
@@ -114,6 +115,12 @@ public class MainActivity extends AppCompatActivity {
     private String pendingPermissionBase;
     private boolean pendingServerConnection;
     private final ActivityResultLauncher<String> localPermission = registerForActivityResult(new ActivityResultContracts.RequestPermission(), this::completeLocalPermission);
+    private final ActivityResultLauncher<Intent> hub = registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result->{
+        Intent data=result.getData();
+        if(result.getResultCode()!=RESULT_OK||data==null||!data.getBooleanExtra("openPlaylist",false))return;
+        pendingHubPlaylist=new Intent(data);returningFromHub=true;
+        if(foregroundActive&&settings!=null){foregroundRefreshSource=api;foregroundRefreshIdentity=RecommendationRequest.identity(api);findViewById(R.id.main).post(this::refreshForeground);}
+    });
 
     private void completeLocalPermission(boolean granted) {
         if(android.os.Build.VERSION.SDK_INT>=37)granted=checkSelfPermission(android.Manifest.permission.ACCESS_LOCAL_NETWORK)==android.content.pm.PackageManager.PERMISSION_GRANTED;
@@ -148,7 +155,7 @@ public class MainActivity extends AppCompatActivity {
             ApiClient.ownerFingerprint(state.getString("storageBase",base),state.getString("storageIdentity",storageIdentity))));
         if(!sameStorage||!settings.getString("conversationOwner","").equals(storageOwner))settings.edit().remove("conversation").apply();
         try {JSONArray history=new JSONArray(settings.getString("conversation","[]"));for(int i=Math.max(0,history.length()-8);i<history.length();i++)conversation.add(history.getString(i));}catch(Exception ignored) { }
-        if(state!=null){returningFromHub=state.getBoolean("returningFromHub");pendingPermissionBase=state.getString("pendingPermissionBase");pendingServerConnection=state.getBoolean("pendingServerConnection");}
+        if(state!=null){returningFromHub=state.getBoolean("returningFromHub");pendingHubPlaylist=state.getParcelable("pendingHubPlaylist");pendingPermissionBase=state.getString("pendingPermissionBase");pendingServerConnection=state.getBoolean("pendingServerConnection");}
         prompt = findViewById(R.id.prompt); prompt.setText(settings.getString("prompt", ""));
         if (state != null && sameStorage) {
             restoredRefinement=state.getString("refinementDraft");
@@ -264,11 +271,11 @@ public class MainActivity extends AppCompatActivity {
     private void refreshAfterRecreation(Bundle state,Exception interruptedError) {
         String base=settings.getString("server","");
         if(!base.equals(api==null?"":api.base)) {
-            try {api=base.isEmpty()?null:new ApiClient(this,base);clearStorageResults();}
+            try {api=base.isEmpty()?null:new ApiClient(this,base);conversation.clear();settings.edit().remove("conversation").apply();clearStorageResults();}
             catch(Exception error){showError("저장된 서버 주소를 확인해 주세요.",null);return;}
         }
         networkPermission(api==null?"":api.base,()->refreshData(()->{
-            if(state!=null&&state.getBoolean("library"))((BottomNavigationView)findViewById(R.id.navigation)).setSelectedItemId(R.id.nav_library);
+            if(!openPendingHubPlaylist()&&state!=null&&state.getBoolean("library"))((BottomNavigationView)findViewById(R.id.navigation)).setSelectedItemId(R.id.nav_library);
             if(interruptedError!=null)showError(errorMessage(interruptedError),null);
         }));
     }
@@ -363,7 +370,20 @@ public class MainActivity extends AppCompatActivity {
         stopPlayer();returningFromHub=true;
         Intent intent=new Intent(this,HubActivity.class).putExtra("mode",mode);
         if(id!=null)intent.putExtra("playlistId",id);
-        startActivity(intent);
+        hub.launch(intent);
+    }
+
+    private boolean openPendingHubPlaylist() {
+        if(pendingHubPlaylist==null||!metadataReady)return false;
+        Intent result=pendingHubPlaylist;pendingHubPlaylist=null;
+        String base=api==null?"":api.base,id=result.getStringExtra("playlistId");
+        if(id==null||id.isEmpty()||!base.equals(result.getStringExtra("serverBase"))
+                ||!ApiClient.ownerFingerprint(base,api==null?"local":api.identity()).equals(result.getStringExtra("owner"))){
+            showError("계정 또는 서버가 변경되어 저장한 목록을 열 수 없어요.",null);return false;
+        }
+        restoredPlaylistId=id;restoredLibraryScroll=0;
+        ((BottomNavigationView)findViewById(R.id.navigation)).setSelectedItemId(R.id.nav_library);
+        return true;
     }
 
     @Override protected void onResume() {
@@ -378,10 +398,11 @@ public class MainActivity extends AppCompatActivity {
         ApiClient source=foregroundRefreshSource;String owner=foregroundRefreshIdentity;
         foregroundRefreshSource=null;foregroundRefreshIdentity=null;
         String selected=settings.getString("server","").trim().replaceAll("/+$","");
-        if(api!=source||!owner.equals(RecommendationRequest.identity(source))||!selected.equals(source==null?"":source.base))return;
+        if(api!=source||!owner.equals(RecommendationRequest.identity(source)))return;
+        if(!selected.equals(source==null?"":source.base)){refreshAfterRecreation(null,null);return;}
         String identity=api==null?"local":api.identity();
         if(!identity.equals(storageIdentity)){storageIdentity=identity;conversation.clear();settings.edit().remove("conversation").apply();clearStorageResults();}
-        refreshData(()->{storageIdentity=api==null?"local":api.identity();if(librarySelected){if(playlistId==null)loadLibrary();else openPlaylist(playlistId);}});
+        refreshData(()->{storageIdentity=api==null?"local":api.identity();if(!openPendingHubPlaylist()&&librarySelected){if(playlistId==null)loadLibrary();else openPlaylist(playlistId);}});
     }
 
     private void showRecommendation(Object[] result) {
@@ -1089,6 +1110,7 @@ public class MainActivity extends AppCompatActivity {
         state.putString("libraryQuery", libraryQuery);
         state.putString("storageBase",api==null?"":api.base);
         state.remove("storageIdentity");state.putString("storageOwner",ApiClient.ownerFingerprint(api==null?"":api.base,storageIdentity));state.putBoolean("returningFromHub",returningFromHub);
+        state.putParcelable("pendingHubPlaylist",pendingHubPlaylist);
         if(refinementPrompt!=null){state.putString("refinementDraft",refinementPrompt.getText().toString());
             List<String> kept=new ArrayList<>();for(Map.Entry<String,android.widget.CheckBox> entry:refinementChoices.entrySet())if(entry.getValue().isChecked())kept.add(entry.getKey());
             state.putString("refinementKeeps",new JSONArray(kept).toString());}

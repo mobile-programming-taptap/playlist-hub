@@ -81,6 +81,19 @@ public final class RecommendationCheck {
         assert Recommender.recommend(tracks, conditions, feedback, "basic").tracks.get(0).track.id.equals(tracks.get(8).id);
         assert Recommender.parse("신나는 곡은 빼고 잔잔한 곡").excludedTags.contains("energetic");
         assert Recommender.parse("가사 없는 곡은 빼고").excludedTags.contains("instrumental");
+        for(String request:List.of("exclude piano","avoid piano","without piano","EXCLUDE piano","avoid   piano","without\tpiano","without\npiano","no piano","not piano","no   piano","not\tpiano","피아노 제외")) {
+            Recommender.Conditions negative=Recommender.parse(request);
+            assert negative.tags.isEmpty()&&negative.excludedTags.equals(List.of("piano")):request;
+            assert Recommender.isKnownConditionRequest(request):request;
+            assert Recommender.recommend(tracks,negative,feedback,"basic").tracks.stream().noneMatch(p->p.track.tags.contains("piano")):request;
+        }
+        for(String request:List.of("notreally piano","noise piano","cannot piano","volcano piano","unexclude piano","unavoid piano","withoutness piano")) {
+            Recommender.Conditions positive=Recommender.parse(request);
+            assert positive.tags.equals(List.of("piano"))&&positive.excludedTags.isEmpty():request;
+            assert !Recommender.isKnownConditionRequest(request):request;
+        }
+        Recommender.Conditions contrasting=Recommender.parse("piano without rock");
+        assert contrasting.tags.equals(List.of("piano"))&&contrasting.excludedTags.equals(List.of("rock"));
         Recommender.Result vocals = Recommender.recommend(tracks, Recommender.parse("no instrumental"), feedback, "basic");
         assert vocals.tracks.size() == 3;
         assert vocals.tracks.stream().allMatch(p -> !p.track.language.equals("none"));

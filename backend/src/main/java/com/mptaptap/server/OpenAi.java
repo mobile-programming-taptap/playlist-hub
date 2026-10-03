@@ -51,7 +51,8 @@ public class OpenAi {
         Map<String, Object> tagArray = Map.of("type", "array", "items", Map.of("type", "string", "enum", Recommender.LABELS.keySet()));
         Map<String, Object> schema = Map.of("type", "object", "additionalProperties", false,
                 "required", List.of("tags", "excludedTags", "language", "languageSpecified"), "properties", Map.of(
-                    "tags", tagArray, "excludedTags", tagArray,
+                    "tags", tagArray, "excludedTags", Map.of("type", "array", "items", tagArray.get("items"), "description",
+                        "Only directly requested negatives or unchanged explicit snapshot exclusions. Never expand only or a requested genre into a complement of other tags."),
                     "language", Map.of("type", "string", "enum", List.of("", "ko", "en", "none", "unsupported"),
                         "description", "Requested vocal language only. Never infer it from input text language or genre. Keep the prior value when unchanged; use empty when unspecified without a prior constraint, or after reset."),
                     "languageSpecified", Map.of("type", "boolean", "description",
@@ -59,6 +60,7 @@ public class OpenAi {
         Map<String, Object> body = Map.of("model", model, "store", false, "max_output_tokens", 300,
                 "instructions", "Extract music preferences from the user's request. Return only supported tags. " +
                     "Recognize Korean/English moods, situations, genres and negation. Use excludedTags for preferences to avoid. " +
+                    "Use excludedTags only for directly requested negatives or unchanged explicit snapshot exclusions; never expand only or a requested genre into a complement of other tags. " +
                     "Keep explicitly requested genres even when this catalogue has no matching songs. " +
                     "For an explicitly requested genre absent from the tag enum, use unsupported_genre in tags; never replace it with a different genre or silently remove it. " +
                     "Use unsupported_genre in excludedTags only when that unlisted genre is explicitly excluded. " +
@@ -90,7 +92,21 @@ public class OpenAi {
                     JsonNode payload=json.readTree(content.path("text").asString());
                     if(!(payload instanceof ObjectNode object)||!object.path("languageSpecified").isBoolean())throw new IllegalStateException("AI_LANGUAGE_UNCONFIRMED");
                     boolean languageSpecified=object.remove("languageSpecified").asBoolean();
-                    Recommender.Conditions interpreted=Recommender.validate(json.treeToValue(object,Recommender.Conditions.class));
+                    Recommender.Conditions raw=json.treeToValue(object,Recommender.Conditions.class);
+                    boolean positiveUnknown=raw!=null&&raw.tags!=null&&raw.tags.contains("unsupported_genre");
+                    boolean conflictingUnknown=positiveUnknown&&raw.excludedTags!=null&&raw.excludedTags.contains("unsupported_genre");
+                    boolean genreComplement=positiveUnknown&&raw.excludedTags!=null&&Recommender.GENRES.stream()
+                            .filter(tag->!tag.equals("unsupported_genre")).allMatch(raw.excludedTags::contains);
+                    Recommender.Conditions interpreted=Recommender.validate(raw);
+                    if(genreComplement) {
+                        // Normalize only a complete supported-genre complement, preserving direct/history and snapshot exclusions.
+                        interpreted.excludedTags=Conversation.parse(previousConditions,history,prompt).excludedTags;
+                    }
+                    if(conflictingUnknown||genreComplement) {
+                        // One marker cannot distinguish two unlisted genres; preserve the positive constraint rather than return unrelated songs.
+                        interpreted.excludedTags.remove("unsupported_genre");
+                        interpreted.tags.add("unsupported_genre");
+                    }
                     if(!languageSpecified) {
                         interpreted.language=previousConditions==null?"":Conversation.parse(previousConditions,List.of(),prompt).language;
                         if(!interpreted.language.equals("none"))interpreted.tags.remove("instrumental");
