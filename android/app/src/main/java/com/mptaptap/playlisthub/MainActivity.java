@@ -4,6 +4,12 @@ import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Typeface;
+import android.graphics.Bitmap;
+import android.graphics.Color;
+import android.graphics.drawable.ColorDrawable;
+import android.graphics.drawable.Drawable;
+import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.LayerDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.text.InputFilter;
@@ -33,6 +39,7 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.widget.AppCompatEditText;
 import androidx.appcompat.widget.AppCompatTextView;
 import androidx.core.graphics.Insets;
+import androidx.core.graphics.ColorUtils;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.lifecycle.ViewModelProvider;
@@ -83,6 +90,7 @@ public class MainActivity extends AppCompatActivity {
     private String resultMode = "basic";
     private String resultNotice = "";
     private boolean hasResults;
+    private int navigationInset;
     private Recommender.Conditions resultConditions = new Recommender.Conditions();
     private Set<String> hiddenTracks = new HashSet<>();
     private String restoredPlaylistId;
@@ -108,12 +116,16 @@ public class MainActivity extends AppCompatActivity {
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state); EdgeToEdge.enable(this); setContentView(R.layout.activity_main);
+        getWindow().setNavigationBarColor(getColor(R.color.deck_surface));
+        ((BottomNavigationView)findViewById(R.id.navigation)).setItemActiveIndicatorEnabled(false);
         recommendation=new ViewModelProvider(this).get(RecommendationRequest.class);
         pendingTask=new ViewModelProvider(this).get(PendingTask.class);
         ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main), (v, insets) -> {
             Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.displayCutout());
             int keyboard = insets.getInsets(WindowInsetsCompat.Type.ime()).bottom;
+            navigationInset=bars.bottom;
             v.setPadding(bars.left, bars.top, bars.right, Math.max(bars.bottom, keyboard));
+            if(pager!=null)updateDiscoverAppearance();
             return WindowInsetsCompat.CONSUMED;
         });
         local = new LocalStore(this); settings = getSharedPreferences("settings", MODE_PRIVATE);
@@ -137,6 +149,7 @@ public class MainActivity extends AppCompatActivity {
             findViewById(R.id.results).setVisibility(View.GONE); findViewById(R.id.empty).setVisibility(View.GONE);
             findViewById(R.id.card_navigation).setVisibility(View.GONE);
             ((androidx.core.widget.NestedScrollView)findViewById(R.id.recommend_scroll)).scrollTo(0, 0);
+            updateDiscoverAppearance();
             prompt.requestFocus(); prompt.setSelection(prompt.length());
             ((InputMethodManager)getSystemService(INPUT_METHOD_SERVICE)).showSoftInput(prompt, InputMethodManager.SHOW_IMPLICIT);
         });
@@ -155,6 +168,7 @@ public class MainActivity extends AppCompatActivity {
             librarySelected = item.getItemId() == R.id.nav_library; stopPlayer();
             findViewById(R.id.recommend_page).setVisibility(librarySelected ? View.GONE : View.VISIBLE);
             findViewById(R.id.library_scroll).setVisibility(librarySelected ? View.VISIBLE : View.GONE);
+            updateDiscoverAppearance();
             if (librarySelected && !busy) {
                 playlistId = null;
                 if (restoredPlaylistId == null) loadLibrary();
@@ -312,20 +326,69 @@ public class MainActivity extends AppCompatActivity {
             case "none": if(!resultConditions.tags.contains("instrumental"))conditions.add("연주곡"); break;
             case "unsupported": conditions.add("현재 없는 언어"); break;
         }
-        ((TextView)findViewById(R.id.condition_summary)).setText("추천 조건 · "+(conditions.isEmpty() ? "다양한 음악" : android.text.TextUtils.join(" · ",conditions)));
+        ((TextView)findViewById(R.id.condition_summary)).setText(conditions.isEmpty() ? "다양한 음악" : android.text.TextUtils.join(" · ",conditions));
+        findViewById(R.id.condition_summary).setContentDescription("추천 조건: "+((TextView)findViewById(R.id.condition_summary)).getText());
         pager.setVisibility(picks.isEmpty() ? View.GONE : View.VISIBLE);
         findViewById(R.id.card_navigation).setVisibility(picks.isEmpty() ? View.GONE : View.VISIBLE);
         findViewById(R.id.save_results).setVisibility(picks.isEmpty() ? View.GONE : View.VISIBLE);
         findViewById(R.id.save_results).setEnabled(!busy && metadataReady && !picks.isEmpty());
-        ((MaterialButton)findViewById(R.id.save_results)).setText("추천 "+picks.size()+"곡 모두 저장");
+        ((MaterialButton)findViewById(R.id.save_results)).setText("모두 저장");
+        findViewById(R.id.save_results).setContentDescription("추천 "+picks.size()+"곡 모두 저장");
+        updateDiscoverAppearance();
         cards.notifyDataSetChanged(); updateCounter(); findViewById(R.id.results).post(this::resizeCard);
     }
 
     private void resizeCard() {
         if (findViewById(R.id.results).getVisibility()!=View.VISIBLE || picks.isEmpty()) return;
-        int available=findViewById(R.id.recommend_scroll).getHeight()-pager.getTop()-dp(16);
+        int available=findViewById(R.id.recommend_scroll).getHeight()-pager.getTop()-findViewById(R.id.results_header).getHeight()-dp(12);
         int height=Math.max(dp(180), available);
         if (pager.getLayoutParams().height!=height) { pager.getLayoutParams().height=height;pager.requestLayout(); }
+    }
+
+    private void updateDiscoverAppearance() {
+        if(pager==null)return;
+        boolean showing=hasResults&&findViewById(R.id.results).getVisibility()==View.VISIBLE&&!librarySelected;
+        findViewById(R.id.header_caption).setVisibility(showing?View.GONE:View.VISIBLE);
+        findViewById(R.id.notice).setVisibility(showing?View.VISIBLE:View.GONE);
+        findViewById(R.id.counter).setVisibility(showing?View.VISIBLE:View.GONE);
+        TextView title=findViewById(R.id.header_title),caption=findViewById(R.id.header_caption);
+        title.setText(librarySelected?"내 음악":showing?"오늘의 추천":"TapTap");
+        caption.setText(librarySelected?"좋아하는 음악을 모아두는 곳":"하루를 닮은 음악");
+        int ink=getColor(librarySelected?R.color.ink:R.color.discover_ink);
+        title.setTextColor(ink);caption.setTextColor(getColor(librarySelected?R.color.muted:R.color.discover_muted));
+        ((MaterialButton)findViewById(R.id.settings)).setIconTint(android.content.res.ColorStateList.valueOf(ink));
+        Drawable background;
+        if(librarySelected)background=new ColorDrawable(getColor(R.color.background));
+        else {
+            Bitmap photo=showing&&!picks.isEmpty()?artwork.peek(picks.get(Math.min(pager.getCurrentItem(),picks.size()-1)).track.youtubeVideoId):null;
+            if(photo==null)background=getDrawable(R.drawable.discover_background);
+            else {
+                float red=0,green=0,blue=0,total=0;float[] hsv=new float[3];
+                // A small sample follows the artwork's colour without analysing it for recommendations.
+                for(int y=1;y<10;y++)for(int x=1;x<10;x++){
+                    int pixel=photo.getPixel(x*photo.getWidth()/10,y*photo.getHeight()/10);
+                    Color.colorToHSV(pixel,hsv);float weight=hsv[1]*hsv[2];
+                    if(hsv[2]<.18f||weight<.08f)continue;
+                    red+=Color.red(pixel)*weight;green+=Color.green(pixel)*weight;blue+=Color.blue(pixel)*weight;total+=weight;
+                }
+                if(total==0)background=getDrawable(R.drawable.discover_background);
+                else {
+                    Color.colorToHSV(Color.rgb(Math.round(red/total),Math.round(green/total),Math.round(blue/total)),hsv);
+                    hsv[1]=Math.max(.4f,Math.min(.66f,hsv[1]));hsv[2]=1f;int top=Color.HSVToColor(hsv);
+                    int middle=ColorUtils.blendARGB(top,Color.rgb(43,25,39),.46f);
+                    hsv[0]=(hsv[0]+22)%360;hsv[1]=.66f;hsv[2]=.24f;int bottom=Color.HSVToColor(hsv);
+                    background=new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,new int[]{top,middle,bottom});
+                }
+            }
+        }
+        LayerDrawable layers=new LayerDrawable(new Drawable[]{background,new ColorDrawable(getColor(R.color.deck_surface))});
+        layers.setLayerGravity(1,android.view.Gravity.BOTTOM);layers.setLayerHeight(1,navigationInset);
+        findViewById(R.id.main).setBackground(layers);
+        androidx.core.view.WindowInsetsControllerCompat bars=ViewCompat.getWindowInsetsController(findViewById(R.id.main));
+        if(bars!=null){
+            boolean night=(getResources().getConfiguration().uiMode&android.content.res.Configuration.UI_MODE_NIGHT_MASK)==android.content.res.Configuration.UI_MODE_NIGHT_YES;
+            bars.setAppearanceLightStatusBars(!librarySelected||!night);bars.setAppearanceLightNavigationBars(false);
+        }
     }
 
     private void editResult(Track track) {
@@ -366,6 +429,7 @@ public class MainActivity extends AppCompatActivity {
         TextView counter=findViewById(R.id.counter);
         counter.setContentDescription(picks.isEmpty()?"추천 곡 없음":"총 "+picks.size()+"곡 중 "+index+"번째 곡");
         counter.setText(index + " / " + picks.size());
+        updateDiscoverAppearance();
         findViewById(R.id.previous).setEnabled(!busy && index > 1);
         findViewById(R.id.next).setEnabled(!busy && index > 0 && index < picks.size());
         findViewById(R.id.previous).setAlpha(!busy && index>1 ? 1f : 0.45f);
@@ -792,7 +856,7 @@ public class MainActivity extends AppCompatActivity {
         findViewById(R.id.request_panel).setVisibility(View.VISIBLE);
         findViewById(R.id.results).setVisibility(View.GONE);
         findViewById(R.id.card_navigation).setVisibility(View.GONE);
-        TextView empty=findViewById(R.id.empty);empty.setText(R.string.home_empty);empty.setVisibility(View.VISIBLE);cards.notifyDataSetChanged();
+        TextView empty=findViewById(R.id.empty);empty.setText(R.string.home_empty);empty.setVisibility(View.VISIBLE);cards.notifyDataSetChanged();updateDiscoverAppearance();
     }
     private void clearStorageResults(){
         metadataReady=false;catalogue=new ArrayList<>();feedback=new HashMap<>();savedTracks=new HashSet<>();
@@ -831,7 +895,9 @@ public class MainActivity extends AppCompatActivity {
         @NonNull @Override public RecyclerView.ViewHolder onCreateViewHolder(@NonNull ViewGroup parent,int type){
             View card=LayoutInflater.from(parent.getContext()).inflate(R.layout.track_card,parent,false);
             card.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->{
-                View image=v.findViewById(R.id.artwork);int height=Math.max(dp(80),Math.min(r-l,b-t-dp(200)));
+                View image=v.findViewById(R.id.artwork);
+                int details=v.findViewById(R.id.track_details).getMeasuredHeight();
+                int height=Math.max(dp(80),Math.min(Math.round((r-l)*1.18f),b-t-details-dp(32)));
                 if(image.getLayoutParams().height!=height){image.getLayoutParams().height=height;image.requestLayout();}
             });
             return new RecyclerView.ViewHolder(card){};
@@ -844,7 +910,9 @@ public class MainActivity extends AppCompatActivity {
             ((TextView)view.findViewById(R.id.reason)).setText(pick.reason);
             List<String> labels=new ArrayList<>();for(String tag:track.tags)if(Recommender.LABELS.containsKey(tag)&&labels.size()<3)labels.add(Recommender.LABELS.get(tag));
             ((TextView)view.findViewById(R.id.track_tags)).setText(android.text.TextUtils.join("  ·  ",labels));
-            artwork.load((ImageView)view.findViewById(R.id.track_artwork),track.youtubeVideoId);
+            artwork.load((ImageView)view.findViewById(R.id.track_artwork),track.youtubeVideoId,bitmap->{
+                if(!picks.isEmpty()&&picks.get(Math.min(pager.getCurrentItem(),picks.size()-1)).track.id.equals(track.id))updateDiscoverAppearance();
+            });
             MaterialButton save=view.findViewById(R.id.save);
             save.setText(savedTracks.contains(track.id)?"저장됨 · 추가":"목록에 저장");save.setOnClickListener(v->chooseSave(track));
             view.findViewById(R.id.external).setOnClickListener(v->external(track));

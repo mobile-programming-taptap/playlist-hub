@@ -4,7 +4,10 @@
     <color name="ink">#1E293B</color><color name="muted">#5D6B80</color>
     <color name="line">#DCE3EF</color><color name="soft_accent">#FFE8EB</color>
     <color name="teal">#13746B</color><color name="on_teal">#FFFFFF</color><color name="soft_teal">#DDF4EF</color>
-    <color name="card_surface">#17252D</color><color name="card_ink">#FFFFFF</color>
-    <color name="card_muted">#BECBD3</color><color name="card_teal">#76DECF</color>
-    <color name="card_line">#455A65</color><color name="control_play">#253B46</color>
+    <color name="discover_ink">#182125</color><color name="discover_muted">#263035</color>
+    <color name="deck_surface">#12191D</color><color name="deck_muted">#939A9D</color>
+    <color name="deck_accent">#D9FF00</color><color name="like_green">#23C768</color><color name="dislike_red">#F83E60</color>
+    <color name="card_surface">@color/deck_surface</color><color name="card_ink">#FFFFFF</color>
+    <color name="card_muted">@color/deck_muted</color><color name="card_teal">@color/deck_accent</color>
+    <color name="card_line">#343D42</color><color name="control_play">#11171B</color>
 </resources>
