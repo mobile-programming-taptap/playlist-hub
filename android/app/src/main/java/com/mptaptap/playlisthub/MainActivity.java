@@ -89,15 +89,19 @@ public class MainActivity extends AppCompatActivity {
     private AlertDialog playerDialog;
     private final Set<AlertDialog> dialogs=java.util.Collections.newSetFromMap(new java.util.WeakHashMap<>());
     private Runnable pendingConnection;
-    private final ActivityResultLauncher<String> localPermission = registerForActivityResult(new ActivityResultContracts.RequestPermission(), granted -> {
+    private String pendingPermissionBase;
+    private boolean pendingServerConnection;
+    private final ActivityResultLauncher<String> localPermission = registerForActivityResult(new ActivityResultContracts.RequestPermission(), this::completeLocalPermission);
+
+    private void completeLocalPermission(boolean granted) {
         Runnable action=pendingConnection;pendingConnection=null;
-        if(granted&&action!=null)action.run();
-        else {
-            if(api!=null&&ApiClient.localHost(java.net.URI.create(api.base).getHost())){settings.edit().remove("server").apply();api=null;clearStorageResults();refreshData(()->{});}
-            dialogBuilder().setTitle("서버에 연결하지 않았어요")
-                .setMessage("로컬 서버 연결에는 근처 기기 권한이 필요해요. 기본 추천은 계속 사용할 수 있어요.").setPositiveButton("확인",null).show();
-        }
-    });
+        pendingPermissionBase=null;pendingServerConnection=false;
+        if(granted){if(action!=null)action.run();return;}
+        if(api!=null&&ApiClient.localHost(java.net.URI.create(api.base).getHost())){settings.edit().remove("server").apply();api=null;clearStorageResults();}
+        refreshData(()->{if(librarySelected)loadLibrary();});
+        dialogBuilder().setTitle("서버에 연결하지 않았어요")
+            .setMessage("로컬 서버 연결에는 근처 기기 권한이 필요해요. 기본 추천은 계속 사용할 수 있어요.").setPositiveButton("확인",null).show();
+    }
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state); EdgeToEdge.enable(this); setContentView(R.layout.activity_main);
@@ -112,6 +116,7 @@ public class MainActivity extends AppCompatActivity {
         local = new LocalStore(this); settings = getSharedPreferences("settings", MODE_PRIVATE);
         String base = settings.getString("server", "");
         boolean sameStorage=state==null||base.equals(state.getString("storageBase",base));
+        if(state!=null){pendingPermissionBase=state.getString("pendingPermissionBase");pendingServerConnection=state.getBoolean("pendingServerConnection");}
         prompt = findViewById(R.id.prompt); prompt.setText(settings.getString("prompt", ""));
         if (state != null && sameStorage) {
             libraryQuery = state.getString("libraryQuery", "");
@@ -199,7 +204,13 @@ public class MainActivity extends AppCompatActivity {
             pendingTask.consume(pending);
             refreshAfterRecreation(state,pending.error);
         });
-        if(pendingTask.current()==null)refreshAfterRecreation(state,null);
+        if(pendingPermissionBase!=null) {
+            if(pendingServerConnection) {
+                ApiClient candidate=new ApiClient(this,pendingPermissionBase);
+                pendingConnection=()->task(()->storeConnection(candidate),data->applyStorage(candidate,data),null);
+            } else pendingConnection=()->refreshAfterRecreation(state,null);
+            if(checkSelfPermission(android.Manifest.permission.ACCESS_LOCAL_NETWORK)==android.content.pm.PackageManager.PERMISSION_GRANTED)completeLocalPermission(true);
+        } else if(pendingTask.current()==null)refreshAfterRecreation(state,null);
     }
 
     private void refreshAfterRecreation(Bundle state,Exception interruptedError) {
@@ -700,7 +711,7 @@ public class MainActivity extends AppCompatActivity {
                 }catch(Exception error){
                     runOnUiThread(()->{if(!isDestroyed()&&dialog.isShowing()){failure.setText("서버에 연결하지 못했어요. 주소와 서버 실행 상태를 확인해 주세요.");failure.setVisibility(View.VISIBLE);address.setError(failure.getText());box.setFocusableInTouchMode(true);box.requestFocus();}});throw error;
                 }
-            },data->{dialog.dismiss();applyStorage(candidate,data);},null));
+            },data->{dialog.dismiss();applyStorage(candidate,data);},null),true);
         }));
         if(api!=null)box.addView(button("이 기기의 기본 추천 사용",v->{
             if(busy)return;dialog.dismiss();task(()->storeConnection(null),data->applyStorage(null,data),null);
@@ -774,9 +785,13 @@ public class MainActivity extends AppCompatActivity {
         ((LinearLayout)findViewById(R.id.library)).removeAllViews();
     }
     private void networkPermission(String base,Runnable action){
+        networkPermission(base,action,false);
+    }
+    private void networkPermission(String base,Runnable action,boolean connecting){
         if(android.os.Build.VERSION.SDK_INT>=37&&!base.isEmpty()&&ApiClient.localHost(java.net.URI.create(base).getHost())
                 &&checkSelfPermission(android.Manifest.permission.ACCESS_LOCAL_NETWORK)!=android.content.pm.PackageManager.PERMISSION_GRANTED){
-            pendingConnection=action;localPermission.launch(android.Manifest.permission.ACCESS_LOCAL_NETWORK);
+            pendingConnection=action;pendingPermissionBase=base;pendingServerConnection=connecting;
+            localPermission.launch(android.Manifest.permission.ACCESS_LOCAL_NETWORK);
         }else action.run();
     }
     private void updateBusy(){
@@ -823,6 +838,7 @@ public class MainActivity extends AppCompatActivity {
         state.putString("picks",rows.toString());state.putInt("index",pager.getCurrentItem());state.putString("mode",resultMode);state.putString("notice",resultNotice);state.putBoolean("library",librarySelected);
         state.putString("libraryQuery", libraryQuery);
         state.putString("storageBase",api==null?"":api.base);
+        state.putString("pendingPermissionBase",pendingPermissionBase);state.putBoolean("pendingServerConnection",pendingServerConnection);
         if(librarySelected){state.putString("playlistId",playlistId);state.putInt("libraryScroll",findViewById(R.id.library_scroll).getScrollY());}
         state.putBoolean("hasResults",hasResults);state.putBoolean("editingRequest",hasResults && findViewById(R.id.request_panel).getVisibility()==View.VISIBLE);
         state.putBoolean("requestPending",recommendation.current().loading);
