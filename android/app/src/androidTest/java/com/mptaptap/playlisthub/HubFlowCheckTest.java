@@ -3,13 +3,29 @@ package com.mptaptap.playlisthub;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.net.Uri;
 import android.os.SystemClock;
 import androidx.test.core.app.ActivityScenario;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.platform.app.InstrumentationRegistry;
+import androidx.lifecycle.Lifecycle;
 import java.util.Map;
 import java.util.UUID;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.net.InetAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.net.SocketTimeoutException;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.Test;
@@ -23,9 +39,68 @@ import static org.hamcrest.Matchers.allOf;
 import static org.junit.Assert.*;
 import static org.junit.Assume.assumeTrue;
 
-/** Uses only the dedicated disposable test server passed by the runner. */
+/** Uses only disposable runner/loopback fixtures; no real provider requests. */
 @RunWith(AndroidJUnit4.class)
 public class HubFlowCheckTest {
+    @Test public void oauthReturnDuringConnectionReadRefreshesAfterStaleResponse() throws Exception {
+        var instrumentation=InstrumentationRegistry.getInstrumentation();Context context=instrumentation.getTargetContext();
+        if(android.os.Build.VERSION.SDK_INT>=37)instrumentation.getUiAutomation().grantRuntimePermission(context.getPackageName(),android.Manifest.permission.ACCESS_LOCAL_NETWORK);
+        SharedPreferences settings=context.getSharedPreferences("settings",Context.MODE_PRIVATE),credentials=context.getSharedPreferences("server_credentials",Context.MODE_PRIVATE);
+        Map<String,?> oldSettings=settings.getAll(),oldCredentials=credentials.getAll();
+        CountDownLatch received=new CountDownLatch(1),release=new CountDownLatch(1);
+        AtomicBoolean running=new AtomicBoolean(true),connected=new AtomicBoolean();AtomicInteger connectionReads=new AtomicInteger();AtomicReference<Throwable> serverFailure=new AtomicReference<>();
+        var worker=Executors.newSingleThreadExecutor();
+        try(ServerSocket server=new ServerSocket(0,5,InetAddress.getByName("127.0.0.1"))) {
+            server.setSoTimeout(500);String base="http://127.0.0.1:"+server.getLocalPort(),token="HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH";
+            var replies=worker.submit(()->{
+                while(running.get())try(Socket socket=server.accept()) {
+                    socket.setSoTimeout(5000);BufferedReader input=new BufferedReader(new InputStreamReader(socket.getInputStream(),StandardCharsets.UTF_8));
+                    String[] request=input.readLine().split(" ");assertEquals("GET",request[0]);String header;boolean authenticated=false;
+                    while(!(header=input.readLine()).isEmpty())if(header.toLowerCase(java.util.Locale.ROOT).startsWith("authorization:")&&header.endsWith("Bearer "+token))authenticated=true;
+                    assertTrue("The callback must keep the same account session",authenticated);String content;
+                    switch(request[1]) {
+                        case "/health":content="{\"status\":\"ok\"}";break;
+                        case "/accounts/me":content="{\"name\":\"복귀 검사\",\"email\":\"callback@example.invalid\"}";break;
+                        case "/connections/config":content="{\"providers\":[{\"provider\":\"spotify\",\"configured\":true}]}";break;
+                        case "/connections":
+                            int read=connectionReads.incrementAndGet();content=connected.get()?"[{\"provider\":\"spotify\",\"connected\":true}]":"[]";
+                            if(read==1){received.countDown();assertTrue("Release the old connection snapshot",release.await(15,TimeUnit.SECONDS));}break;
+                        default:throw new AssertionError("Unexpected test path: "+request[1]);
+                    }
+                    byte[] bytes=content.getBytes(StandardCharsets.UTF_8);
+                    socket.getOutputStream().write(("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "+bytes.length+"\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.UTF_8));
+                    socket.getOutputStream().write(bytes);socket.getOutputStream().flush();
+                }catch(SocketTimeoutException timeout){
+                    // Wait for the callback's follow-up read without external services.
+                }catch(Throwable error){if(running.get())serverFailure.compareAndSet(null,error);return;}
+            });
+            try {
+                assertTrue(settings.edit().putString("server",base).commit());assertTrue(credentials.edit().putString(base,token).commit());
+                Uri callback=Uri.parse("taptap://connected?provider=spotify&status=connected");
+                Intent callbackIntent=new Intent(Intent.ACTION_VIEW,callback).addCategory(Intent.CATEGORY_BROWSABLE).setPackage(context.getPackageName());
+                try(ActivityScenario<HubActivity> app=ActivityScenario.launch(callbackIntent)) {
+                    assertTrue("Hold an account read before delivering the OAuth return",received.await(5,TimeUnit.SECONDS));
+                    // Keep Scenario's intent match, but remove its launch-only CLEAR_TASK flag.
+                    Intent returning=new Intent(callbackIntent).putExtra("nativeCallback",true).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                    assertNotNull("The manifest must resolve the OAuth return",returning.resolveActivity(context.getPackageManager()));
+                    assertEquals(HubActivity.class.getName(),returning.resolveActivity(context.getPackageManager()).getClassName());
+                    context.startActivity(returning);
+                    waitUntil(()->{AtomicBoolean delivered=new AtomicBoolean();app.onActivity(a->delivered.set(a.getIntent().getBooleanExtra("nativeCallback",false)));return delivered.get();});
+                    waitUntil(()->app.getState()==Lifecycle.State.RESUMED);focused(app);
+                    app.recreate();connected.set(true);release.countDown();ready(app);
+                    assertNull("Test server failure",serverFailure.get());assertEquals("Refresh once after the stale response",2,connectionReads.get());
+                    onView(withText("연결됨")).perform(scrollTo()).check(matches(isDisplayed()));
+                    onView(withText("연결 해제")).check(matches(isEnabled()));assertEquals(token,credentials.getString(base,""));
+                }
+                try(ActivityScenario<HubActivity> cold=ActivityScenario.launch(new Intent(context,HubActivity.class).setData(Uri.parse("taptap://connected?provider=spotify&status=connected")))) {
+                    ready(cold);assertEquals("A cold callback must read connections only once",3,connectionReads.get());
+                    onView(withText("연결됨")).perform(scrollTo()).check(matches(isDisplayed()));assertEquals(token,credentials.getString(base,""));
+                }
+                assertNull("Test server failure",serverFailure.get());
+            } finally {running.set(false);release.countDown();server.close();replies.get(2,TimeUnit.SECONDS);}
+        } finally {running.set(false);release.countDown();worker.shutdownNow();restore(settings,oldSettings);restore(credentials,oldCredentials);}
+    }
+
     @Test public void accountPreservesAnonymousListsAndTimelineSavesSeparateSnapshots() throws Exception {
         String base=InstrumentationRegistry.getArguments().getString("fullServer","");assumeTrue("A dedicated test server is required",!base.isEmpty());
         Context context=InstrumentationRegistry.getInstrumentation().getTargetContext();
@@ -52,6 +127,24 @@ public class HubFlowCheckTest {
                 onView(withText("로그인")).perform(scrollTo(),click());ready(app);client.connect();
                 assertEquals(email,client.object("GET","/accounts/me",null).getString("email"));
                 assertEquals(1,client.object("GET","/playlists/"+list,null).getJSONArray("items").length());
+            }
+            JSONObject anotherTrack=client.array("/catalogue").getJSONObject(1);String anotherId=anotherTrack.getString("id");
+            String deviceToken=client.object("POST","/accounts/login",new JSONObject().put("email",email).put("password",password)).getString("token");
+            assertNotEquals("A second device has its own session",client.identity(),deviceToken);String extraItem=null;
+            try(ActivityScenario<MainActivity> main=ActivityScenario.launch(MainActivity.class)) {
+                readyMain(main);onView(withId(R.id.settings)).perform(click());onView(withText("좋아요·싫어요 관리 (0)")).perform(scrollTo()).check(matches(isDisplayed()));
+                androidx.test.espresso.Espresso.pressBack();main.moveToState(Lifecycle.State.CREATED);
+                deviceRequest(base,deviceToken,"PUT","/me/feedback/"+anotherId,new JSONObject().put("reaction",1));
+                extraItem=deviceRequest(base,deviceToken,"POST","/playlists/"+list+"/items",new JSONObject().put("trackId",anotherId)).getString("id");
+                main.moveToState(Lifecycle.State.RESUMED);readyMain(main);
+                onView(withId(R.id.settings)).perform(click());onView(withText("좋아요·싫어요 관리 (1)")).perform(scrollTo(),click());
+                onView(withText("좋아요 · "+anotherTrack.getString("title")+" — "+anotherTrack.getString("artist"))).check(matches(isDisplayed()));
+                androidx.test.espresso.Espresso.pressBack();androidx.test.espresso.Espresso.pressBack();
+                main.onActivity(a->{try{var field=MainActivity.class.getDeclaredField("savedTracks");field.setAccessible(true);assertTrue("The foreground must update saved-card state",((java.util.Set<?>)field.get(a)).contains(anotherId));}catch(ReflectiveOperationException error){throw new AssertionError(error);}});
+                onView(withId(R.id.nav_library)).perform(click());readyMain(main);onView(withText("익명 목록 "+suffix+"\n2곡")).perform(scrollTo()).check(matches(isDisplayed()));
+            } finally {
+                deviceRequest(base,deviceToken,"DELETE","/me/feedback/"+anotherId,null);
+                if(extraItem!=null)deviceRequest(base,deviceToken,"DELETE","/playlists/"+list+"/items/"+extraItem,null);
             }
             try(ActivityScenario<HubActivity> app=launch(context,"create")) {
                 ready(app);onView(withHint("YouTube 영상 주소")).perform(scrollTo(),replaceText("https://www.youtube.com/watch?v=dQw4w9WgXcQ"),closeSoftKeyboard());
@@ -131,6 +224,15 @@ public class HubFlowCheckTest {
             try{if(registered)client.request("DELETE","/accounts/me",new JSONObject().put("password",password));else client.request("DELETE","/playlists/"+list,null);}catch(Exception ignored){}
             restore(settings,oldSettings);restore(credentials,oldCredentials);
         }
+    }
+    private static JSONObject deviceRequest(String base,String token,String method,String path,JSONObject body) throws Exception {
+        HttpURLConnection connection=(HttpURLConnection)new URL(base+path).openConnection();connection.setInstanceFollowRedirects(false);
+        connection.setConnectTimeout(5000);connection.setReadTimeout(10000);connection.setRequestMethod(method);connection.setRequestProperty("Authorization","Bearer "+token);
+        try {
+            if(body!=null){byte[] bytes=body.toString().getBytes(StandardCharsets.UTF_8);connection.setRequestProperty("Content-Type","application/json");connection.setDoOutput(true);connection.setFixedLengthStreamingMode(bytes.length);try(var out=connection.getOutputStream()){out.write(bytes);}}
+            int code=connection.getResponseCode();assertTrue("Second-device request failed with HTTP "+code,code>=200&&code<300);
+            String response=ApiClient.read(connection.getInputStream());return response.trim().isEmpty()?new JSONObject():new JSONObject(response);
+        } finally {connection.disconnect();}
     }
     private static ActivityScenario<HubActivity> launch(Context context,String mode){return ActivityScenario.launch(new Intent(context,HubActivity.class).putExtra("mode",mode));}
     private static void ready(ActivityScenario<HubActivity> app){waitUntil(()->{AtomicBoolean ready=new AtomicBoolean();app.onActivity(a->{try{var f=HubActivity.class.getDeclaredField("requests");f.setAccessible(true);ready.set(!((HubRequest)f.get(a)).busy());}catch(Exception e){throw new AssertionError(e);}});return ready.get();});}

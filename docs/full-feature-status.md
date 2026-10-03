@@ -1,6 +1,6 @@
-# 전체 기능 구현 상태
+# 기능별 구현·검증 상태
 
-2026-10-04 기준. 최신 노션 명세와 사용자의 전체 기능 구현 지시에 따라 F01–F09 및 후순위 기능의 코드를 구현했다. 실제 플랫폼 계정 연결·공개 배포·휴대폰 검증은 아직 완료되지 않았다. 따라서 모든 기능을 실제 서비스에서 사용할 수 있는 상태로 판정하지 않는다.
+2026-10-04 기준. **전체 기능 완성은 미완료다.** 최신 노션 명세와 사용자의 전체 기능 구현 지시에 따라 추가 구현과 검증을 진행하고 있다. 코드 존재, 모의 응답 검사, 실제 서비스 검증을 아래에서 구분한다. 실제 플랫폼 계정 연결·공개 배포·휴대폰 검증은 아직 완료되지 않았다.
 
 | 기능 | 구현한 동작 | 확인한 범위 / 남은 검증 |
 | --- | --- | --- |
@@ -11,23 +11,23 @@
 | F05 외부 열기 | 검증 링크 직접 열기와 곡 검색 구분, 웹 대체 | URL·앱 선택창 검사 통과. 실제 외부 앱별 동작은 별도 |
 | F06 내 목록 | 생성·일괄 저장·수정·삭제·제거·순서·검색·텍스트 공유 | 소유권·중복 방지·재시도·회전·재시작 검사 통과 |
 | F07 긴 영상 변환 | 공식 설명 조회 또는 사용자 시간표, 검토·수정·제외·원본 위치·저장 | 파서·공식 API 응답 계약·앱 흐름 통과. 실제 Google 설정의 조회 검증 대기 |
-| F08 플랫폼 이전 | 연결·가져오기·명시적 확인·비공개 목록 생성·부분 실패 재시도 | 모의 공식 HTTP 계약·응답 유실·중복 방지 통과. Spotify/Google/Apple 실계정 대기 |
+| F08 플랫폼 이전 | 연결·가져오기·명시적 확인·비공개 목록 생성·부분 실패 재시도 | 모의 공식 HTTP 계약·응답 유실·중복 방지·읽지 못한 원본 안내·제외 결과 보존 통과. Spotify/Google/Apple 실계정 대기 |
 | F09 매칭 검토 | ID·ISRC·제목·아티스트·버전·길이, 후보 선택·제외 | 규칙·공식 검색 응답 계약 검사 통과. 실서비스 검색 품질 평가 대기 |
 | 대화형 조정 | 이전 조건 유지·교체·초기화, 곡 유지·임시 제외, 초안 복원 | 실제 OpenAI와 API24/37 통과. 명시한 팝·언어·제외 조건 누락 방지 |
-| 계정/동기화 | 이메일 가입·로그인·기기별 세션·삭제, 익명 데이터 이어받기 | 암호·다중 세션·계정 격리·앱 로그인 검사 통과. 실제 휴대폰 간 사용 대기 |
-| 공개 목록 | 선택적 공개, 읽기 전용 링크, 검색·순위·즐겨찾기·복사 | 권한·HTML·링크 철회·앱 흐름 통과. 공개 HTTPS 주소 검증 대기 |
+| 계정/동기화 | 이메일 가입·로그인·기기별 세션·삭제, 익명 데이터 이어받기·앱 복귀 갱신 | 암호·다중 세션·계정 격리·앱 로그인·별도 로그인 세션 변경의 복귀 갱신 검사 통과. 실제 휴대폰 간 사용 대기 |
+| 공개 목록 | 선택적 공개, 읽기 전용 링크, 검색·순위·즐겨찾기·복사 | 권한·HTML·링크 철회·앱 흐름·두 목록 최신/인기 순위·로컬 HTTPS 통과. 실제 공개 주소 검증 대기 |
 | Apple Music | MusicKit 허용 페이지·공식 목록 읽기·검색·이전 | 응답 계약·점 포함 목록 ID 검사 통과. 개발자 토큰·실제 MusicKit 계정 대기 |
 | 외부 변경 반영 | 실제 저장 곡과 비교, 미리 보기 후 확인 적용 | 수정·순서·삭제 후 오래된 미리 보기 거절, 다른 원본 보존 통과. 실계정 대기 |
 | 기록 관리 | 변환·가져오기·전송 재열기, 검토 초안 복원, 기록만 삭제 | 소유권·전송 중 삭제 거절·앱 흐름 통과. 삭제된 앱 목록 재저장·재시도 통과 |
 | 보관 정책 | 원본 조회 후 30일 만료, 연결 해제·계정 삭제 | 수동 수정으로 보관 기간 연장 방지, 교차 플랫폼 후보·공개 스냅샷 제거 통과 |
-| 배포 | 서버 JAR, Android APK, PostgreSQL·Caddy HTTPS 실행 설정 | Android 빌드·lint, 최종 이미지 실행·PostgreSQL 재시작 보존, Compose 설정·누락 거절 통과. 실제 도메인·배포·휴대폰 대기 |
+| 배포 | 서버 JAR, Android APK, PostgreSQL·Caddy HTTPS 실행 설정 | Android 빌드·lint, 최종 이미지·로컬 TLS·전체 서버 재시작 보존·접속자별 로그인 제한 통과. 실제 도메인·배포·휴대폰 대기 |
 
 ## 이번 빌드의 검사 근거
 
-- Android 화면 검사: API24 기본·대화 13개 + Hub 1개, API37 기본·대화 15개 + Hub 1개, 합계 30개 통과. [API24](../output/checks/baseline-full/android-api24-tests.json), [API37](../output/checks/baseline-full/android-api37-tests.json), [Hub API24](../output/checks/hub-full/android-api24-tests.json), [Hub API37](../output/checks/hub-full/android-api37-tests.json).
+- Android 화면 검사: API24 기본·대화 13개 + Hub 2개, API37 기본·대화 15개 + Hub 2개, 합계 32개 통과. Hub 검사는 OS 연결 복귀·화면 재생성·초기 복귀, 계정·변환·공개·별도 로그인 세션의 반응/목록 변경 후 복귀 갱신을 확인한다. 실제 플랫폼 OAuth 승인은 포함하지 않는다. [API24](../output/checks/baseline-full/android-api24-tests.json), [API37](../output/checks/baseline-full/android-api37-tests.json), [Hub API24](../output/checks/hub-full/android-api24-tests.json), [Hub API37](../output/checks/hub-full/android-api37-tests.json).
 - 서버: [H2 9개](../output/checks/backend-h2-full.json), [PostgreSQL 15 9개](../output/checks/backend-postgresql-full.json), [최종 JAR 재시작](../output/checks/packaged-server-full.json) 통과. PostgreSQL 실행 중 레거시 H2 이전·AI HTTP stub 검사는 H2를 사용한다.
-- 배포 패키지: [최종 Docker 이미지 실행](../output/checks/container-full.json)에서 읽기 전용 파일시스템·UID 10001·PostgreSQL 15·서버 재시작 후 계정/목록/공개 스냅샷을 확인했다. [Compose 설정 검사](../output/checks/compose-full.json)도 통과했다. 공개 TLS·실제 도메인 검증은 포함하지 않는다.
-- 실제 OpenAI: [최종 호출 근거](../output/checks/openai-full.json). 최초 6곡은 조건에 맞는 카탈로그 부족 안내, 추가 요청 7곡은 유지 곡 포함. 두 응답 모두 OpenAI 모드, 허용 곡만 반환, 반응 데이터 변경 없음. 검사 계정 삭제 완료.
+- 배포 패키지: [최종 Docker 이미지의 로컬 HTTPS 검사](../output/checks/https-local-full.json)에서 인증서·호스트 이름 검증, 읽기 전용 파일시스템·UID 10001·PostgreSQL 15·앱/DB/프록시 재시작 후 계정/목록/공유 보존을 확인했다. 로그인 실패 주소의 전달·위조 방지와 다른 접속자의 정상 로그인도 통과했다. 검사 후 전용 컨테이너/볼륨을 제거했다. 실제 공개 도메인·공인 인증서 검증은 포함하지 않는다. 재실행 도구는 [배포 검사](../tools/check_deployment.py)다.
+- 실제 OpenAI: [직전 빌드의 실제 호출 근거](../output/checks/openai-full.json). 이후 AI 구현은 바꾸지 않았다. 최초 6곡은 조건에 맞는 카탈로그 부족 안내, 추가 요청 7곡은 유지 곡 포함. 두 응답 모두 OpenAI 모드, 허용 곡만 반환, 반응 데이터 변경 없음. 검사 계정 삭제 완료.
 - APK와 서버의 정확한 파일 해시는 [체크섬](../output/checksums.json)에 기록한다. [APK](../output/apk/TapTap-debug.apk), [서버](../output/server/taptap-backend.jar). 검사·패키지는 로컬 산출물이며 Git에 올리지 않는다.
 
 ## 실제 연결에 필요한 항목

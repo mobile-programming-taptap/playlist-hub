@@ -555,7 +555,7 @@ public class Store {
                 detail.remove("items"); result.add(detail);
             }
         }
-        Comparator<Map<String,Object>> newest = Comparator.comparing((Map<String,Object> value)->(String)value.get("publishedAt")).reversed().thenComparing(value->(String)value.get("shareId"));
+        Comparator<Map<String,Object>> newest = Comparator.comparing((Map<String,Object> value)->Instant.parse((String)value.get("publishedAt"))).reversed().thenComparing(value->(String)value.get("shareId"));
         result.sort(sort.equals("popular")?Comparator.comparingInt((Map<String,Object> value)->(Integer)value.get("favourites")).reversed().thenComparing(newest):newest);
         return result.stream().limit(100).toList();
     }

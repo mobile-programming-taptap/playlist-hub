@@ -74,7 +74,7 @@ public final class HubActivity extends AppCompatActivity {
             String playlist=getIntent().getStringExtra("playlistId");
             if(playlist!=null&&!playlist.isEmpty()){put("publicationId",playlist);put("screen","publication");}
         }
-        if(callback){put("screen","account");put("authorizationPending",false);}
+        if(callback){put("screen","account");put("authorizationPending",true);}
         LinearLayout root=new LinearLayout(this);root.setOrientation(LinearLayout.VERTICAL);root.setBackgroundColor(getColor(R.color.background));
         setContentView(root);
         ViewCompat.setOnApplyWindowInsetsListener(root,(view,insets)->{
@@ -94,15 +94,17 @@ public final class HubActivity extends AppCompatActivity {
             if(state.loading)return;
             requests.consume(state);
             if(!requests.accept(this,base,state)){base=serverBase();requests.synchronize(this,base);put("screen",mode);render();if(!base.isEmpty())reload();return;}
-            if(state.error!=null){failure(state.route,state.error);return;}
-            delivered(state.route,state.value);
+            if(state.error!=null)failure(state.route,state.error);
+            else delivered(state.route,state.value);
+            if(!state.route.equals("auth"))refreshAuthorization();
         });
         render();
         if(base.isEmpty()){render();return;}
-        if(requests.current()==null)reload();
+        if(requests.current()==null&&!requests.data.optBoolean("authorizationPending"))reload();
     }
-    @Override protected void onNewIntent(Intent intent){super.onNewIntent(intent);setIntent(intent);if(intent.getData()!=null&&!requests.busy()){put("screen","account");send("account","GET","/accounts/me",null);}}
-    @Override protected void onResume(){super.onResume();resumed=true;base=serverBase();if(requests!=null&&requests.synchronize(this,base)){put("screen",mode);render();if(!requests.busy()&&!base.isEmpty())reload();}else if(requests!=null&&requests.data.optBoolean("authorizationPending")&&!requests.busy()){put("authorizationPending",false);send("account","GET","/accounts/me",null);}else if(requests!=null&&value("screen").equals("transfer"))scheduleTransferRefresh();}
+    @Override protected void onNewIntent(Intent intent){super.onNewIntent(intent);setIntent(intent);if(intent.getData()!=null){put("authorizationPending",true);refreshAuthorization();}}
+    @Override protected void onResume(){super.onResume();resumed=true;base=serverBase();if(requests!=null&&requests.synchronize(this,base)){put("screen",mode);render();if(!requests.busy()&&!base.isEmpty())reload();}else if(requests!=null){refreshAuthorization();if(value("screen").equals("transfer"))scheduleTransferRefresh();}}
+    private void refreshAuthorization(){if(resumed&&!base.isEmpty()&&requests.data.optBoolean("authorizationPending")&&!requests.busy()){put("authorizationPending",false);put("screen","account");send("account","GET","/accounts/me",null);}}
     @Override protected void onPause(){resumed=false;handler.removeCallbacks(transferRefresh);super.onPause();}
     @Override protected void onDestroy(){handler.removeCallbacks(transferRefresh);for(AlertDialog dialog:dialogs)dialog.dismiss();dialogs.clear();super.onDestroy();}
     @Override protected void onSaveInstanceState(Bundle out) {
@@ -263,7 +265,7 @@ public final class HubActivity extends AppCompatActivity {
             JSONObject row=entries.optJSONObject(i);if(row==null)continue;int index=row.optInt("sourceIndex",i);
             JSONObject track=row.optJSONObject("track"),edit=edit(index,track==null?row:track);
             boolean timeline=imported.has("entries");LinearLayout box=card(content);
-            box.addView(text((i+1)+". "+(timeline?row.optString("timestamp"):"가져온 곡"),15,true));
+            box.addView(text((index+1)+". "+(timeline?row.optString("timestamp"):"가져온 곡"),15,true));
             if(timeline&&!row.optString("sourceRow").isEmpty())addButton(box,"원문과 시간 보기",()->dialog().setTitle("영상 설명 원문").setMessage(row.optString("sourceRow")).setPositiveButton("닫기",null).show());
             if(row.optBoolean("needsReview"))box.addView(text("곡명과 아티스트를 확인해 주세요.",13,false));
             CheckBox include=new CheckBox(this);include.setText("이 곡 포함");include.setMinHeight(dp(48));
@@ -307,7 +309,7 @@ public final class HubActivity extends AppCompatActivity {
         JSONArray items=review.optJSONArray("items");if(items==null)items=new JSONArray();
         for(int i=0;i<items.length();i++) {
             JSONObject item=items.optJSONObject(i);if(item==null)continue;int index=item.optInt("sourceIndex",i);JSONObject source=item.optJSONObject("source");LinearLayout box=card(content);
-            box.addView(text((i+1)+". "+song(source),16,true));JSONObject chosen=find(requests.data.optJSONArray("selections"),"sourceIndex",index);
+            box.addView(text((index+1)+". "+song(source),16,true));JSONObject chosen=find(requests.data.optJSONArray("selections"),"sourceIndex",index);
             box.addView(text(chosen==null?"선택이 필요해요":chosen.optBoolean("excluded")?"전송에서 제외됨":"선택한 곡: "+selectionLabel(item,chosen),13,false));
             addButton(box,"후보 선택 또는 제외",()->chooseCandidate(item,index));
         }
@@ -350,7 +352,9 @@ public final class HubActivity extends AppCompatActivity {
             if(state.equals("ADDED"))success++;else if(state.equals("FAILED"))failed++;else if(state.equals("PENDING"))pending++;else if(state.equals("UNKNOWN"))unknown++;
             paragraph((item.optInt("sourceIndex",i)+1)+"번째 곡 · "+(state.equals("FAILED")?"실패 · 다시 시도할 수 있어요":state.equals("ADDED")?"전송 완료":state.equals("PENDING")?"전송 대기":"전송 결과 확인 필요"));
         }
-        paragraph("완료 "+success+"곡 · 실패 "+failed+"곡 · 대기 "+pending+"곡 · 확인 필요 "+unknown+"곡");
+        JSONArray excluded=transfer.optJSONArray("excludedSourceIndices");int excludedCount=excluded==null?0:excluded.length();
+        if(excluded!=null)for(int i=0;i<excluded.length();i++)paragraph((excluded.optInt(i)+1)+"번째 곡 · 사용자가 제외");
+        paragraph("완료 "+success+"곡 · 실패 "+failed+"곡 · 제외 "+excludedCount+"곡 · 대기 "+pending+"곡 · 확인 필요 "+unknown+"곡");
         if(!transfer.optString("notice").isEmpty())paragraph(transfer.optString("notice"));
         String playlistUrl=transfer.optString("playlistUrl");Uri playlist=Uri.parse(playlistUrl);String provider=transfer.optString("provider");
         String host=provider.equals("spotify")?"open.spotify.com":provider.equals("youtube")?"www.youtube.com":provider.equals("apple_music")?"music.apple.com":"";

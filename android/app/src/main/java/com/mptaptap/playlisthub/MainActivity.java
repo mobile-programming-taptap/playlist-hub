@@ -79,6 +79,7 @@ public class MainActivity extends AppCompatActivity {
     private SharedPreferences settings;
     private String storageIdentity="";
     private boolean returningFromHub;
+    private boolean foregroundSeen;
     private List<String> conversation=new ArrayList<>();
     private EditText refinementPrompt;
     private Map<String,android.widget.CheckBox> refinementChoices=new HashMap<>();
@@ -363,7 +364,8 @@ public class MainActivity extends AppCompatActivity {
     }
 
     @Override protected void onResume() {
-        super.onResume();if(settings==null||!returningFromHub)return;returningFromHub=false;
+        super.onResume();boolean initial=!foregroundSeen;foregroundSeen=true;
+        if(settings==null||!returningFromHub&&(initial||api==null||!metadataReady||busy))return;returningFromHub=false;
         String identity=api==null?"local":api.identity();
         if(!identity.equals(storageIdentity)){storageIdentity=identity;conversation.clear();settings.edit().remove("conversation").apply();clearStorageResults();}
         if(!busy)refreshData(()->{storageIdentity=api==null?"local":api.identity();if(librarySelected){if(playlistId==null)loadLibrary();else openPlaylist(playlistId);}});

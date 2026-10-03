@@ -27,7 +27,10 @@ public class PlatformClient {
     static final List<String> PROVIDERS=List.of("spotify","youtube","apple_music");
     static final int MAX_ITEMS=500;
     public record Tokens(String accessToken,String refreshToken,String accountId,String scopes,Instant expiresAt) {}
-    public record RemotePlaylist(String externalPlaylistId,String title,String sourceUrl,List<PlatformTrack> tracks,boolean truncated) {}
+    public record SkippedItem(int sourceIndex,String reason) {}
+    public record RemotePlaylist(String externalPlaylistId,String title,String sourceUrl,List<PlatformTrack> tracks,boolean truncated,List<Integer> sourceIndices,List<SkippedItem> skippedItems) {
+        RemotePlaylist(String id,String title,String url,List<PlatformTrack> tracks,boolean truncated){this(id,title,url,tracks,truncated,java.util.stream.IntStream.range(0,tracks.size()).boxed().toList(),List.of());}
+    }
     public record Video(String videoId,String title,String description,int durationSeconds,String sourceUrl) {}
     static final class Failure extends RuntimeException {
         final int status;
@@ -142,17 +145,19 @@ public class PlatformClient {
         return new RemotePlaylist(id,playlist.title(),"https://music.apple.com/library/playlist/"+id,playlist.tracks(),playlist.truncated());
     }
     private RemotePlaylist spotifyPlaylist(String id,String title,String token) {
-        List<PlatformTrack> tracks=new ArrayList<>();boolean more=false;
+        List<PlatformTrack> tracks=new ArrayList<>();List<Integer> sourceIndices=new ArrayList<>();List<SkippedItem> skipped=new ArrayList<>();boolean more=false;
         for(int offset=0;offset<MAX_ITEMS;offset+=50) {
             JsonNode page=api("spotify","GET","/playlists/"+id+"/items?limit=50&offset="+offset,token,null);
+            int sourceIndex=offset;
             for(JsonNode row:page.path("items")) {
                 JsonNode item=row.path("item");if(item.isMissingNode())item=row.path("track");
-                if(!item.path("type").asString("track").equals("track")||item.path("is_local").asBoolean()||item.path("id").asString("").isEmpty())continue;
-                tracks.add(spotifyTrack(item));
+                String reason=row.path("is_local").asBoolean()||item.path("is_local").asBoolean()?"로컬 파일은 다른 플랫폼에서 찾을 수 없어요.":!item.path("type").asString("track").equals("track")?"음악 곡이 아닌 항목은 이전하지 않아요.":item.path("id").asString("").isEmpty()?"플랫폼에서 곡 정보를 제공하지 않았어요.":"";
+                if(reason.isEmpty()){tracks.add(spotifyTrack(item));sourceIndices.add(sourceIndex);}else skipped.add(new SkippedItem(sourceIndex,reason));
+                sourceIndex++;
             }
             more=!page.path("next").isNull()&&!page.path("next").asString("").isEmpty();if(!more)break;
         }
-        return new RemotePlaylist(id,title,"https://open.spotify.com/playlist/"+id,tracks,more);
+        return new RemotePlaylist(id,title,"https://open.spotify.com/playlist/"+id,tracks,more,sourceIndices,skipped);
     }
     private RemotePlaylist youtubePlaylist(String id,String title,String token) {
         List<PlatformTrack> tracks=new ArrayList<>();String pageToken="";

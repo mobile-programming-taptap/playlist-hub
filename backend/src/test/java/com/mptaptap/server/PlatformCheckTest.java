@@ -149,6 +149,28 @@ class PlatformCheckTest {
             f.api.unlink(f.auth,"spotify");assertEquals(1,f.users.playlists(f.owner).size());assertEquals(0,rows(f.users.playlist(f.owner,id),"items").size());assertEquals("Repeated songs",f.users.playlist(f.owner,id).get("title"));
             f.assertHealthy();
         }
+        try(Fixture f=new Fixture()) {
+            f.sourceItems.set(3);f.unavailableSpotifyItems.set(true);
+            Map<String,String> start=f.api.start(f.auth,"spotify");f.challenge=query(URI.create(start.get("authorizationUrl")),"code_challenge");f.api.callback("spotify",start.get("state"),"code-only-for-test",null);
+            String id=UUID.randomUUID().toString(),jobId=UUID.randomUUID().toString();
+            Map<String,Object> imported=f.api.importPlaylist(f.auth,new PlatformApi.ImportBody(id,"spotify","https://open.spotify.com/playlist/"+SOURCE,null));
+            assertEquals(List.of(0,2,4),rows(imported,"items").stream().map(row->row.get("sourceIndex")).toList(),"Readable recordings retain their original source positions.");
+            assertEquals(3,imported.get("skippedCount"));assertEquals(List.of(1,3,5),rows(imported,"skippedItems").stream().map(row->row.get("sourceIndex")).toList());
+            String notice=(String)imported.get("notice");for(String reason:List.of("3개 항목","로컬 파일","음악 곡이 아닌","곡 정보를 제공하지"))assertTrue(notice.contains(reason));
+            assertEquals(3,rows(f.users.playlist(f.owner,id),"items").size());
+            Map<String,Object> matches=f.api.matches(f.auth,new PlatformApi.MatchBody(id,"spotify",0));assertEquals(List.of(0,2,4),rows(matches,"items").stream().map(row->row.get("sourceIndex")).toList(),"Unavailable rows never become transfer candidates.");
+            f.api.review(f.auth,id,new PlatformApi.ReviewBody("spotify",List.of(new PlatformApi.Selection(0,SONG,false),new PlatformApi.Selection(2,SONG,false),new PlatformApi.Selection(4,null,true))));
+            f.api.transfer(f.auth,new PlatformApi.TransferBody(jobId,id,"spotify","Reviewed songs",true));f.awaitJob(jobId,"PARTIAL");
+            f.api.retry(f.auth,jobId,new PlatformApi.Confirm(true));f.awaitJob(jobId,"UNKNOWN");
+            f.api.retry(f.auth,jobId,new PlatformApi.Confirm(true));Map<String,Object> result=f.awaitJob(jobId,"COMPLETED");
+            assertEquals(List.of(4),result.get("excludedSourceIndices"));assertEquals(1,map(result.get("counts")).get("excluded"));assertEquals(2,map(result.get("counts")).get("added"));
+            assertEquals(List.of(0,2),rows(result,"items").stream().map(row->row.get("sourceIndex")).toList());assertEquals(List.of(SONG,SONG),f.remoteItems);
+            assertEquals(List.of(4),f.api.transferStatus(f.auth,jobId).get("excludedSourceIndices"));assertEquals(1,map(f.api.transferHistory(f.auth,true).get(0).get("counts")).get("excluded"));
+            f.api.retry(f.auth,jobId,new PlatformApi.Confirm(true));assertEquals(1,f.creates.get());assertEquals(2,f.adds.get());assertEquals(Map.of(),f.users.feedback(f.owner));
+            f.sourceItems.set(0);var unreadableRequest=new PlatformApi.ImportBody(UUID.randomUUID().toString(),"spotify","https://open.spotify.com/playlist/"+SOURCE,null);
+            Map<String,Object> unreadable=f.api.importPlaylist(f.auth,unreadableRequest);assertEquals(3,unreadable.get("skippedCount"));assertEquals(false,unreadable.get("saved"));assertTrue(rows(unreadable,"items").isEmpty());assertTrue(((String)unreadable.get("notice")).contains("3개 항목"));
+            assertEquals(unreadable,f.api.importPlaylist(f.auth,unreadableRequest));assertEquals(1,f.users.playlists(f.owner).size(),"An unreadable source still shows its reasons without creating an empty app list.");f.assertHealthy();
+        }
     }
 
     @Test void officialVideoAndUserTimelineEditsStayOutsideRecommendationsAndAppleUsesMusicKit() throws Exception {
@@ -284,7 +306,7 @@ class PlatformCheckTest {
         final AtomicReference<Throwable> failure=new AtomicReference<>();
         final AtomicInteger creates=new AtomicInteger(),adds=new AtomicInteger(),videos=new AtomicInteger(),sourceItems=new AtomicInteger(2),refreshes=new AtomicInteger(),revokes=new AtomicInteger(),markerPages=new AtomicInteger();
         final List<String> remoteItems=new CopyOnWriteArrayList<>();
-        final java.util.concurrent.atomic.AtomicBoolean stallVideo=new java.util.concurrent.atomic.AtomicBoolean(),holdExchange=new java.util.concurrent.atomic.AtomicBoolean(),holdCreate=new java.util.concurrent.atomic.AtomicBoolean();
+        final java.util.concurrent.atomic.AtomicBoolean stallVideo=new java.util.concurrent.atomic.AtomicBoolean(),holdExchange=new java.util.concurrent.atomic.AtomicBoolean(),holdCreate=new java.util.concurrent.atomic.AtomicBoolean(),unavailableSpotifyItems=new java.util.concurrent.atomic.AtomicBoolean();
         final java.util.concurrent.CountDownLatch videoStarted=new java.util.concurrent.CountDownLatch(1),releaseVideo=new java.util.concurrent.CountDownLatch(1),exchangeStarted=new java.util.concurrent.CountDownLatch(1),releaseExchange=new java.util.concurrent.CountDownLatch(1),createStarted=new java.util.concurrent.CountDownLatch(1),releaseCreate=new java.util.concurrent.CountDownLatch(1);
         final JdbcTemplate db;final Store users;final PlatformStore store;final PlatformClient remote;final PlatformApi api;
         final String owner,auth,otherAuth,testSchema;final JdbcTemplate schemaOwner;String challenge="";volatile String marker="";
@@ -319,7 +341,7 @@ class PlatformCheckTest {
                 else if(path.equals("/google_auth/revoke")){assertEquals("google-refresh",query(URI.create("http://fixture/?"+body),"token"));revokes.incrementAndGet();response=Map.of();}
                 else if(path.equals("/spotify/me"))response=Map.of("id","owner");
                 else if(path.equals("/spotify/playlists/"+SOURCE))response=Map.of("name","Repeated songs","owner",Map.of("id","owner"),"collaborative",false);
-                else if(path.equals("/spotify/playlists/"+SOURCE+"/items")){List<Object> items=new ArrayList<>();for(int i=0;i<sourceItems.get();i++)items.add(Map.of("item",spotifyTrack(SONG)));response=Map.of("items",items);}
+                else if(path.equals("/spotify/playlists/"+SOURCE+"/items")){List<Object> items=new ArrayList<>();for(int i=0;i<Math.max(sourceItems.get(),unavailableSpotifyItems.get()?3:0);i++){if(i<sourceItems.get())items.add(Map.of("item",spotifyTrack(SONG)));if(unavailableSpotifyItems.get()&&i<3)items.add(i==0?Map.of("item",spotifyTrack(SONG),"is_local",true):i==1?Map.of("item",Map.of("id",SONG,"type","episode")):Map.of("item",Map.of()));}response=Map.of("items",items);}
                 else if(path.equals("/spotify/search"))response=Map.of("tracks",Map.of("items",List.of(spotifyTrack(SONG))));
                 else if(path.equals("/spotify/me/playlists")&&method.equals("GET"))response=Map.of("items",marker.isEmpty()?List.of():List.of(Map.of("id",TARGET,"description",marker)));
                 else if(path.equals("/spotify/me/playlists")&&method.equals("POST")){assertFalse(value.path("public").asBoolean(true));marker=value.path("description").asString();creates.incrementAndGet();if(holdCreate.get()){createStarted.countDown();assertTrue(releaseCreate.await(10,java.util.concurrent.TimeUnit.SECONDS));}lost(exchange);return;}
