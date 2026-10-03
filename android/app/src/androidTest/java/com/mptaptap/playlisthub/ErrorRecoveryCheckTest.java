@@ -258,6 +258,120 @@ public class ErrorRecoveryCheckTest {
         } finally {running.set(false);feedbackRelease.countDown();failedFeedbackRelease.countDown();saveRelease.countDown();createRelease.countDown();serverWorkers.shutdownNow();data.close();}
     }
 
+    @Test public void playlistCreateRetryKeepsRequestIdAfterLostResponse() throws Exception {
+        Context context=InstrumentationRegistry.getInstrumentation().getTargetContext();
+        if(android.os.Build.VERSION.SDK_INT>=37) InstrumentationRegistry.getInstrumentation().getUiAutomation()
+            .grantRuntimePermission(context.getPackageName(),android.Manifest.permission.ACCESS_LOCAL_NETWORK);
+        SharedPreferences settings=context.getSharedPreferences("settings",Context.MODE_PRIVATE);
+        SharedPreferences credentials=context.getSharedPreferences("server_credentials",Context.MODE_PRIVATE);
+        Map<String,?> previousSettings=settings.getAll();
+        LocalStore data=new LocalStore(context);Map<String,Integer> previousFeedback=data.feedback();
+        String catalogue=ApiClient.read(context.getAssets().open("tracks.json"));
+        String prompt="공부할 때 집중할 수 있는 가사 없는 피아노 음악",title="응답 유실 후 같은 목록";
+        Recommender.Result result=Recommender.recommend(TrackJson.list(new JSONArray(catalogue)),Recommender.parse(prompt),Collections.emptyMap(),"openai");
+        assertEquals(8,result.tracks.size());JSONArray picks=new JSONArray();
+        for(Recommender.Pick pick:result.tracks)picks.put(new JSONObject().put("track",TrackJson.write(pick.track)).put("reason",pick.reason));
+        String recommendation=new JSONObject().put("tracks",picks).put("mode",result.mode).put("notice",result.notice)
+            .put("conditions",TrackJson.conditions(result.conditions)).toString();
+        String trackId=result.tracks.get(0).track.id;
+        Map<String,JSONObject> rows=new java.util.concurrent.ConcurrentHashMap<>();
+        AtomicInteger creates=new AtomicInteger(),saves=new AtomicInteger();
+        AtomicReference<String> firstRequestId=new AtomicReference<>(),secondRequestId=new AtomicReference<>();
+        AtomicReference<Throwable> serverFailure=new AtomicReference<>();AtomicBoolean running=new AtomicBoolean(true);
+        ExecutorService serverWorker=Executors.newSingleThreadExecutor();
+        try(ServerSocket server=new ServerSocket(0,5,InetAddress.getByName("127.0.0.1"))) {
+            server.setSoTimeout(500);String base="http://127.0.0.1:"+server.getLocalPort();
+            String previousCredential=credentials.getString(base,null),token="GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG";
+            Future<?> replies=serverWorker.submit(()->{
+                while(running.get())try(Socket socket=server.accept()) {
+                    socket.setSoTimeout(5000);DataInputStream input=new DataInputStream(socket.getInputStream());
+                    String[] request=httpLine(input).split(" ");String header;int length=0;boolean authenticated=false;
+                    while(!(header=httpLine(input)).isEmpty()) {
+                        String lower=header.toLowerCase(java.util.Locale.ROOT);
+                        if(lower.startsWith("content-length:"))length=Integer.parseInt(header.substring(header.indexOf(':')+1).trim());
+                        if(lower.startsWith("authorization:"))authenticated=header.endsWith("Bearer "+token);
+                    }
+                    assertTrue("The test must reuse its seeded session",authenticated);assertTrue(length>=0&&length<=4096);
+                    byte[] body=new byte[length];input.readFully(body);String content,status="200 OK";boolean loseBody=false;
+                    if(request[0].equals("POST")&&request[1].equals("/playlists")) {
+                        JSONObject submitted=new JSONObject(new String(body,StandardCharsets.UTF_8));assertEquals(title,submitted.getString("title"));
+                        int attempt=creates.incrementAndGet();assertTrue(attempt<=2);String requestedId=submitted.optString("id","");
+                        if(attempt==1)firstRequestId.set(requestedId);else secondRequestId.set(requestedId);
+                        String id=requestedId.isEmpty()?java.util.UUID.randomUUID().toString():java.util.UUID.fromString(requestedId).toString();
+                        JSONObject created=rows.get(id);
+                        if(created==null) {
+                            created=new JSONObject().put("id",id).put("title",title).put("size",0).put("createdAt","2026-10-03T10:00:00Z");rows.put(id,created);
+                        }
+                        status="201 Created";content=created.toString();loseBody=attempt==1;
+                    } else if(request[1].startsWith("/playlists/")&&request[1].endsWith("/items/batch")) {
+                        assertEquals("POST",request[0]);assertEquals(1,saves.incrementAndGet());
+                        String id=request[1].substring("/playlists/".length(),request[1].length()-"/items/batch".length());
+                        assertTrue(rows.containsKey(id));JSONArray ids=new JSONObject(new String(body,StandardCharsets.UTF_8)).getJSONArray("trackIds");
+                        assertEquals(1,ids.length());assertEquals(trackId,ids.getString(0));rows.get(id).put("size",1);
+                        content=new JSONArray().put(new JSONObject().put("id","77777777-7777-4777-8777-777777777777").put("trackId",trackId).put("position",0)).toString();
+                    } else if(request[1].equals("/recommendations")) {
+                        assertEquals("POST",request[0]);assertEquals(prompt,new JSONObject(new String(body,StandardCharsets.UTF_8)).getString("prompt"));content=recommendation;
+                    } else {
+                        assertEquals("GET",request[0]);
+                        switch(request[1]) {
+                            case "/health": content="{\"status\":\"ok\"}";break;
+                            case "/catalogue": content=catalogue;break;
+                            case "/me/feedback": content="{}";break;
+                            case "/me/saved-tracks": content=saves.get()==0?"[]":new JSONArray().put(trackId).toString();break;
+                            case "/playlists": content=new JSONArray(rows.values()).toString();break;
+                            default: throw new AssertionError("Unexpected test request: "+request[1]);
+                        }
+                    }
+                    byte[] bytes=content.getBytes(StandardCharsets.UTF_8);
+                    String response="HTTP/1.1 "+status+"\r\nContent-Type: application/json\r\nContent-Length: "+bytes.length+"\r\nConnection: close\r\n\r\n";
+                    socket.getOutputStream().write(response.getBytes(StandardCharsets.UTF_8));
+                    // The row exists, but the first successful response body is lost in transit.
+                    if(!loseBody)socket.getOutputStream().write(bytes);socket.getOutputStream().flush();
+                } catch(SocketTimeoutException timeout) {
+                    // Allow the user-facing retry to happen after the response was lost.
+                } catch(Throwable error) {if(running.get())serverFailure.compareAndSet(null,error);return;}
+            });
+            try {
+                assertTrue(credentials.edit().putString(base,token).commit());assertTrue(settings.edit().putString("server",base).remove("prompt").commit());
+                try(ActivityScenario<MainActivity> app=ActivityScenario.launch(MainActivity.class)) {
+                    ready(app);onView(withId(R.id.example_study)).perform(closeSoftKeyboard(),scrollTo(),click());
+                    onView(withId(R.id.recommend)).perform(scrollTo(),click());ready(app);
+                    org.hamcrest.Matcher<View> save=allOf(withId(R.id.save),isDescendantOfA(allOf(isAssignableFrom(android.widget.ScrollView.class),isDisplayed())));
+                    onView(save).perform(scrollTo(),click());ready(app);onView(withText("+ 새 플레이리스트")).inRoot(isDialog()).perform(click());
+                    onView(withHint("예: 비 오는 날의 음악")).inRoot(isDialog()).perform(replaceText(title),closeSoftKeyboard());
+                    onView(withText("만들기")).inRoot(isDialog()).perform(click());ready(app);
+                    onView(withText("새 플레이리스트")).inRoot(isDialog()).check(matches(isDisplayed()));
+                    AtomicReference<String> displayedError=new AtomicReference<>();
+                    onView(withHint("예: 비 오는 날의 음악")).inRoot(isDialog()).check((view,error)->{
+                        if(error!=null)throw error;android.widget.EditText name=(android.widget.EditText)view;
+                        assertEquals(title,name.getText().toString());assertNotNull(name.getError());assertTrue(name.getError().length()>0);assertTrue(name.isEnabled());
+                        displayedError.set(name.getError().toString());
+                    });
+                    onView(withText(displayedError.get())).inRoot(isDialog()).check(matches(isDisplayed()));
+                    assertEquals(1,creates.get());assertEquals(1,rows.size());assertEquals(0,saves.get());assertNull(serverFailure.get());
+                    onView(withText("만들기")).inRoot(isDialog()).check(matches(isEnabled())).perform(click());ready(app);
+                    assertNull("Test server failure",serverFailure.get());
+                    assertEquals(2,creates.get());assertEquals("Retry must reuse the same playlist row",1,rows.size());assertEquals(1,saves.get());
+                    onView(save).check(matches(withText("저장됨 · 추가")));
+                    assertNotNull(firstRequestId.get());assertFalse(firstRequestId.get().isEmpty());assertEquals(firstRequestId.get(),secondRequestId.get());
+                    assertNull(serverFailure.get());assertEquals(previousFeedback,data.feedback());
+                }
+            } finally {
+                running.set(false);server.close();
+                if(!data.feedback().equals(previousFeedback)) {
+                    data.clearFeedback();for(Map.Entry<String,Integer> reaction:previousFeedback.entrySet())data.react(reaction.getKey(),reaction.getValue());
+                }
+                SharedPreferences.Editor restore=settings.edit();
+                for(String key:new String[]{"server","prompt"}) {
+                    if(previousSettings.containsKey(key))restore.putString(key,(String)previousSettings.get(key));else restore.remove(key);
+                }
+                assertTrue(restore.commit());SharedPreferences.Editor restoreCredential=credentials.edit();
+                if(previousCredential==null)restoreCredential.remove(base);else restoreCredential.putString(base,previousCredential);
+                assertTrue(restoreCredential.commit());replies.get(2,TimeUnit.SECONDS);
+            }
+        } finally {running.set(false);serverWorker.shutdownNow();data.close();}
+    }
+
     @Test public void playlistNameFailuresKeepDraftAndAllowRetry() throws Exception {
         Context context=InstrumentationRegistry.getInstrumentation().getTargetContext();
         if(android.os.Build.VERSION.SDK_INT>=37) InstrumentationRegistry.getInstrumentation().getUiAutomation()

@@ -47,6 +47,7 @@ public class Api {
     public record Prompt(String prompt) {}
     public record Reaction(Integer reaction) {}
     public record PlaylistTitle(String title) {}
+    public record PlaylistCreate(String title, String id) {}
     public record Item(String trackId) {}
     public record Items(List<String> trackIds) {}
     public record Order(List<String> itemIds) {}
@@ -103,9 +104,9 @@ public class Api {
     }
 
     @PostMapping("/playlists") @ResponseStatus(HttpStatus.CREATED)
-    public Map<String, Object> create(@RequestHeader(value="Authorization", required=false) String auth, @RequestBody PlaylistTitle body) {
+    public Map<String, Object> create(@RequestHeader(value="Authorization", required=false) String auth, @RequestBody PlaylistCreate body) {
         String user = store.user(auth);
-        return store.createPlaylist(user, title(body.title()));
+        return store.createPlaylist(user, title(body.title()), body.id());
     }
 
     @PutMapping("/playlists/{id}") @ResponseStatus(HttpStatus.NO_CONTENT)

@@ -81,6 +81,7 @@ class ApiCheckTest {
         String token;
         String playlist;
         String saved;
+        Map<String,String> creation;
         try {
             try(ConfigurableApplicationContext context=start(database,endpoint)) {
                 base="http://127.0.0.1:"+((WebServerApplicationContext)context).getWebServer().getPort();
@@ -122,12 +123,28 @@ class ApiCheckTest {
                 value("DELETE","/me/feedback/"+dislike,token,null,204);
                 assertEquals(0,value("GET","/me/feedback",token,null,200).size());
                 value("POST","/playlists",token,Map.of("title"," "),400);
-                playlist=value("POST","/playlists",token,Map.of("title","공부 음악"),201).path("id").asString();
+                creation=Map.of("title","공부 음악","id",UUID.randomUUID().toString());
+                JsonNode created=value("POST","/playlists",token,creation,201);
+                playlist=created.path("id").asString();assertEquals(creation.get("id"),playlist);
+                assertEquals(created,value("POST","/playlists",token,creation,201));
+                assertEquals(1,value("GET","/playlists",token,null,200).size());
+                assertEquals("목록을 찾을 수 없어요.",value("POST","/playlists",other,creation,404).path("message").asString());
+                assertEquals("목록이 이미 만들어졌어요. 원래 이름으로 다시 시도해 주세요.",
+                    value("POST","/playlists",token,Map.of("id",playlist,"title","다른 이름"),409).path("message").asString());
+                for(String invalid:List.of("","not-a-uuid","1-1-1-1-1","AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA"))
+                    value("POST","/playlists",token,Map.of("title","공부 음악","id",invalid),400);
+                String distinct=value("POST","/playlists",token,Map.of("title","공부 음악","id",UUID.randomUUID().toString()),201).path("id").asString();
+                assertNotEquals(playlist,distinct);assertEquals(2,value("GET","/playlists",token,null,200).size());
+                value("DELETE","/playlists/"+distinct,token,null,204);
                 value("POST","/playlists/"+playlist+"/items",token,Map.of("trackId","invented"),404);
                 JsonNode first=value("POST","/playlists/"+playlist+"/items",token,Map.of("trackId",saved),200);
                 assertEquals(first,value("POST","/playlists/"+playlist+"/items",token,Map.of("trackId",saved),200));
                 assertEquals(1,value("GET","/playlists/"+playlist,token,null,200).path("items").size());
                 org.springframework.jdbc.core.JdbcTemplate db=context.getBean(org.springframework.jdbc.core.JdbcTemplate.class);
+                JsonNode replay=value("POST","/playlists",token,creation,201);
+                assertEquals(playlist,replay.path("id").asString());assertEquals(1,replay.path("size").asInt());
+                assertEquals(created.path("createdAt"),replay.path("createdAt"));
+                assertEquals(1,db.queryForObject("SELECT COUNT(*) FROM playlists WHERE id=?",Integer.class,playlist));
                 String snapshot=db.queryForObject("SELECT track_json FROM playlist_items WHERE id=?",String.class,first.path("id").asString());
                 assertEquals("MusicBrainz",json.readTree(snapshot).path("source").asString());
                 assertEquals("https://musicbrainz.org/recording/"+saved,json.readTree(snapshot).path("sourceUrl").asString());
@@ -137,6 +154,7 @@ class ApiCheckTest {
                 assertEquals(1,value("GET","/me/saved-tracks",token,null,200).size());
                 assertEquals("search",value("GET","/tracks/"+saved+"/links",token,null,200).get(0).path("kind").asString());
                 String bulk=value("POST","/playlists",token,Map.of("title","Batch check"),201).path("id").asString();
+                assertEquals(bulk,UUID.fromString(bulk).toString());assertNotEquals(playlist,bulk);
                 String bulkPath="/playlists/"+bulk;
                 value("POST",bulkPath+"/items/batch",token,Map.of("trackIds",List.of(saved,"invented")),404);
                 value("POST",bulkPath+"/items/batch",token,Map.of("trackIds",List.of()),400);
@@ -176,9 +194,21 @@ class ApiCheckTest {
                 List<String> catalogueIds=new ArrayList<>();
                 for(JsonNode track:value("GET","/catalogue",token,null,200))if(catalogueIds.size()<10)catalogueIds.add(track.path("id").asString());
                 coherentReadsDuringDeletion(token,catalogueIds);
+                String cappedToken=value("POST","/sessions",null,null,201).path("token").asString();
+                String cappedUser=context.getBean(Store.class).user("Bearer "+cappedToken);
+                Map<String,String> cappedCreation=Map.of("title","한도 재시도 검사","id",UUID.randomUUID().toString());
+                JsonNode capped=value("POST","/playlists",cappedToken,cappedCreation,201);
+                for(int i=0;i<99;i++)db.update("INSERT INTO playlists VALUES (?,?,?,?)",UUID.randomUUID().toString(),cappedUser,"한도 검사 "+i,Instant.now().toString());
+                assertEquals(capped,value("POST","/playlists",cappedToken,cappedCreation,201));
+                value("POST","/playlists",cappedToken,Map.of("title","추가 목록","id",UUID.randomUUID().toString()),409);
+                value("POST","/playlists",cappedToken,Map.of("title","기존 생성 방식"),409);
+                assertEquals(100,value("GET","/playlists",cappedToken,null,200).size());
             }
             try(ConfigurableApplicationContext context=start(database,endpoint)) {
                 base="http://127.0.0.1:"+((WebServerApplicationContext)context).getWebServer().getPort();
+                JsonNode replay=value("POST","/playlists",token,creation,201);
+                assertEquals(playlist,replay.path("id").asString());assertEquals(1,replay.path("size").asInt());
+                assertEquals(1,value("GET","/playlists",token,null,200).size());
                 JsonNode item=value("GET","/playlists/"+playlist,token,null,200).path("items").get(0);
                 assertEquals(saved,item.path("track").path("id").asString());
                 assertEquals("https://musicbrainz.org/recording/"+saved,item.path("track").path("sourceUrl").asString());

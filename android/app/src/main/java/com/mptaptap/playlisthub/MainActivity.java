@@ -385,17 +385,19 @@ public class MainActivity extends AppCompatActivity {
         EditText name = new EditText(this); name.setHint("예: 비 오는 날의 음악"); name.setFilters(new InputFilter[]{new InputFilter.LengthFilter(80)});
         name.setSingleLine(true); name.setText(currentTitle); name.setSelection(name.length());
         LinearLayout box = column(); box.addView(name);
+        TextView failure=text("",14,false);failure.setTextColor(getColor(R.color.accent));failure.setVisibility(View.GONE);failure.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);box.addView(failure);
         AlertDialog dialog = dialogBuilder().setTitle(id == null ? "새 플레이리스트" : "목록 이름 변경").setView(box).setPositiveButton(id == null ? "만들기" : "변경", null).setNegativeButton("취소", null).create();
         JSONObject[] createdPlaylist=new JSONObject[1];
+        String creationId=id==null?java.util.UUID.randomUUID().toString():id;
         dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
             if(busy)return;
             String title = name.getText().toString().trim();
             if (title.isEmpty()) { name.setError("이름을 입력해 주세요."); return; }
-            name.setError(null);name.setEnabled(false);dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(false);
+            name.setError(null);failure.setVisibility(View.GONE);name.setEnabled(false);dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(false);
             task(() -> {
                 try {
                     if(id==null) {
-                        if(createdPlaylist[0]==null)createdPlaylist[0]=api==null?local.create(title):api.object("POST","/playlists",new JSONObject().put("title",title));
+                        if(createdPlaylist[0]==null)createdPlaylist[0]=api==null?local.create(title):api.object("POST","/playlists",new JSONObject().put("id",creationId).put("title",title));
                         if(firstTracks!=null)saveTracks(firstTracks,createdPlaylist[0].getString("id"));
                         return createdPlaylist[0];
                     }
@@ -403,7 +405,7 @@ public class MainActivity extends AppCompatActivity {
                     return new JSONObject().put("id", id);
                 } catch(Exception error) {
                     runOnUiThread(()->{if(!isDestroyed()&&dialog.isShowing()){
-                        name.setError(errorMessage(error));name.setEnabled(createdPlaylist[0]==null);dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(true);
+                        failure.setText(errorMessage(error));failure.setVisibility(View.VISIBLE);name.setError(failure.getText());name.setEnabled(createdPlaylist[0]==null);box.setFocusableInTouchMode(true);box.requestFocus();dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(true);
                         if(createdPlaylist[0]!=null)dialog.getButton(AlertDialog.BUTTON_POSITIVE).setText("저장 다시 시도");
                     }});
                     throw error;
@@ -733,7 +735,7 @@ public class MainActivity extends AppCompatActivity {
         ((InputMethodManager)getSystemService(INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(root.getWindowToken(),0);
         root.requestFocus();
     }
-    private String errorMessage(Exception error){String message=error instanceof java.io.IOException?"네트워크에 연결하지 못했어요. 설정과 연결 상태를 확인해 주세요.":error.getMessage();return message==null?"처리하지 못했어요. 다시 시도해 주세요.":message;}
+    private String errorMessage(Exception error){String message=error instanceof org.json.JSONException?"서버 응답을 확인하지 못했어요. 잠시 후 다시 시도해 주세요.":error instanceof java.io.IOException?"네트워크에 연결하지 못했어요. 설정과 연결 상태를 확인해 주세요.":error.getMessage();return message==null?"처리하지 못했어요. 다시 시도해 주세요.":message;}
     private void clearResults(){
         picks=new ArrayList<>();hiddenTracks.clear();hasResults=false;resultConditions=new Recommender.Conditions();restoredPlaylistId=null;restoredLibraryScroll=0;
         findViewById(R.id.request_panel).setVisibility(View.VISIBLE);

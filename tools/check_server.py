@@ -2,6 +2,10 @@
 """Check the packaged server's default file database across two JVM processes."""
 import json, os, re, subprocess, sys, tempfile, time
 from pathlib import Path
+from http.client import IncompleteRead
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from threading import Thread
+from uuid import uuid4
 from urllib.error import HTTPError, URLError
 from urllib.request import ProxyHandler, Request, build_opener
 
@@ -68,7 +72,49 @@ def main():
             feedback = {tracks[0]["id"]: 1, tracks[1]["id"]: -1}
             for track_id, reaction in feedback.items():
                 api(base, "PUT", "/me/feedback/" + track_id, token, {"reaction": reaction})
-            playlist = api(base, "POST", "/playlists", token, {"title": "재시작 검사"}, 201)
+            creation = {"title": "재시작 검사", "id": str(uuid4())}
+            committed, failures = [], []
+            class LostResponse(BaseHTTPRequestHandler):
+                def log_message(self, *args):
+                    pass
+                def do_POST(self):
+                    try:
+                        assert self.path == "/playlists"
+                        assert self.headers["Authorization"] == "Bearer " + token
+                        length = int(self.headers["Content-Length"])
+                        assert 0 < length <= 4096
+                        body = json.loads(self.rfile.read(length))
+                        assert body == creation
+                        created = api(base, "POST", self.path, token, body, 201)
+                        committed.append(created)
+                        self.send_response(201)
+                        self.send_header("Content-Type", "application/json")
+                        self.send_header("Content-Length", str(len(json.dumps(created).encode())))
+                        self.send_header("Connection", "close")
+                        self.end_headers()
+                        self.wfile.flush()  # The DB commit succeeds; the response body is lost.
+                        self.close_connection = True
+                    except BaseException as error:
+                        failures.append(error)
+                        self.close_connection = True
+            with HTTPServer(("127.0.0.1", 0), LostResponse) as proxy:
+                proxy.timeout = 5
+                worker = Thread(target=proxy.handle_request)
+                worker.start()
+                try:
+                    try:
+                        api("http://127.0.0.1:" + str(proxy.server_port), "POST", "/playlists", token, creation, 201)
+                        raise AssertionError("The first creation response should be incomplete")
+                    except IncompleteRead:
+                        pass
+                finally:
+                    worker.join(timeout=5)
+                assert not worker.is_alive() and not failures, "Lost-response proxy did not finish cleanly"
+            assert len(committed) == 1
+            assert len(api(base, "GET", "/playlists", token)) == 1
+            playlist = api(base, "POST", "/playlists", token, creation, 201)
+            assert playlist == committed[0] and playlist["id"] == creation["id"], "Creation retry must reuse the committed row"
+            assert len(api(base, "GET", "/playlists", token)) == 1
             path = "/playlists/" + playlist["id"]
             items = [api(base, "POST", path + "/items", token, {"trackId": t["id"]}) for t in tracks]
             api(base, "PUT", path + "/items/order", token, {"itemIds": [i["id"] for i in reversed(items)]}, 204)
@@ -84,6 +130,11 @@ def main():
             assert restarted.pid != process.pid
             assert api(base, "GET", "/me/feedback", token) == feedback
             assert api(base, "GET", path, token) == snapshot
+            replay = api(base, "POST", "/playlists", token, creation, 201)
+            assert replay == dict(playlist, size=2), "Creation retry must survive a JVM restart and report the current size"
+            assert len(api(base, "GET", "/playlists", token)) == 1
+            api(base, "POST", "/playlists", other, creation, 404)
+            api(base, "POST", "/playlists", token, dict(creation, title="다른 이름"), 409)
             api(base, "GET", path, other, status=404)
             api(base, "POST", path + "/items", token, {"trackId": tracks[0]["id"]})
             assert api(base, "GET", path, token) == snapshot
@@ -94,7 +145,7 @@ def main():
                 if child.poll() is None:
                     child.kill()
                 child.wait(timeout=5)
-    print("PASS: packaged server, default file DB, process restart, ownership, feedback, track snapshots and duplicates")
+    print("PASS: packaged server, default file DB, lost creation response, stable retry across JVM restart, ownership, feedback, track snapshots and duplicates")
 
 
 if __name__ == "__main__":

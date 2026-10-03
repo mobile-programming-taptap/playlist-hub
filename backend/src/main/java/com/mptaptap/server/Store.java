@@ -84,10 +84,20 @@ public class Store {
                 Map.of("id", rs.getString(1), "title", rs.getString(2), "createdAt", rs.getString(3), "size", rs.getInt(4)), user);
     }
 
-    public synchronized Map<String, Object> createPlaylist(String user, String title) {
+    public synchronized Map<String, Object> createPlaylist(String user, String title, String id) {
+        if (id == null) id = UUID.randomUUID().toString();
+        else if (!id.matches("[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}"))
+            throw new IllegalArgumentException("목록 생성 ID는 소문자 UUID 형식이어야 해요.");
+        if (db.queryForObject("SELECT COUNT(*) FROM playlists WHERE id=?", Integer.class, id) > 0) {
+            Map<String, Object> existing = new LinkedHashMap<>(ownedPlaylist(user, id));
+            if (!title.equals(existing.get("title")))
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "목록이 이미 만들어졌어요. 원래 이름으로 다시 시도해 주세요.");
+            existing.put("size", db.queryForObject("SELECT COUNT(*) FROM playlist_items WHERE playlist_id=?", Integer.class, id));
+            return existing;
+        }
         int count = db.queryForObject("SELECT COUNT(*) FROM playlists WHERE user_id=?", Integer.class, user);
         if (count >= 100) throw new ResponseStatusException(HttpStatus.CONFLICT, "목록은 최대 100개까지 만들 수 있어요.");
-        String id = UUID.randomUUID().toString(); String at = Instant.now().toString();
+        String at = Instant.now().toString();
         db.update("INSERT INTO playlists VALUES (?,?,?,?)", id, user, title, at);
         return Map.of("id", id, "title", title, "createdAt", at, "size", 0);
     }
