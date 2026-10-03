@@ -1,6 +1,6 @@
 # TapTap
 
-Java Android 음악 추천·플레이리스트 앱. 2026-10-03 최신 [노션 명세](https://app.notion.com/p/3ed64b5ce98380b8b96ad80157bff1dd)의 포함 결정 기능 F-01~F-06을 구현한다.
+Java Android 음악 추천·플레이리스트 앱. 2026-10-03 최신 [노션 명세](https://app.notion.com/p/3ed64b5ce98380b8b96ad80157bff1dd)의 포함 결정 기능 F-01~F-06과 사용자가 추가 진행을 지시한 목록 관리·검색을 구현한다.
 
 ## 실행
 
@@ -26,13 +26,13 @@ Android 17 이상에서 로컬 서버를 연결할 때 [로컬 네트워크 권�
 
 ## OpenAI
 
-서버 환경에 `OPENAI_API_KEY`를 설정한다. 키는 앱·저장소·로그에 넣지 않는다. 기본 모델은 `gpt-4o-mini`이며 `OPENAI_MODEL`로 바꿀 수 있다. OpenAI [Responses API](https://developers.openai.com/api/docs/guides/migrate-to-responses), [Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs)를 사용한다.
+서버 환경에 `OPENAI_API_KEY`를 설정하거나 `backend/.env`에 `OPENAI_API_KEY=발급받은키` 한 줄을 저장한다. 서버를 `backend/`에서 실행하면 이 파일을 자동으로 읽으며 변경 후 재시작한다. `.env`는 Git에서 제외한다. 키는 앱·저장소·로그에 넣지 않는다. 기본 모델은 `gpt-4o-mini`이며 `OPENAI_MODEL`로 바꿀 수 있다. OpenAI [Responses API](https://developers.openai.com/api/docs/guides/migrate-to-responses), [Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs)를 사용한다.
 
 AI는 **사용자가 직접 작성한 500자 이하의 요청만** 입력받아 분위기·상황·장르·언어 조건 JSON으로 변환한다. 곡명·URL을 생성하지 않는다. 서버가 등록된 곡에서 선택하며 앱 내부 좋아요를 반영하고 싫어요 곡은 제외한다. 외부 곡 데이터·외부 열기 기록·저장 행동을 AI에 보내지 않는다. `store: false`로 요청한다.
 
 키가 없거나 연결 실패·잘못된 응답·한도 초과가 발생하면 **기본 추천**으로 이어가고 화면에서 알린다. AI 호출은 사용자당 1시간 20회, 서버 전체 UTC 하루 200회를 기본 상한으로 삼으며 시도도 횟수에 포함한다. `AI_USER_HOURLY_LIMIT`, `AI_DAILY_LIMIT`로 조정한다. 실제 과금 상한은 OpenAI 프로젝트의 예산·권한 설정도 적용한다.
 
-현재 환경에는 실제 OpenAI 키가 없으므로 실제 유료 호출은 미검증이다. 로컬 응답 서버로 실제 HTTP 요청 형식·출력 파싱·한도·기본 추천 복구를 검사한다.
+2026-10-03 실제 OpenAI 호출로 자연어 조건 해석과 등록된 곡 8개 반환을 확인했다. 로컬 응답 서버 검사는 실제 HTTP 요청 형식·출력 파싱·한도·기본 추천 복구를 별도로 확인한다.
 
 ## 저장·인증
 
@@ -40,7 +40,9 @@ AI는 **사용자가 직접 작성한 500자 이하의 요청만** 입력받아 
 
 설정·토큰·기기 DB는 클라우드 백업과 기기 간 이전에서 제외한다. Android 12 이상은 일부 기기에서 `allowBackup=false`만으로 기기 이전이 제한되지 않아 [백업 제외 규칙](https://developer.android.com/identity/data/autobackup)을 함께 적용한다.
 
-같은 목록에 같은 곡을 재시도해도 한 번만 저장한다. 목록 생성·조회·상세·곡 제거를 지원한다. 음원 파일은 저장하지 않는다. 이름 변경·목록 삭제·순서 변경·외부 목록 이전·긴 영상 변환·랭킹은 노션에서 미확정 또는 후순위이므로 포함하지 않았다.
+같은 목록에 같은 곡을 재시도해도 한 번만 저장한다. 목록 생성·조회·상세·이름 변경·목록 삭제·곡 제거·곡 순서 변경을 지원한다. 곡 메뉴의 위로·아래로 이동으로 순서를 저장한다. 삭제 전 목록 이름과 곡 수를 확인한다. 내 목록 이름 검색과 검증된 카탈로그의 곡명·아티스트 검색을 지원한다. 검색·순서 변경·저장은 추천 반응으로 기록하지 않는다. 음원 파일은 저장하지 않는다. 외부 목록 이전·긴 영상 변환·랭킹은 아직 구현하지 않았다.
+
+관리 API: `PUT /playlists/{id}`(title), `DELETE /playlists/{id}`, `PUT /playlists/{id}/items/order`(itemIds). 순서 요청은 해당 목록의 모든 항목 ID를 정확히 한 번씩 지정하며 트랜잭션으로 저장한다. `GET /playlists?q=...`, `GET /catalogue?q=...`는 100자 이하 검색어를 받는다. 검색은 대소문자·유니코드 호환 문자 차이를 정규화하고 모든 검색 단어를 확인한다.
 
 목록에 추가할 때 곡 정보와 출처를 함께 보관하여 카탈로그가 변경되어도 저장한 곡 정보를 유지한다.
 
@@ -68,7 +70,7 @@ cd ../android
 
 추천 조건·반응·출처 경계는 `RecommendationCheck`의 실행 가능한 assertion 검사로 확인한다. 서버 통신 검사는 사용자 소유권, 중복 저장, 재시작 보관, OpenAI JSON 계약과 호출 상한을 확인한다. Android 검사는 별도 테스트 DB에서 중복 저장·반응 변경·취소·재열기 후 보관을 확인하며, 무효가 된 서버 세션으로 재연결하는 경로도 실제 HTTP 응답으로 검사한다. 테스트 DB는 종료 시 삭제한다. 기기 검사는 에뮬레이터가 필요하며 Gradle이 검사 후 대상 앱을 제거할 수 있으므로 시연 전에 디버그 APK를 다시 설치한다.
 
-`AppFlowCheckTest`는 추천·스와이프/버튼 탐색·반응 상태·새 목록 저장·중복 저장·화면 재생성·앱 재열기·출처 확인·곡 제거를 화면에서 이어 검사한다. 기존 반응과 설정은 검사 후 복구하고 검사에서 만든 목록만 제거한다.
+`AppFlowCheckTest`는 추천·스와이프/버튼 탐색·반응 상태·새 목록 저장·중복 저장·화면 재생성·앱 재열기·출처 확인·곡 제거·이름 변경·순서 변경·목록 삭제·목록/곡 검색을 화면에서 이어 검사한다. 기존 반응과 설정은 검사 후 복구하고 검사에서 만든 목록만 제거한다.
 
 공유 가능한 APK: `android/app/build/outputs/apk/debug/app-debug.apk`.
 실행 가능한 서버: `backend/build/libs/taptap-backend.jar`.

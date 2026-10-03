@@ -8,6 +8,7 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Base64;
 import java.util.HexFormat;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -125,6 +126,26 @@ public class Store {
     public synchronized void remove(String user, String playlist, String item) {
         ownedPlaylist(user, playlist);
         db.update("DELETE FROM playlist_items WHERE playlist_id=? AND id=?", playlist, item);
+    }
+
+    public synchronized void rename(String user, String playlist, String title) {
+        ownedPlaylist(user, playlist);
+        db.update("UPDATE playlists SET title=? WHERE id=? AND user_id=?", title, playlist, user);
+    }
+
+    public synchronized void delete(String user, String playlist) {
+        ownedPlaylist(user, playlist);
+        db.update("DELETE FROM playlists WHERE id=? AND user_id=?", playlist, user);
+    }
+
+    public synchronized void reorder(String user, String playlist, List<String> ids) {
+        ownedPlaylist(user, playlist);
+        tx.executeWithoutResult(status -> {
+            List<String> current = db.query("SELECT id FROM playlist_items WHERE playlist_id=?", (rs,row) -> rs.getString(1), playlist);
+            if (ids == null || ids.size() > 500 || ids.size() != current.size() || !new HashSet<>(ids).equals(new HashSet<>(current)))
+                throw new IllegalArgumentException("목록의 모든 곡을 중복 없이 지정해 주세요. 목록이 바뀌었다면 다시 열어주세요.");
+            for (int i=0;i<ids.size();i++) db.update("UPDATE playlist_items SET position=? WHERE playlist_id=? AND id=?", i, playlist, ids.get(i));
+        });
     }
 
     public synchronized void clearFeedback(String user) {

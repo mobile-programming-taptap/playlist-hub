@@ -8,6 +8,10 @@ import java.util.Map;
 
 public final class RecommendationCheck {
     public static void main(String[] args) {
+        assert Track.matches("How You Like That BLACKPINK", "ｂｌａｃｋｐｉｎｋ LIKE");
+        assert Track.matches("비 오는 밤", "오는 비");
+        assert Track.matches("Anything", " ");
+        assert !Track.matches("BLACKPINK", "BTS");
         List<Track> tracks = new ArrayList<>();
         for (int i = 0; i < 12; i++) {
             Track t = new Track();

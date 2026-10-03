@@ -7,6 +7,8 @@ import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteOpenHelper;
 import com.mptaptap.core.Track;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.json.JSONArray;
@@ -45,7 +47,7 @@ final class LocalStore extends SQLiteOpenHelper {
         return result;
     }
     JSONObject create(String title) throws JSONException {
-        if (title == null || title.trim().isEmpty() || title.trim().length() > 80) throw new IllegalArgumentException("목록 이름을 1~80자로 입력해 주세요.");
+        title = title(title);
         if (playlists().length() >= 100) throw new IllegalArgumentException("목록은 최대 100개까지 만들 수 있어요.");
         String id = UUID.randomUUID().toString();
         ContentValues values = new ContentValues(); values.put("id", id); values.put("title", title.trim()); values.put("created_at", System.currentTimeMillis());
@@ -84,6 +86,32 @@ final class LocalStore extends SQLiteOpenHelper {
         } finally { db.endTransaction(); }
     }
     void remove(String playlist, String item) { getWritableDatabase().delete("items", "playlist_id=? AND id=?", new String[]{playlist, item}); }
+
+    void rename(String id, String title) throws JSONException {
+        playlist(id);
+        ContentValues values = new ContentValues(); values.put("title", title(title));
+        getWritableDatabase().update("playlists", values, "id=?", new String[]{id});
+    }
+    void delete(String id) throws JSONException { playlist(id); getWritableDatabase().delete("playlists", "id=?", new String[]{id}); }
+    void reorder(String id, List<String> ids) throws JSONException {
+        SQLiteDatabase db = getWritableDatabase(); db.beginTransaction();
+        try {
+            JSONArray items = playlist(id).getJSONArray("items");
+            HashSet<String> current = new HashSet<>();
+            for (int i=0;i<items.length();i++) current.add(items.getJSONObject(i).getString("id"));
+            if (ids == null || ids.size() > 500 || ids.size() != items.length() || !new HashSet<>(ids).equals(current))
+                throw new IllegalArgumentException("목록의 모든 곡을 중복 없이 지정해 주세요. 목록이 바뀌었다면 다시 열어주세요.");
+            for (int i=0;i<ids.size();i++) {
+                ContentValues values = new ContentValues(); values.put("position", i);
+                db.update("items", values, "playlist_id=? AND id=?", new String[]{id, ids.get(i)});
+            }
+            db.setTransactionSuccessful();
+        } finally { db.endTransaction(); }
+    }
+    private static String title(String value) {
+        if (value == null || value.trim().isEmpty() || value.trim().length() > 80) throw new IllegalArgumentException("목록 이름을 1~80자로 입력해 주세요.");
+        return value.trim();
+    }
     boolean saved(String track) {
         try (Cursor rows = getReadableDatabase().rawQuery("SELECT id FROM items WHERE track_id=? LIMIT 1", new String[]{track})) { return rows.moveToFirst(); }
     }
