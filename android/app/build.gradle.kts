@@ -25,6 +25,7 @@ android {
             }
         }
     }
+    testOptions { animationsDisabled = true }
     sourceSets.getByName("main").assets.srcDir("../../catalog")
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11

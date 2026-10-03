@@ -117,6 +117,7 @@ public class MainActivity extends AppCompatActivity {
         findViewById(R.id.edit_request).setOnClickListener(v -> {
             findViewById(R.id.request_panel).setVisibility(View.VISIBLE);
             findViewById(R.id.results).setVisibility(View.GONE); findViewById(R.id.empty).setVisibility(View.GONE);
+            findViewById(R.id.card_navigation).setVisibility(View.GONE);
             ((androidx.core.widget.NestedScrollView)findViewById(R.id.recommend_scroll)).scrollTo(0, 0);
             prompt.requestFocus(); prompt.setSelection(prompt.length());
             ((InputMethodManager)getSystemService(INPUT_METHOD_SERVICE)).showSoftInput(prompt, InputMethodManager.SHOW_IMPLICIT);
@@ -133,7 +134,7 @@ public class MainActivity extends AppCompatActivity {
         findViewById(R.id.next).setOnClickListener(v -> pager.setCurrentItem(pager.getCurrentItem() + 1, true));
         ((BottomNavigationView)findViewById(R.id.navigation)).setOnItemSelectedListener(item -> {
             librarySelected = item.getItemId() == R.id.nav_library; stopPlayer();
-            findViewById(R.id.recommend_scroll).setVisibility(librarySelected ? View.GONE : View.VISIBLE);
+            findViewById(R.id.recommend_page).setVisibility(librarySelected ? View.GONE : View.VISIBLE);
             findViewById(R.id.library_scroll).setVisibility(librarySelected ? View.VISIBLE : View.GONE);
             if (librarySelected && !busy) {
                 playlistId = null;
@@ -162,6 +163,7 @@ public class MainActivity extends AppCompatActivity {
                 showResults(); pager.setCurrentItem(state.getInt("index"), false);
                 if (state.getBoolean("editingRequest")) {
                     findViewById(R.id.request_panel).setVisibility(View.VISIBLE);findViewById(R.id.results).setVisibility(View.GONE);findViewById(R.id.empty).setVisibility(View.GONE);
+                    findViewById(R.id.card_navigation).setVisibility(View.GONE);
                 }
             }
         } catch (Exception e) { showError("곡 목록을 불러오지 못했어요.", null); }
@@ -251,8 +253,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void resizeCard() {
         if (findViewById(R.id.results).getVisibility()!=View.VISIBLE || picks.isEmpty()) return;
-        View navigation=findViewById(R.id.card_navigation);
-        int available=findViewById(R.id.recommend_scroll).getHeight()-pager.getTop()-navigation.getHeight()-dp(16);
+        int available=findViewById(R.id.recommend_scroll).getHeight()-pager.getTop()-dp(16);
         int height=Math.max(dp(180), available);
         if (pager.getLayoutParams().height!=height) { pager.getLayoutParams().height=height;pager.requestLayout(); }
     }
@@ -283,7 +284,7 @@ public class MainActivity extends AppCompatActivity {
         } else changed.remove(index);
         stopPlayer(); picks=changed; hiddenTracks.add(track.id); showResults();
         pager.setCurrentItem(Math.max(0, Math.min(beforeIndex, picks.size()-1)), false);
-        Snackbar.make(findViewById(R.id.main), replace ? "같은 조건의 다른 곡으로 바꿨어요." : "이번 추천에서 제외했어요.", Snackbar.LENGTH_LONG)
+        snackbar(replace ? "같은 조건의 다른 곡으로 바꿨어요." : "이번 추천에서 제외했어요.", Snackbar.LENGTH_LONG)
             .setAction("되돌리기", v -> {
                 if (busy || picks!=changed) return;
                 stopPlayer(); picks=before; hiddenTracks=beforeHidden; showResults(); pager.setCurrentItem(beforeIndex, false);
@@ -318,7 +319,7 @@ public class MainActivity extends AppCompatActivity {
         }, value -> {
             if (value == 0) feedback.remove(track.id); else feedback.put(track.id, value);
             cards.notifyDataSetChanged();updateCounter();
-            Snackbar.make(findViewById(R.id.main), value == 0 ? "반응을 취소했어요." : "다음 추천에 반영할게요.", Snackbar.LENGTH_SHORT).show();
+            snackbar(value == 0 ? "반응을 취소했어요." : "다음 추천에 반영할게요.", Snackbar.LENGTH_SHORT).show();
         }, () -> react(track, reaction));
     }
 
@@ -370,7 +371,7 @@ public class MainActivity extends AppCompatActivity {
             return ids;
         }, saved -> {
             savedTracks.addAll(saved); cards.notifyDataSetChanged();
-            Snackbar.make(findViewById(R.id.main), "플레이리스트에 "+saved.size()+"곡을 저장했어요.", Snackbar.LENGTH_LONG)
+            snackbar("플레이리스트에 "+saved.size()+"곡을 저장했어요.", Snackbar.LENGTH_LONG)
                     .setAction("목록 보기", v -> ((BottomNavigationView)findViewById(R.id.navigation)).setSelectedItemId(R.id.nav_library)).show();
         }, () -> save(tracks, id));
     }
@@ -652,6 +653,7 @@ public class MainActivity extends AppCompatActivity {
         picks=new ArrayList<>();hiddenTracks.clear();hasResults=false;resultConditions=new Recommender.Conditions();restoredPlaylistId=null;restoredLibraryScroll=0;
         findViewById(R.id.request_panel).setVisibility(View.VISIBLE);
         findViewById(R.id.results).setVisibility(View.GONE);
+        findViewById(R.id.card_navigation).setVisibility(View.GONE);
         TextView empty=findViewById(R.id.empty);empty.setText(R.string.home_empty);empty.setVisibility(View.VISIBLE);cards.notifyDataSetChanged();
     }
     private void networkPermission(String base,Runnable action){
@@ -669,7 +671,13 @@ public class MainActivity extends AppCompatActivity {
         for(int i=0;i<menu.size();i++)menu.getItem(i).setEnabled(!value);
         updateCounter();cards.notifyDataSetChanged();
     }
-    private void showError(String message,Runnable retry){Snackbar bar=Snackbar.make(findViewById(R.id.main),message,Snackbar.LENGTH_LONG);if(retry!=null)bar.setAction("재시도",v->retry.run());bar.show();}
+    private Snackbar snackbar(String message,int duration){
+        View anchor=findViewById(R.id.card_navigation);
+        if(!anchor.getGlobalVisibleRect(new android.graphics.Rect()))anchor=findViewById(R.id.navigation);
+        Snackbar bar=Snackbar.make(findViewById(R.id.main),message,duration).setAnchorView(anchor);
+        bar.setAnchorViewLayoutListenerEnabled(true);return bar;
+    }
+    private void showError(String message,Runnable retry){Snackbar bar=snackbar(message,Snackbar.LENGTH_LONG);if(retry!=null)bar.setAction("재시도",v->retry.run());bar.show();}
 
     private final class CardAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder>{
         @NonNull @Override public RecyclerView.ViewHolder onCreateViewHolder(@NonNull ViewGroup parent,int type){return new RecyclerView.ViewHolder(LayoutInflater.from(parent.getContext()).inflate(R.layout.track_card,parent,false)){};}

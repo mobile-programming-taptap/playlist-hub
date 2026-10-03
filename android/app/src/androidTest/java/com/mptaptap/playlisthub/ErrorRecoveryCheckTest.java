@@ -29,6 +29,7 @@ import static androidx.test.espresso.Espresso.onView;
 import static androidx.test.espresso.action.ViewActions.*;
 import static androidx.test.espresso.assertion.ViewAssertions.matches;
 import static androidx.test.espresso.matcher.ViewMatchers.*;
+import static androidx.test.espresso.matcher.RootMatchers.isDialog;
 import static org.hamcrest.Matchers.allOf;
 import static org.junit.Assert.*;
 
@@ -54,7 +55,7 @@ public class ErrorRecoveryCheckTest {
             settings.edit().remove("server").remove("prompt").commit();data.clearFeedback();
             try(ActivityScenario<MainActivity> app=ActivityScenario.launch(MainActivity.class)) {
                 ready(app);
-                onView(withId(R.id.example_study)).perform(click());
+                onView(withId(R.id.example_study)).perform(closeSoftKeyboard(),scrollTo(),click());
                 onView(withId(R.id.recommend)).perform(scrollTo(),click());ready(app);
                 onView(withId(R.id.counter)).check(matches(withText("1 / 8")));
                 Future<?> replies=serverWorker.submit(()->{
@@ -86,7 +87,7 @@ public class ErrorRecoveryCheckTest {
                 credentials.edit().putString(base,token).commit();settings.edit().putString("server",base).commit();
                 app.recreate();ready(app);
                 onView(withId(R.id.counter)).check(matches(withText("1 / 8")));
-                onView(allOf(withId(R.id.like),isDisplayed())).perform(scrollTo(),click());ready(app);
+                onView(allOf(withId(R.id.like),isDisplayed())).perform(click());ready(app);
                 onView(withText("재시도 검사 오류")).check(matches(isDisplayed()));
                 replies.get(10,TimeUnit.SECONDS);
                 onView(withId(R.id.settings)).perform(click());
@@ -121,7 +122,7 @@ public class ErrorRecoveryCheckTest {
             settings.edit().remove("server").remove("prompt").commit();data.clearFeedback();
             try(ActivityScenario<MainActivity> app=ActivityScenario.launch(MainActivity.class)) {
                 ready(app);
-                onView(withId(R.id.example_study)).perform(click());
+                onView(withId(R.id.example_study)).perform(closeSoftKeyboard(),scrollTo(),click());
                 onView(withId(R.id.recommend)).perform(scrollTo(),click());ready(app);
                 onView(withId(R.id.counter)).check(matches(withText("1 / 8")));
                 app.onActivity(activity->{
@@ -129,11 +130,11 @@ public class ErrorRecoveryCheckTest {
                     View listen=activity.findViewById(R.id.listen);
                     listen.performClick();listen.performClick();
                 });
-                onView(withText("플레이어를 준비하지 못했어요. 외부에서 열어보세요.")).check(matches(isDisplayed()));
-                onView(withText("외부에서 열기")).perform(click());
-                onView(withText("Spotify · 곡 검색")).check(matches(isDisplayed()));
-                onView(withText("YouTube Music · 영상으로 연결")).check(matches(isDisplayed()));
-                onView(withText("취소")).perform(click());ready(app);
+                onView(withText("플레이어를 준비하지 못했어요. 외부에서 열어보세요.")).inRoot(isDialog()).check(matches(isDisplayed()));
+                onView(withText("외부에서 열기")).inRoot(isDialog()).perform(click());
+                onView(withText("Spotify · 곡 검색")).inRoot(isDialog()).check(matches(isDisplayed()));
+                onView(withText("YouTube Music · 영상으로 연결")).inRoot(isDialog()).check(matches(isDisplayed()));
+                onView(withText("취소")).inRoot(isDialog()).perform(click());ready(app);
                 onView(withId(R.id.counter)).check(matches(withText("1 / 8")));
                 assertTrue("Playback failure must not create recommendation feedback",data.feedback().isEmpty());
             }
