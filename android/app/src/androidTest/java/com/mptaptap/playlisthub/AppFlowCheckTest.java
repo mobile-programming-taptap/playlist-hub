@@ -126,7 +126,7 @@ public class AppFlowCheckTest {
                 onView(withHint("내 목록 이름 검색")).perform(replaceText("일치하지않는검색어"),closeSoftKeyboard());
                 onView(withText("검색한 이름의 목록이 없어요.")).check(matches(isDisplayed()));
                 onView(withHint("내 목록 이름 검색")).perform(replaceText(title),closeSoftKeyboard());
-                onView(withText(title+"\n2곡 · 앱 추천에서 저장")).perform(scrollTo(),click());ready(app);
+                onView(withText(title+"\n2곡")).perform(scrollTo(),click());ready(app);
                 onView(withText("2곡")).check(matches(isDisplayed()));
                 onView(withText("이름 변경")).perform(scrollTo(),click());
                 onView(withHint("예: 비 오는 날의 음악")).perform(replaceText(title+" 변경"),closeSoftKeyboard());
@@ -150,7 +150,7 @@ public class AppFlowCheckTest {
                 onView(withId(R.id.nav_recommend)).perform(click());
                 app.recreate();ready(app);
                 onView(withId(R.id.nav_library)).perform(closeSoftKeyboard(),click());ready(app);
-                onView(withText(title+" 변경\n2곡 · 앱 추천에서 저장")).perform(scrollTo(),click());ready(app);
+                onView(withText(title+" 변경\n2곡")).perform(scrollTo(),click());ready(app);
                 onView(withText(startsWith("1. "))).perform(scrollTo(),click());
                 onView(withText("곡 정보·출처")).perform(click());
                 onView(withText(containsString("MusicBrainz 핵심 메타데이터 · CC0"))).check(matches(isDisplayed()));

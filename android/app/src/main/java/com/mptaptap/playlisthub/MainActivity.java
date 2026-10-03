@@ -77,6 +77,13 @@ public class MainActivity extends AppCompatActivity {
     private LocalStore local;
     private ApiClient api;
     private SharedPreferences settings;
+    private String storageIdentity="";
+    private boolean returningFromHub;
+    private List<String> conversation=new ArrayList<>();
+    private EditText refinementPrompt;
+    private Map<String,android.widget.CheckBox> refinementChoices=new HashMap<>();
+    private String restoredRefinement;
+    private Set<String> restoredKeeps=new HashSet<>();
     private ViewPager2 pager;
     private CardAdapter cards;
     private EditText prompt;
@@ -131,10 +138,17 @@ public class MainActivity extends AppCompatActivity {
         });
         local = new LocalStore(this); settings = getSharedPreferences("settings", MODE_PRIVATE);
         String base = settings.getString("server", "");
-        boolean sameStorage=state==null||base.equals(state.getString("storageBase",base));
-        if(state!=null){pendingPermissionBase=state.getString("pendingPermissionBase");pendingServerConnection=state.getBoolean("pendingServerConnection");}
+        storageIdentity=base.isEmpty()?"local":getSharedPreferences("server_credentials",MODE_PRIVATE).getString(base,"");
+        String storageOwner=ApiClient.ownerFingerprint(base,storageIdentity);
+        boolean sameStorage=state==null||base.equals(state.getString("storageBase",base))&&storageOwner.equals(state.getString("storageOwner",
+            ApiClient.ownerFingerprint(state.getString("storageBase",base),state.getString("storageIdentity",storageIdentity))));
+        if(!sameStorage||!settings.getString("conversationOwner","").equals(storageOwner))settings.edit().remove("conversation").apply();
+        try {JSONArray history=new JSONArray(settings.getString("conversation","[]"));for(int i=Math.max(0,history.length()-8);i<history.length();i++)conversation.add(history.getString(i));}catch(Exception ignored) { }
+        if(state!=null){returningFromHub=state.getBoolean("returningFromHub");pendingPermissionBase=state.getString("pendingPermissionBase");pendingServerConnection=state.getBoolean("pendingServerConnection");}
         prompt = findViewById(R.id.prompt); prompt.setText(settings.getString("prompt", ""));
         if (state != null && sameStorage) {
+            restoredRefinement=state.getString("refinementDraft");
+            try{JSONArray kept=new JSONArray(state.getString("refinementKeeps","[]"));for(int i=0;i<kept.length();i++)restoredKeeps.add(kept.getString(i));}catch(Exception ignored){}
             libraryQuery = state.getString("libraryQuery", "");
             restoredPlaylistId = state.getString("playlistId");
             restoredLibraryScroll = state.getInt("libraryScroll");
@@ -159,6 +173,7 @@ public class MainActivity extends AppCompatActivity {
             List<Track> tracks=new ArrayList<>(); for (Recommender.Pick pick:picks) tracks.add(pick.track);
             chooseSaveAll(tracks);
         });
+        findViewById(R.id.refine_request).setOnClickListener(v->refineRequest());
         findViewById(R.id.settings).setOnClickListener(v -> showSettings());
         findViewById(R.id.example_rain).setOnClickListener(v -> prompt.setText("비 오는 밤에 듣기 좋은 잔잔한 음악"));
         findViewById(R.id.example_study).setOnClickListener(v -> prompt.setText("공부할 때 집중할 수 있는 가사 없는 피아노 음악"));
@@ -167,6 +182,9 @@ public class MainActivity extends AppCompatActivity {
         findViewById(R.id.next).setOnClickListener(v -> pager.setCurrentItem(pager.getCurrentItem() + 1, true));
         ((BottomNavigationView)findViewById(R.id.navigation)).setOnItemSelectedListener(item -> {
             hideKeyboard();
+            if(item.getItemId()==R.id.nav_create||item.getItemId()==R.id.nav_community||item.getItemId()==R.id.nav_account){
+                openHub(item.getItemId()==R.id.nav_create?"create":item.getItemId()==R.id.nav_community?"community":"account",null);return false;
+            }
             librarySelected = item.getItemId() == R.id.nav_library; stopPlayer();
             findViewById(R.id.recommend_page).setVisibility(librarySelected ? View.GONE : View.VISIBLE);
             findViewById(R.id.library_scroll).setVisibility(librarySelected ? View.VISIBLE : View.GONE);
@@ -210,13 +228,20 @@ public class MainActivity extends AppCompatActivity {
             if(pending.result==null&&pending.error==null)return;
             recommendation.consume(pending);
             if(!pending.base.equals(api==null?"":api.base))return;
-            if(pending.error!=null)showError(errorMessage(pending.error),()->{if(pending.base.equals(api==null?"":api.base))recommend();});
+            if(!pending.identity.equals(RecommendationRequest.identity(api))){
+                if(pending.error instanceof ApiClient.ApiError&&((ApiClient.ApiError)pending.error).statusCode==401&&api!=null&&api.identity().isEmpty()){
+                    clearStorageResults();showError("로그인 또는 서버 연결을 다시 확인해 주세요.",()->openHub("account",null));
+                }return;
+            }
+            if(pending.error!=null)showError(errorMessage(pending.error),()->{if(!busy)recommendation.retry(api,new ArrayList<>(catalogue),new HashMap<>(feedback));});
             else showRecommendation(pending.result);
         });
         if(state!=null&&sameStorage&&state.getBoolean("requestPending")&&!recommendation.current().loading
                 &&recommendation.current().result==null&&recommendation.current().error==null)
-            { String requestBase=api==null?"":api.base;
-            findViewById(R.id.main).post(()->{if(!isDestroyed()&&!isFinishing()&&requestBase.equals(api==null?"":api.base))showError("진행하던 추천을 이어받지 못했어요. 요청을 확인하고 다시 추천받아 주세요.",()->{if(requestBase.equals(api==null?"":api.base))recommend();});}); }
+            { try {String snapshot=state.getString("pendingRecommendation");if(snapshot!=null){
+                recommendation.restore(new JSONObject(snapshot),api);
+                findViewById(R.id.main).post(()->{if(!isDestroyed()&&!isFinishing())showError("진행하던 추천 요청이 남아 있어요. 같은 조건과 선택한 곡으로 다시 요청할 수 있어요.",()->{if(!busy&&metadataReady)recommendation.retry(api,new ArrayList<>(catalogue),new HashMap<>(feedback));});});
+            }}catch(Exception ignored){} }
         pendingTask.states().observe(this, pending->{
             updateBusy();
             if(pending==null||pending.loading||pending.owner==taskOwner)return;
@@ -226,7 +251,7 @@ public class MainActivity extends AppCompatActivity {
         if(pendingPermissionBase!=null) {
             if(pendingServerConnection) {
                 ApiClient candidate=new ApiClient(this,pendingPermissionBase);
-                pendingConnection=()->task(()->storeConnection(candidate),data->applyStorage(candidate,data),null);
+                pendingConnection=()->task(()->storeConnection(candidate),data->applyStorage(candidate,data),null,false,candidate);
             } else pendingConnection=()->refreshAfterRecreation(state,null);
             if(checkSelfPermission(android.Manifest.permission.ACCESS_LOCAL_NETWORK)==android.content.pm.PackageManager.PERMISSION_GRANTED)completeLocalPermission(true);
         } else if(pendingTask.current()==null)refreshAfterRecreation(state,null);
@@ -264,17 +289,23 @@ public class MainActivity extends AppCompatActivity {
     private void applyMetadata(Object[] data) {
         catalogue=(List<Track>)data[0];feedback=(Map<String,Integer>)data[1];savedTracks=(Set<String>)data[2];
         metadataReady=true;updateBusy();
+        storageIdentity=api==null?"local":api.identity();
+        if(restoredRefinement!=null&&hasResults)findViewById(R.id.main).post(this::refineRequest);
     }
 
     private Object[] storeConnection(ApiClient source) throws Exception {
-        Object[] data=readMetadata(source);SharedPreferences.Editor change=settings.edit();
+        Object[] data=readMetadata(source);
+        if(source!=null&&!source.ownsCurrentSession())throw new IllegalStateException("계정이 변경되었어요. 새 계정에서 연결을 다시 확인해 주세요.");
+        SharedPreferences.Editor change=settings.edit();
         if(source==null)change.remove("server");else change.putString("server",source.base);
         if(!change.commit())throw new IllegalStateException("음악 설정을 저장하지 못했어요.");
         return data;
     }
 
     private void applyStorage(ApiClient source,Object[] data) {
-        api=source;clearStorageResults();applyMetadata(data);if(librarySelected)loadLibrary();
+        if(source!=null&&!source.ownsCurrentSession()){showError("계정이 변경되었어요. 새 계정에서 연결을 다시 확인해 주세요.",null);return;}
+        api=source;storageIdentity=api==null?"local":api.identity();conversation.clear();settings.edit().remove("conversation").apply();
+        clearStorageResults();applyMetadata(data);if(librarySelected)loadLibrary();
     }
 
     private Set<String> savedIds(ApiClient source) throws Exception {
@@ -300,7 +331,47 @@ public class MainActivity extends AppCompatActivity {
         recommendation.start(request,api,new ArrayList<>(catalogue),new HashMap<>(feedback));
     }
 
+    private void refineRequest() {
+        if(busy||!hasResults)return;
+        LinearLayout box=column();
+        box.addView(text("이전 요청을 기억하며 추천을 바꿔요. 유지할 곡을 선택할 수 있어요.",14,false));
+        for(String previous:conversation)box.addView(text("나 · "+previous,13,false));
+        EditText next=new AppCompatEditText(this);next.setHint("예: 더 신나게, 피아노는 제외해줘");next.setMinLines(2);
+        next.setFilters(new InputFilter[]{new InputFilter.LengthFilter(500)});box.addView(next);
+        if(restoredRefinement!=null){next.setText(restoredRefinement);restoredRefinement=null;}
+        refinementPrompt=next;refinementChoices.clear();
+        List<android.widget.CheckBox> choices=new ArrayList<>();
+        List<Recommender.Pick> current=new ArrayList<>(picks);
+        for(Recommender.Pick pick:current){android.widget.CheckBox check=new androidx.appcompat.widget.AppCompatCheckBox(this);
+            check.setText("유지 · "+pick.track.title);check.setMinHeight(dp(48));check.setChecked(restoredKeeps.contains(pick.track.id));
+            refinementChoices.put(pick.track.id,check);choices.add(check);box.addView(check);}
+        restoredKeeps.clear();
+        AlertDialog dialog=dialogBuilder().setTitle("이어서 요청하기").setView(scroll(box)).setPositiveButton("추천 바꾸기",null).setNegativeButton("취소",null).create();
+        dialog.setOnShowListener(d->dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{
+            String request=next.getText().toString().trim();try{com.mptaptap.core.Conversation.parse(resultConditions,conversation,request);next.setError(null);}catch(Exception e){next.setError(e.getMessage());return;}
+            List<String> kept=new ArrayList<>();for(int i=0;i<choices.size();i++)if(choices.get(i).isChecked())kept.add(current.get(i).track.id);
+            dialog.dismiss();hideKeyboard();stopPlayer();
+            recommendation.start(request,api,new ArrayList<>(catalogue),new HashMap<>(feedback),new ArrayList<>(conversation),kept,new ArrayList<>(hiddenTracks),resultConditions);
+        }));dialog.setOnDismissListener(d->{if(refinementPrompt==next){refinementPrompt=null;refinementChoices.clear();}});dialog.show();
+    }
+
+    private void openHub(String mode,String id) {
+        stopPlayer();returningFromHub=true;
+        Intent intent=new Intent(this,HubActivity.class).putExtra("mode",mode);
+        if(id!=null)intent.putExtra("playlistId",id);
+        startActivity(intent);
+    }
+
+    @Override protected void onResume() {
+        super.onResume();if(settings==null||!returningFromHub)return;returningFromHub=false;
+        String identity=api==null?"local":api.identity();
+        if(!identity.equals(storageIdentity)){storageIdentity=identity;conversation.clear();settings.edit().remove("conversation").apply();clearStorageResults();}
+        if(!busy)refreshData(()->{storageIdentity=api==null?"local":api.identity();if(librarySelected){if(playlistId==null)loadLibrary();else openPlaylist(playlistId);}});
+    }
+
     private void showRecommendation(Object[] result) {
+        if(result.length>4){conversation=new ArrayList<>((List<String>)result[4]);settings.edit().putString("conversation",new JSONArray(conversation).toString())
+            .putString("conversationOwner",ApiClient.ownerFingerprint(api==null?"":api.base,storageIdentity)).apply();}
         picks = (List<Recommender.Pick>)result[0]; resultMode = (String)result[1]; resultNotice = (String)result[2];
         resultConditions = (Recommender.Conditions)result[3]; hiddenTracks.clear();
         showResults(); List<Recommender.Pick> shown=picks;
@@ -585,9 +656,14 @@ public class MainActivity extends AppCompatActivity {
                 .setPositiveButton("삭제", (d,w) -> deletePlaylist(id)).setNegativeButton("취소", null).show()),deleteSize);
             box.addView(actions);
             MaterialButton share=button("목록 텍스트 공유", v -> sharePlaylist(data)); share.setEnabled(items.length()>0); box.addView(share);
+            if(api!=null)box.addView(button("공개 설정 · 공유 링크",v->openHub("community",id)));
             if (items.length() == 0) box.addView(text("아직 곡이 없어요. 추천 화면에서 음악을 담아보세요.", 16, false));
             for (int i=0;i<items.length();i++) {
                 JSONObject row = items.optJSONObject(i);
+                if(row.has("trackId") && row.isNull("trackId") && row.optJSONObject("track")!=null){
+                    JSONObject external=row.optJSONObject("track");String item=row.optString("id");int index=i;
+                    box.addView(button((i+1)+". "+external.optString("title","다시 확인 필요")+"\n"+external.optString("artist")+" · 가져온 곡",v->externalItemActions(id,item,external,index,items.length())));continue;
+                }
                 try {
                     Track track = TrackJson.read(row.getJSONObject("track")); String item = row.getString("id"); int index=i;
                     box.addView(button((i+1) + ". " + track.title + "\n" + track.artist, v -> itemActions(id, item, track, index, items.length())));
@@ -604,11 +680,16 @@ public class MainActivity extends AppCompatActivity {
 
     private void sharePlaylist(JSONObject data) {
         try {
-            List<Track> tracks=new ArrayList<>(); JSONArray items=data.getJSONArray("items");
-            for (int i=0;i<items.length();i++) tracks.add(TrackJson.read(items.getJSONObject(i).getJSONObject("track")));
+            JSONArray items=data.getJSONArray("items");StringBuilder content=new StringBuilder(data.getString("title")).append("\n\n");
+            for(int i=0;i<items.length();i++){
+                JSONObject row=items.getJSONObject(i),track=row.getJSONObject("track");
+                if(!row.has("trackId")||!row.isNull("trackId"))TrackJson.read(track);
+                content.append(i+1).append(". ").append(track.optString("title","다시 확인 필요")).append(" — ").append(track.optString("artist")).append("\n");
+                String source=track.optString("sourceUrl");if(!source.isEmpty())content.append(source).append("\n");
+            }
             Intent share=new Intent(Intent.ACTION_SEND).setType("text/plain")
                 .putExtra(Intent.EXTRA_SUBJECT, data.getString("title"))
-                .putExtra(Intent.EXTRA_TEXT, PlaylistText.format(data.getString("title"), tracks));
+                .putExtra(Intent.EXTRA_TEXT, content.toString());
             stopPlayer(); startActivity(Intent.createChooser(share, "목록 텍스트 공유"));
         } catch (ActivityNotFoundException e) { showError("공유할 수 있는 앱이 없어요.", null); }
         catch (Exception e) { showError("공유할 곡의 출처를 확인할 수 없어요.", null); }
@@ -620,7 +701,7 @@ public class MainActivity extends AppCompatActivity {
             JSONObject row=lists.optJSONObject(i);
             if (!Track.matches(row.optString("title"), query)) continue;
             String id=row.optString("id"); count++;
-            rows.addView(button(row.optString("title") + "\n" + row.optInt("size") + "곡 · 앱 추천에서 저장", v -> openPlaylist(id)));
+            rows.addView(button(row.optString("title") + "\n" + row.optInt("size") + "곡", v -> openPlaylist(id)));
         }
         if (count==0) rows.addView(text(query.trim().isEmpty() ? "아직 저장한 목록이 없어요.\n추천 곡에서 ‘목록에 저장’을 눌러보세요." : "검색한 이름의 목록이 없어요.", 16, false));
     }
@@ -667,6 +748,49 @@ public class MainActivity extends AppCompatActivity {
             else dialogBuilder().setTitle("이 목록에서 제거할까요?").setMessage(track.title)
                 .setPositiveButton("제거", (a,b) -> remove(id, item)).setNegativeButton("취소", null).show();
         }).setNegativeButton("닫기", null).show();
+    }
+
+    private void externalItemActions(String id,String item,JSONObject track,int index,int count) {
+        String url=track.optString("sourceUrl"),title=track.optString("title","다시 확인 필요");
+        List<String> actions=new ArrayList<>(java.util.Arrays.asList("원본에서 열기","곡 정보·출처","곡 정보 수정"));
+        if(index>0)actions.add("위로 이동");if(index<count-1)actions.add("아래로 이동");actions.add("이 목록에서 제거");
+        Uri origin=Uri.parse(url);String video=origin.isHierarchical()?origin.getQueryParameter("v"):null;
+        boolean youtube="https".equals(origin.getScheme())&&"www.youtube.com".equals(origin.getHost())&&video!=null&&video.matches("[A-Za-z0-9_-]{11}");
+        if(youtube)actions.add(0,"여기서 들어보기");
+        dialogBuilder().setTitle(title).setItems(actions.toArray(new String[0]),(d,w)->{
+            String action=actions.get(w);
+            if(action.equals("여기서 들어보기")){int seconds=track.optInt("timestamp",0);String t=origin.getQueryParameter("t");
+                try{if(t!=null)seconds=Integer.parseInt(t.replaceFirst("s$",""));}catch(Exception ignored){}
+                listenVideo(title,video,Math.max(0,Math.min(86400,seconds)),()->openUrl(url));}
+            else if(action.equals("원본에서 열기"))openUrl(url);
+            else if(action.equals("곡 정보·출처"))dialogBuilder().setTitle("가져온 곡 정보")
+                .setMessage(title+"\n"+track.optString("artist")+"\n\n"+track.optString("sourceProvider",track.optString("platform","외부 목록"))
+                    +"\n원본: "+track.optString("sourceRow")+"\n\n추천 학습과 개인화에는 사용하지 않아요.")
+                .setPositiveButton("원본 열기",(a,b)->openUrl(url)).setNegativeButton("닫기",null).show();
+            else if(action.equals("곡 정보 수정")){
+                LinearLayout box=column();EditText name=new AppCompatEditText(this),artist=new AppCompatEditText(this),time=new AppCompatEditText(this);
+                name.setHint("곡명");name.setText(title);name.setFilters(new InputFilter[]{new InputFilter.LengthFilter(300)});box.addView(name);
+                artist.setHint("아티스트");artist.setText(track.optString("artist"));artist.setFilters(new InputFilter[]{new InputFilter.LengthFilter(300)});box.addView(artist);
+                time.setHint("영상 시작 위치 · 초");time.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);if(youtube){time.setText(String.valueOf(track.optInt("timestamp",0)));box.addView(time);}
+                TextView failure=text("",14,false);failure.setTextColor(getColor(R.color.accent));failure.setVisibility(View.GONE);failure.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);box.addView(failure);
+                AlertDialog edit=dialogBuilder().setTitle("가져온 곡 수정").setView(scroll(box)).setPositiveButton("저장",null).setNegativeButton("취소",null).create();
+                edit.setOnShowListener(a->edit.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{
+                    if(busy)return;
+                    final JSONObject body=new JSONObject();try{if(name.getText().toString().trim().isEmpty()){name.setError("곡명을 입력해 주세요.");return;}
+                        body.put("title",name.getText().toString().trim()).put("artist",artist.getText().toString().trim());
+                        if(youtube)body.put("seconds",Integer.parseInt(time.getText().toString()));
+                    }catch(Exception error){time.setError("시작 위치를 초 단위로 입력해 주세요.");return;}
+                    failure.setVisibility(View.GONE);name.setEnabled(false);artist.setEnabled(false);time.setEnabled(false);edit.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(false);
+                    task(()->{try{return api.object("PUT","/playlists/"+id+"/items/"+item,body);}catch(Exception error){
+                        runOnUiThread(()->{if(!isDestroyed()&&edit.isShowing()){
+                            failure.setText(errorMessage(error));failure.setVisibility(View.VISIBLE);name.setEnabled(true);artist.setEnabled(true);time.setEnabled(true);edit.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(true);
+                        }});throw error;
+                    }},done->{edit.dismiss();openPlaylist(id);},null);
+                }));edit.show();
+            }
+            else if(action.equals("위로 이동")||action.equals("아래로 이동"))moveItem(id,item,action.equals("위로 이동")?-1:1);
+            else dialogBuilder().setTitle("이 목록에서 제거할까요?").setMessage(title).setPositiveButton("제거",(a,b)->remove(id,item)).setNegativeButton("취소",null).show();
+        }).setNegativeButton("닫기",null).show();
     }
 
     private void moveItem(String id, String item, int direction) {
@@ -736,9 +860,14 @@ public class MainActivity extends AppCompatActivity {
             dialogBuilder().setTitle("외부에서 찾아볼까요?").setMessage("이 곡의 공식 영상 연결은 아직 확인하지 못했어요. 곡명·아티스트로 검색할 수 있어요.")
                 .setPositiveButton("외부에서 검색",(d,w)->external(track)).setNegativeButton("닫기",null).show(); return;
         }
+        listenVideo(track.title,track.youtubeVideoId,0,()->external(track));
+    }
+
+    private void listenVideo(String title,String videoId,int seconds,Runnable fallback) {
+        stopPlayer();if(!videoId.matches("[A-Za-z0-9_-]{11}")||seconds<0||seconds>86400){showError("영상 연결 정보를 확인해 주세요.",null);return;}
         LinearLayout box=column(); TextView status=text("YouTube 영상 연결 중…",14,false);status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE); box.addView(status);
         try {
-            player=new WebView(this); player.setContentDescription(track.title+" YouTube 공식 플레이어");
+            player=new WebView(this); player.setContentDescription(title+" YouTube 공식 플레이어");
             player.getSettings().setJavaScriptEnabled(true); player.getSettings().setDomStorageEnabled(true);
             player.getSettings().setAllowFileAccess(false); player.getSettings().setAllowContentAccess(false);
             player.getSettings().setMediaPlaybackRequiresUserGesture(true);
@@ -755,11 +884,11 @@ public class MainActivity extends AppCompatActivity {
             });
             box.addView(player,new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,dp(240)));
             String origin="https://"+getPackageName();
-            String html=ApiClient.read(getAssets().open("player.html")).replace("__VIDEO__",track.youtubeVideoId).replace("__ORIGIN__",origin);
+            String html=ApiClient.read(getAssets().open("player.html")).replace("__VIDEO__",videoId).replace("__ORIGIN__",origin).replace("start:0","start:"+seconds);
             player.loadDataWithBaseURL(origin+"/",html,"text/html","UTF-8",null);
         } catch(Exception | LinkageError e){stopPlayer();status.setText("플레이어를 준비하지 못했어요. 외부에서 열어보세요.");}
-        playerDialog=dialogBuilder().setTitle(track.title).setView(box)
-            .setPositiveButton("외부에서 열기",(d,w)->external(track)).setNegativeButton("닫기",null).create();
+        playerDialog=dialogBuilder().setTitle(title).setView(box)
+            .setPositiveButton("외부에서 열기",(d,w)->fallback.run()).setNegativeButton("닫기",null).create();
         playerDialog.setOnDismissListener(d->{if(playerDialog==d)stopPlayer();}); playerDialog.show();
     }
 
@@ -777,6 +906,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void showSettings(){
         LinearLayout box=column(); box.addView(text("나의 음악 설정",23,true));
+        box.addView(button("계정 · 플랫폼 연결",v->openHub("account",null)));
         box.addView(text("추천에는 직접 입력한 요청과 앱 안의 좋아요·싫어요만 사용해요. 저장·외부 열기를 청취 기록으로 간주하지 않아요.",14,false));
         MaterialButton reactions=button(metadataReady?"좋아요·싫어요 관리 ("+feedback.size()+")":"좋아요·싫어요를 불러오지 못했어요",v->manageFeedback());
         reactions.setEnabled(metadataReady);box.addView(reactions);
@@ -796,7 +926,7 @@ public class MainActivity extends AppCompatActivity {
                 }catch(Exception error){
                     runOnUiThread(()->{if(!isDestroyed()&&dialog.isShowing()){failure.setText("서버에 연결하지 못했어요. 주소와 서버 실행 상태를 확인해 주세요.");failure.setVisibility(View.VISIBLE);address.setError(failure.getText());box.setFocusableInTouchMode(true);box.requestFocus();}});throw error;
                 }
-            },data->{dialog.dismiss();applyStorage(candidate,data);},null),true);
+            },data->{dialog.dismiss();applyStorage(candidate,data);},null,false,candidate),true);
         }));
         if(api!=null)box.addView(button("이 기기의 기본 추천 사용",v->{
             if(busy)return;dialog.dismiss();task(()->storeConnection(null),data->applyStorage(null,data),null);
@@ -836,18 +966,26 @@ public class MainActivity extends AppCompatActivity {
         task(operation,success,retry,false);
     }
     private <T> void task(Callable<T> operation,Consumer<T> success,Runnable retry,boolean refreshing){
+        task(operation,success,retry,refreshing,null);
+    }
+    private <T> void task(Callable<T> operation,Consumer<T> success,Runnable retry,boolean refreshing,ApiClient connectingSource){
         if(pendingTask.current()!=null||busy&&!refreshing)return;
-        ApiClient taskApi=api;PendingTask.State pending=pendingTask.begin(taskOwner);
+        ApiClient taskApi=api;String taskIdentity=RecommendationRequest.identity(taskApi);PendingTask.State pending=pendingTask.begin(taskOwner);
         worker.execute(()->{
-            try {T result=operation.call();runOnUiThread(()->{
+            try {if(!taskIdentity.equals(RecommendationRequest.identity(taskApi)))throw new IllegalStateException("계정이 변경되었어요. 새 계정에서 다시 요청해 주세요.");
+                T result=operation.call();runOnUiThread(()->{
                 PendingTask.State completed=pendingTask.finish(pending,null);
                 if(isDestroyed()||isFinishing())return;
-                pendingTask.consume(completed);success.accept(result);
+                pendingTask.consume(completed);
+                boolean initialSession=taskApi!=null&&taskIdentity.isEmpty()&&(taskApi.ownsCurrentSession()
+                    ||connectingSource!=null&&connectingSource.base.equals(taskApi.base)&&connectingSource.ownsCurrentSession());
+                if(api==taskApi&&(taskIdentity.equals(RecommendationRequest.identity(taskApi))||initialSession)
+                    &&(connectingSource==null||connectingSource.ownsCurrentSession()))success.accept(result);
             });}
             catch(Exception error){runOnUiThread(()->{
                 PendingTask.State completed=pendingTask.finish(pending,error);
                 if(isDestroyed()||isFinishing())return;
-                pendingTask.consume(completed);showError(errorMessage(error),retry==null?null:()->{if(api==taskApi)retry.run();});
+                pendingTask.consume(completed);showError(errorMessage(error),retry==null?null:()->{if(api==taskApi&&taskIdentity.equals(RecommendationRequest.identity(taskApi)))retry.run();});
             });}
         });
     }
@@ -884,6 +1022,7 @@ public class MainActivity extends AppCompatActivity {
         findViewById(R.id.recommend).setEnabled(!busy && metadataReady);findViewById(R.id.settings).setEnabled(!busy);
         findViewById(R.id.save_results).setEnabled(!busy && metadataReady && !picks.isEmpty());
         findViewById(R.id.edit_request).setEnabled(!busy);
+        findViewById(R.id.refine_request).setEnabled(!busy&&metadataReady);
         android.view.Menu menu=((BottomNavigationView)findViewById(R.id.navigation)).getMenu();
         for(int i=0;i<menu.size();i++)menu.getItem(i).setEnabled(!busy);
         updateMode();updateCounter();cards.notifyDataSetChanged();
@@ -933,10 +1072,15 @@ public class MainActivity extends AppCompatActivity {
         state.putString("picks",rows.toString());state.putInt("index",pager.getCurrentItem());state.putString("mode",resultMode);state.putString("notice",resultNotice);state.putBoolean("library",librarySelected);
         state.putString("libraryQuery", libraryQuery);
         state.putString("storageBase",api==null?"":api.base);
+        state.remove("storageIdentity");state.putString("storageOwner",ApiClient.ownerFingerprint(api==null?"":api.base,storageIdentity));state.putBoolean("returningFromHub",returningFromHub);
+        if(refinementPrompt!=null){state.putString("refinementDraft",refinementPrompt.getText().toString());
+            List<String> kept=new ArrayList<>();for(Map.Entry<String,android.widget.CheckBox> entry:refinementChoices.entrySet())if(entry.getValue().isChecked())kept.add(entry.getKey());
+            state.putString("refinementKeeps",new JSONArray(kept).toString());}
         state.putString("pendingPermissionBase",pendingPermissionBase);state.putBoolean("pendingServerConnection",pendingServerConnection);
         if(librarySelected){state.putString("playlistId",playlistId);state.putInt("libraryScroll",findViewById(R.id.library_scroll).getScrollY());}
         state.putBoolean("hasResults",hasResults);state.putBoolean("editingRequest",hasResults && findViewById(R.id.request_panel).getVisibility()==View.VISIBLE);
         state.putBoolean("requestPending",recommendation.current().loading);
+        if(recommendation.current().loading&&recommendation.snapshot()!=null)state.putString("pendingRecommendation",recommendation.snapshot().toString());
         try { state.putString("conditions",TrackJson.conditions(resultConditions).toString()); } catch(Exception ignored){}
         state.putString("hiddenTracks",new JSONArray(hiddenTracks).toString());
     }

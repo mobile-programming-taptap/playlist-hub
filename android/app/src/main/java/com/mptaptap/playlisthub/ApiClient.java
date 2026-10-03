@@ -19,7 +19,7 @@ final class ApiClient {
     }
     final String base;
     private final SharedPreferences credentials;
-    private String token;
+    private volatile String token;
     ApiClient(Context context, String base) {
         this.base = validate(base); credentials = context.getSharedPreferences("server_credentials", Context.MODE_PRIVATE);
         token = credentials.getString(this.base, "");
@@ -40,21 +40,47 @@ final class ApiClient {
                 || host.matches("172\\.(?:1[6-9]|2[0-9]|3[01])\\." + octet + "\\." + octet));
     }
     void connect() throws Exception {
+        token=credentials.getString(base,"");
         object("GET", "/health", null);
         if (token.isEmpty()) {
             String fresh = object("POST", "/sessions", null).getString("token");
-            if (!fresh.matches("[A-Za-z0-9_-]{43}") || !credentials.edit().putString(base, fresh).commit()) throw new IllegalStateException("서버 연결 정보를 보관하지 못했어요.");
-            token = fresh;
+            synchronized(credentials){
+                if(!identity().isEmpty())throw new IllegalStateException("계정이 변경되었어요. 연결을 다시 확인해 주세요.");
+                if (!fresh.matches("[A-Za-z0-9_-]{43}") || !credentials.edit().putString(base, fresh).commit()) throw new IllegalStateException("서버 연결 정보를 보관하지 못했어요.");
+                token = fresh;
+            }
+        }
+    }
+    String identity() { return credentials.getString(base,""); }
+    static String ownerFingerprint(String base,String identity) {
+        return java.util.UUID.nameUUIDFromBytes((base+"|"+identity).getBytes(StandardCharsets.UTF_8)).toString();
+    }
+    boolean ownsCurrentSession() { return token.equals(identity()); }
+    void replaceSession(String fresh) {
+        synchronized(credentials){
+            if(!ownsCurrentSession())throw new IllegalStateException("계정이 변경되었어요. 새 계정에서 다시 요청해 주세요.");
+            if(fresh==null||!fresh.matches("[A-Za-z0-9_-]{43}")||!credentials.edit().putString(base,fresh).commit())
+                throw new IllegalStateException("로그인 정보를 보관하지 못했어요.");
+            token=fresh;
+        }
+    }
+    void clearSession() {
+        synchronized(credentials){
+            if(!ownsCurrentSession())throw new IllegalStateException("계정이 변경되었어요. 새 계정에서 다시 요청해 주세요.");
+            if(!credentials.edit().remove(base).commit())throw new IllegalStateException("로그인 정보를 초기화하지 못했어요.");
+            token="";
         }
     }
     JSONObject object(String method, String path, JSONObject body) throws Exception { return new JSONObject(request(method, path, body)); }
     JSONArray array(String path) throws Exception { return new JSONArray(request("GET", path, null)); }
     String request(String method, String path, JSONObject body) throws Exception {
+        String requestToken=credentials.getString(base,"");
+        if(!requestToken.equals(token))throw new IllegalStateException("계정이 변경되었어요. 새 계정에서 다시 요청해 주세요.");
         HttpURLConnection connection = (HttpURLConnection) new URL(base + path).openConnection();
         connection.setInstanceFollowRedirects(false);
         connection.setConnectTimeout(5000); connection.setReadTimeout(22000); connection.setRequestMethod(method);
         connection.setRequestProperty("Accept", "application/json");
-        if (!token.isEmpty()) connection.setRequestProperty("Authorization", "Bearer " + token);
+        if (!requestToken.isEmpty()) connection.setRequestProperty("Authorization", "Bearer " + requestToken);
         try {
             if (body != null) {
                 byte[] bytes = body.toString().getBytes(StandardCharsets.UTF_8);
@@ -64,9 +90,11 @@ final class ApiClient {
             int code = connection.getResponseCode(); InputStream stream = code >= 400 ? connection.getErrorStream() : connection.getInputStream();
             String content = stream == null ? "" : read(stream);
             if (code < 200 || code >= 300) {
-                if (code == 401) {
-                    token = "";
-                    if (!credentials.edit().remove(base).commit()) throw new IllegalStateException("연결 정보를 초기화하지 못했어요. 다시 시도해 주세요.");
+                if (code == 401 && !path.equals("/accounts/login") && !(path.equals("/accounts/me")&&method.equals("DELETE"))) {
+                    synchronized(credentials){if(requestToken.equals(identity())) {
+                        token = "";
+                        if (!credentials.edit().remove(base).commit()) throw new IllegalStateException("연결 정보를 초기화하지 못했어요. 다시 시도해 주세요.");
+                    }}
                 }
                 String message = code == 401 ? "서버 연결 정보가 만료되었어요. 설정에서 연결을 확인해 주세요." : "서버 요청에 실패했어요. 잠시 후 다시 시도해 주세요.";
                 try { message = new JSONObject(content).optString("message", message); } catch (Exception ignored) { }

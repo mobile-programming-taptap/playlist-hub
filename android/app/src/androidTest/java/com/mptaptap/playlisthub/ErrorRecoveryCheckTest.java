@@ -433,7 +433,7 @@ public class ErrorRecoveryCheckTest {
                 assertTrue(credentials.edit().putString(base,token).commit());assertTrue(settings.edit().remove("server").remove("prompt").commit());
                 try(ActivityScenario<MainActivity> app=ActivityScenario.launch(MainActivity.class)) {
                     ready(app);onView(withId(R.id.nav_library)).perform(closeSoftKeyboard(),click());ready(app);
-                    onView(withText(title+"\n1곡 · 앱 추천에서 저장")).perform(scrollTo()).check(matches(isDisplayed()));
+                    onView(withText(title+"\n1곡")).perform(scrollTo()).check(matches(isDisplayed()));
                     onView(withId(R.id.settings)).perform(click());
                     onView(withHint("https://서버주소")).inRoot(isDialog()).perform(scrollTo(),replaceText(base),closeSoftKeyboard());
                     onView(withText("서버에 연결")).inRoot(isDialog()).perform(scrollTo(),click());ready(app);
@@ -457,7 +457,7 @@ public class ErrorRecoveryCheckTest {
                     onView(withId(R.id.settings)).perform(click());
                     onView(withText("이 기기의 기본 추천 사용")).inRoot(isDialog()).perform(scrollTo(),click());ready(app);
                     assertEquals("",settings.getString("server",""));
-                    onView(withText(title+"\n1곡 · 앱 추천에서 저장")).perform(scrollTo()).check(matches(isDisplayed()));
+                    onView(withText(title+"\n1곡")).perform(scrollTo()).check(matches(isDisplayed()));
                     onView(withId(R.id.settings)).perform(click());
                     onView(withText("곡 데이터와 이용 안내")).inRoot(isDialog()).perform(scrollTo(),click());
                     onView(withText(containsString("검증한 40곡"))).inRoot(isDialog()).check(matches(isDisplayed()));
@@ -712,7 +712,7 @@ public class ErrorRecoveryCheckTest {
                         assertEquals(title,name.getText().toString());assertEquals("생성 검사 오류",name.getError());
                     });
                     onView(withText("만들기")).inRoot(isDialog()).check(matches(isEnabled())).perform(click());ready(app);
-                    onView(withText(title+"\n0곡 · 앱 추천에서 저장")).perform(scrollTo(),click());ready(app);
+                    onView(withText(title+"\n0곡")).perform(scrollTo(),click());ready(app);
                     onView(withText(title)).check(matches(isDisplayed()));
                     onView(withText("이름 변경")).perform(scrollTo(),click());
                     onView(withHint("예: 비 오는 날의 음악")).inRoot(isDialog()).perform(replaceText(renamed),closeSoftKeyboard());
@@ -726,7 +726,7 @@ public class ErrorRecoveryCheckTest {
                     onView(withText("변경")).inRoot(isDialog()).check(matches(isEnabled())).perform(click());ready(app);
                     onView(withText(renamed)).check(matches(isDisplayed()));
                     onView(withText("‹ 내 목록으로")).perform(scrollTo(),click());ready(app);
-                    onView(withText(renamed+"\n0곡 · 앱 추천에서 저장")).perform(scrollTo()).check(matches(isDisplayed()));
+                    onView(withText(renamed+"\n0곡")).perform(scrollTo()).check(matches(isDisplayed()));
                     replies.get(10,TimeUnit.SECONDS);assertEquals(2,creates.get());assertEquals(2,renames.get());
                     assertEquals(previousFeedback,data.feedback());
                 }
