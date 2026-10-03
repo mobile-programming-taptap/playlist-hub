@@ -11,7 +11,7 @@ import java.nio.charset.StandardCharsets;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-/** Blocking requests: called only from MainActivity's serial worker. */
+/** Blocking requests: called only from background workers. */
 final class ApiClient {
     static final class ApiError extends IllegalStateException {
         final int statusCode;

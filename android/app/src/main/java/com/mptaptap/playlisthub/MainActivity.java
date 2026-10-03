@@ -34,6 +34,7 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
+import androidx.lifecycle.ViewModelProvider;
 import androidx.recyclerview.widget.RecyclerView;
 import androidx.viewpager2.widget.ViewPager2;
 import com.google.android.material.bottomnavigation.BottomNavigationView;
@@ -70,6 +71,8 @@ public class MainActivity extends AppCompatActivity {
     private CardAdapter cards;
     private EditText prompt;
     private boolean busy;
+    private boolean taskBusy;
+    private RecommendationRequest recommendation;
     private boolean librarySelected;
     private String playlistId;
     private String libraryQuery = "";
@@ -87,7 +90,7 @@ public class MainActivity extends AppCompatActivity {
         Runnable action=pendingConnection;pendingConnection=null;
         if(granted&&action!=null)action.run();
         else {
-            if(api!=null&&ApiClient.localHost(java.net.URI.create(api.base).getHost())){settings.edit().remove("server").apply();api=null;clearResults();refreshData(()->{});}
+            if(api!=null&&ApiClient.localHost(java.net.URI.create(api.base).getHost())){settings.edit().remove("server").apply();api=null;recommendation.discard();clearResults();refreshData(()->{});}
             new MaterialAlertDialogBuilder(this).setTitle("서버에 연결하지 않았어요")
                 .setMessage("로컬 서버 연결에는 근처 기기 권한이 필요해요. 기본 추천은 계속 사용할 수 있어요.").setPositiveButton("확인",null).show();
         }
@@ -95,6 +98,7 @@ public class MainActivity extends AppCompatActivity {
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state); EdgeToEdge.enable(this); setContentView(R.layout.activity_main);
+        recommendation=new ViewModelProvider(this).get(RecommendationRequest.class);
         ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main), (v, insets) -> {
             Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.displayCutout());
             int keyboard = insets.getInsets(WindowInsetsCompat.Type.ime()).bottom;
@@ -133,6 +137,7 @@ public class MainActivity extends AppCompatActivity {
         findViewById(R.id.previous).setOnClickListener(v -> pager.setCurrentItem(pager.getCurrentItem() - 1, true));
         findViewById(R.id.next).setOnClickListener(v -> pager.setCurrentItem(pager.getCurrentItem() + 1, true));
         ((BottomNavigationView)findViewById(R.id.navigation)).setOnItemSelectedListener(item -> {
+            hideKeyboard();
             librarySelected = item.getItemId() == R.id.nav_library; stopPlayer();
             findViewById(R.id.recommend_page).setVisibility(librarySelected ? View.GONE : View.VISIBLE);
             findViewById(R.id.library_scroll).setVisibility(librarySelected ? View.VISIBLE : View.GONE);
@@ -148,7 +153,7 @@ public class MainActivity extends AppCompatActivity {
                 if (busy && librarySelected) return;
                 if (librarySelected && playlistId != null) { playlistId = null; loadLibrary(); }
                 else if (librarySelected) ((BottomNavigationView)findViewById(R.id.navigation)).setSelectedItemId(R.id.nav_recommend);
-                else if (hasResults && findViewById(R.id.request_panel).getVisibility()==View.VISIBLE) { prompt.clearFocus(); showResults(); }
+                else if (hasResults && findViewById(R.id.request_panel).getVisibility()==View.VISIBLE) { hideKeyboard(); showResults(); }
                 else { setEnabled(false); getOnBackPressedDispatcher().onBackPressed(); }
             }
         });
@@ -171,6 +176,18 @@ public class MainActivity extends AppCompatActivity {
         if (!base.isEmpty()) {
             try { api = new ApiClient(this, base); } catch (Exception e) { showError("저장된 서버 주소를 확인해 주세요.", null); }
         }
+        recommendation.states().observe(this, pending->{
+            updateBusy();
+            if(pending.result==null&&pending.error==null)return;
+            recommendation.consume(pending);
+            if(!pending.base.equals(api==null?"":api.base))return;
+            if(pending.error!=null)showError(errorMessage(pending.error),()->{if(pending.base.equals(api==null?"":api.base))recommend();});
+            else showRecommendation(pending.result);
+        });
+        if(state!=null&&state.getBoolean("requestPending")&&!recommendation.current().loading
+                &&recommendation.current().result==null&&recommendation.current().error==null)
+            { String requestBase=api==null?"":api.base;
+            findViewById(R.id.main).post(()->{if(!isDestroyed()&&!isFinishing()&&requestBase.equals(api==null?"":api.base))showError("진행하던 추천을 이어받지 못했어요. 요청을 확인하고 다시 추천받아 주세요.",()->{if(requestBase.equals(api==null?"":api.base))recommend();});}); }
         networkPermission(api==null?"":api.base, () -> refreshData(() -> {
             if (state != null && state.getBoolean("library")) ((BottomNavigationView)findViewById(R.id.navigation)).setSelectedItemId(R.id.nav_library);
         }));
@@ -205,25 +222,25 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void recommend() {
+        if(busy)return;
         String request = prompt.getText().toString().trim();
         TextInputLayout field = findViewById(R.id.prompt_layout);
         try { Recommender.parse(request); field.setError(null); }
         catch (IllegalArgumentException e) { field.setError(e.getMessage()); return; }
-        ((InputMethodManager)getSystemService(INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(prompt.getWindowToken(), 0);
-        prompt.clearFocus(); stopPlayer(); settings.edit().putString("prompt", request).apply();
-        task(() -> {
-            if (api == null) {
-                Recommender.Result result = Recommender.recommend(catalogue, Recommender.parse(request), local.feedback(), "basic");
-                return new Object[]{result.tracks, result.mode, result.notice, result.conditions};
-            }
-            JSONObject response = api.object("POST", "/recommendations", new JSONObject().put("prompt", request));
-            return new Object[]{TrackJson.picks(response.getJSONArray("tracks")), response.getString("mode"), response.optString("notice"), TrackJson.conditions(response.getJSONObject("conditions"))};
-        }, result -> {
-            picks = (List<Recommender.Pick>)result[0]; resultMode = (String)result[1]; resultNotice = (String)result[2];
-            resultConditions = (Recommender.Conditions)result[3]; hiddenTracks.clear();
-            showResults(); pager.setCurrentItem(0, false);
-            findViewById(R.id.results).post(() -> ((androidx.core.widget.NestedScrollView)findViewById(R.id.recommend_scroll)).scrollTo(0, findViewById(R.id.results).getTop()));
-        }, this::recommend);
+        hideKeyboard(); stopPlayer(); settings.edit().putString("prompt", request).apply();
+        recommendation.start(request,api,new ArrayList<>(catalogue),new HashMap<>(feedback));
+    }
+
+    private void showRecommendation(Object[] result) {
+        picks = (List<Recommender.Pick>)result[0]; resultMode = (String)result[1]; resultNotice = (String)result[2];
+        resultConditions = (Recommender.Conditions)result[3]; hiddenTracks.clear();
+        showResults(); List<Recommender.Pick> shown=picks;
+        findViewById(R.id.results).post(() -> {
+            if(isDestroyed()||isFinishing()||picks!=shown)return;
+            // View state restoration runs after onStart; a new result always begins with its first track.
+            hideKeyboard();pager.setCurrentItem(0,false);
+            ((androidx.core.widget.NestedScrollView)findViewById(R.id.recommend_scroll)).scrollTo(0,findViewById(R.id.results).getTop());
+        });
     }
 
     private void showResults() {
@@ -293,7 +310,9 @@ public class MainActivity extends AppCompatActivity {
 
     private void updateCounter() {
         int index = picks.isEmpty() ? 0 : Math.min(pager.getCurrentItem() + 1, picks.size());
-        ((TextView)findViewById(R.id.counter)).setText(index + " / " + picks.size());
+        TextView counter=findViewById(R.id.counter);
+        counter.setContentDescription(picks.isEmpty()?"추천 곡 없음":"총 "+picks.size()+"곡 중 "+index+"번째 곡");
+        counter.setText(index + " / " + picks.size());
         findViewById(R.id.previous).setEnabled(!busy && index > 1);
         findViewById(R.id.next).setEnabled(!busy && index > 0 && index < picks.size());
         findViewById(R.id.previous).setAlpha(!busy && index>1 ? 1f : 0.45f);
@@ -555,7 +574,7 @@ public class MainActivity extends AppCompatActivity {
             new MaterialAlertDialogBuilder(this).setTitle("외부에서 찾아볼까요?").setMessage("이 곡의 공식 영상 연결은 아직 확인하지 못했어요. 곡명·아티스트로 검색할 수 있어요.")
                 .setPositiveButton("외부에서 검색",(d,w)->external(track)).setNegativeButton("닫기",null).show(); return;
         }
-        LinearLayout box=column(); TextView status=text("YouTube 영상 연결 중…",14,false); box.addView(status);
+        LinearLayout box=column(); TextView status=text("YouTube 영상 연결 중…",14,false);status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE); box.addView(status);
         try {
             player=new WebView(this); player.setContentDescription(track.title+" YouTube 공식 플레이어");
             player.getSettings().setJavaScriptEnabled(true); player.getSettings().setDomStorageEnabled(true);
@@ -646,9 +665,15 @@ public class MainActivity extends AppCompatActivity {
         if(busy)return;ApiClient taskApi=api;setBusy(true);
         worker.execute(()->{
             try {T result=operation.call();runOnUiThread(()->{if(isDestroyed()||isFinishing())return;setBusy(false);success.accept(result);});}
-            catch(Exception error){runOnUiThread(()->{if(isDestroyed()||isFinishing())return;setBusy(false);String message=error instanceof java.io.IOException?"네트워크에 연결하지 못했어요. 설정과 연결 상태를 확인해 주세요.":error.getMessage();showError(message==null?"처리하지 못했어요. 다시 시도해 주세요.":message,retry==null?null:()->{if(api==taskApi)retry.run();});});}
+            catch(Exception error){runOnUiThread(()->{if(isDestroyed()||isFinishing())return;setBusy(false);showError(errorMessage(error),retry==null?null:()->{if(api==taskApi)retry.run();});});}
         });
     }
+    private void hideKeyboard(){
+        View focused=getCurrentFocus();
+        if(focused!=null)((InputMethodManager)getSystemService(INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(focused.getWindowToken(),0);
+        findViewById(R.id.main).requestFocus();
+    }
+    private String errorMessage(Exception error){String message=error instanceof java.io.IOException?"네트워크에 연결하지 못했어요. 설정과 연결 상태를 확인해 주세요.":error.getMessage();return message==null?"처리하지 못했어요. 다시 시도해 주세요.":message;}
     private void clearResults(){
         picks=new ArrayList<>();hiddenTracks.clear();hasResults=false;resultConditions=new Recommender.Conditions();restoredPlaylistId=null;restoredLibraryScroll=0;
         findViewById(R.id.request_panel).setVisibility(View.VISIBLE);
@@ -663,18 +688,22 @@ public class MainActivity extends AppCompatActivity {
         }else action.run();
     }
     private void setBusy(boolean value){
-        busy=value;findViewById(R.id.progress).setVisibility(value?View.VISIBLE:View.INVISIBLE);
-        findViewById(R.id.recommend).setEnabled(!value);findViewById(R.id.settings).setEnabled(!value);
-        findViewById(R.id.save_results).setEnabled(!value && !picks.isEmpty());
-        findViewById(R.id.edit_request).setEnabled(!value);
+        taskBusy=value;updateBusy();
+    }
+    private void updateBusy(){
+        busy=taskBusy||recommendation.current().loading;findViewById(R.id.progress).setVisibility(busy?View.VISIBLE:View.INVISIBLE);
+        findViewById(R.id.recommend).setEnabled(!busy);findViewById(R.id.settings).setEnabled(!busy);
+        findViewById(R.id.save_results).setEnabled(!busy && !picks.isEmpty());
+        findViewById(R.id.edit_request).setEnabled(!busy);
         android.view.Menu menu=((BottomNavigationView)findViewById(R.id.navigation)).getMenu();
-        for(int i=0;i<menu.size();i++)menu.getItem(i).setEnabled(!value);
+        for(int i=0;i<menu.size();i++)menu.getItem(i).setEnabled(!busy);
         updateCounter();cards.notifyDataSetChanged();
     }
     private Snackbar snackbar(String message,int duration){
         View anchor=findViewById(R.id.card_navigation);
         if(!anchor.getGlobalVisibleRect(new android.graphics.Rect()))anchor=findViewById(R.id.navigation);
         Snackbar bar=Snackbar.make(findViewById(R.id.main),message,duration).setAnchorView(anchor);
+        bar.setTextMaxLines(4);
         bar.setAnchorViewLayoutListenerEnabled(true);return bar;
     }
     private void showError(String message,Runnable retry){Snackbar bar=snackbar(message,Snackbar.LENGTH_LONG);if(retry!=null)bar.setAction("재시도",v->retry.run());bar.show();}
@@ -706,6 +735,7 @@ public class MainActivity extends AppCompatActivity {
         state.putString("libraryQuery", libraryQuery);
         if(librarySelected){state.putString("playlistId",playlistId);state.putInt("libraryScroll",findViewById(R.id.library_scroll).getScrollY());}
         state.putBoolean("hasResults",hasResults);state.putBoolean("editingRequest",hasResults && findViewById(R.id.request_panel).getVisibility()==View.VISIBLE);
+        state.putBoolean("requestPending",recommendation.current().loading);
         try { state.putString("conditions",TrackJson.conditions(resultConditions).toString()); } catch(Exception ignored){}
         state.putString("hiddenTracks",new JSONArray(hiddenTracks).toString());
     }
