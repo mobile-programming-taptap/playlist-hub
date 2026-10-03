@@ -35,6 +35,24 @@ class PlatformCheckTest {
 
     @Test void officialOAuthRepeatedTracksAndLostTransferResponsesRemainIdempotent() throws Exception {
         try(Fixture f=new Fixture()) {
+            assertEquals(List.of("spotify","youtube"),rows(f.api.config(f.auth),"providers").stream().map(row->row.get("provider")).toList());
+            var unused=new PlatformClient.Tokens("test-access","test-refresh","owner","",Instant.now().plusSeconds(3600));
+            for(String unsupported:List.of("apple_music","unknown")) {
+                assertThrows(IllegalArgumentException.class,()->f.api.start(f.auth,unsupported));
+                assertThrows(IllegalArgumentException.class,()->f.api.callback(unsupported,"unused","unused",null));
+                assertThrows(IllegalArgumentException.class,()->f.api.importPlaylist(f.auth,new PlatformApi.ImportBody(UUID.randomUUID().toString(),unsupported,"https://music.apple.com/us/playlist/owned/pl.u-123",null)));
+                assertThrows(IllegalArgumentException.class,()->f.remote.createPrivate(unsupported,"Unsupported","unused",unused));
+                assertThrows(IllegalArgumentException.class,()->f.remote.existingIds(unsupported,"PLTEST",unused));
+                assertThrows(IllegalArgumentException.class,()->f.remote.add(unsupported,"PLTEST",VIDEO,unused));
+                assertThrows(IllegalArgumentException.class,()->PlatformClient.playlistUrl(unsupported,""));
+            }
+            assertFalse(Store.safeExternalUrl("apple_music","https://music.apple.com/us/song/example/123456"));
+            String emptyApple=UUID.randomUUID().toString();f.users.createPlaylist(f.owner,"Unsupported source",emptyApple);
+            for(String url:List.of("","https://music.apple.com/us/song/example/123456")) {
+                var row=Map.<String,Object>of("platform","apple_music","externalId","123456","title","Unsupported song","artist","Artist","sourceUrl",url);
+                assertThrows(IllegalArgumentException.class,()->f.users.addExternal(f.owner,emptyApple,List.of(row),UUID.randomUUID().toString()));
+            }
+            assertTrue(rows(f.users.playlist(f.owner,emptyApple),"items").isEmpty());f.users.delete(f.owner,emptyApple);f.assertHealthy();
             Map<String,String> start=f.api.start(f.auth,"spotify");
             assertTrue(start.get("authorizationUrl").contains("code_challenge_method=S256"));
             assertFalse(start.get("authorizationUrl").contains("Bearer"));
@@ -254,7 +272,7 @@ class PlatformCheckTest {
         }
     }
 
-    @Test void officialVideoAndUserTimelineEditsStayOutsideRecommendationsAndAppleUsesMusicKit() throws Exception {
+    @Test void officialVideoAndUserTimelineEditsStayOutsideRecommendations() throws Exception {
         try(Fixture f=new Fixture()) {
             String id=UUID.randomUUID().toString(),url="https://www.youtube.com/watch?v="+VIDEO;
             var request=new PlatformApi.Conversion(id,url,null,null);
@@ -303,23 +321,6 @@ class PlatformCheckTest {
             }
             assertEquals(Map.of(),f.users.feedback(f.owner));assertEquals(0,f.creates.get());
 
-            Map<String,String> apple=f.api.start(f.auth,"apple_music");
-            String html=f.api.appleAuthorize(apple.get("state")).getBody();
-            assertTrue(html.contains("js-cdn.music.apple.com/musickit/v3/musickit.js"));assertTrue(html.contains("await MusicKit.configure"));
-            assertFalse(html.contains(f.auth));assertFalse(html.contains("test-user-token"));
-            assertEquals("taptap://connected?provider=apple_music&status=connected",f.api.appleCallback(new PlatformApi.AppleCallback(apple.get("state"),"test-user-token")).get("redirect"));
-            assertThrows(IllegalArgumentException.class,()->f.api.appleCallback(new PlatformApi.AppleCallback(apple.get("state"),"test-user-token")));
-            Map<String,Object> music=f.api.importPlaylist(f.auth,new PlatformApi.ImportBody(UUID.randomUUID().toString(),"apple_music","https://music.apple.com/us/playlist/owned/pl.u-123",null));
-            assertEquals(1,rows(music,"items").size(),"An own public Apple URL resolves through library playParams.globalId.");
-            assertFalse(json.writeValueAsString(f.api.connections(f.auth)).contains("test-user-token"));
-            String appleId=(String)music.get("id");f.api.matches(f.auth,new PlatformApi.MatchBody(appleId,"apple_music",0));
-            f.api.review(f.auth,appleId,new PlatformApi.ReviewBody("apple_music",List.of(new PlatformApi.Selection(0,"123456",false))));
-            String appleJob=UUID.randomUUID().toString();f.api.transfer(f.auth,new PlatformApi.TransferBody(appleJob,appleId,"apple_music","Apple private",true));f.awaitJob(appleJob,"PARTIAL");
-            f.api.retry(f.auth,appleJob,new PlatformApi.Confirm(true));f.awaitJob(appleJob,"UNKNOWN");
-            f.api.retry(f.auth,appleJob,new PlatformApi.Confirm(true));f.awaitJob(appleJob,"COMPLETED");
-            assertEquals(1,f.creates.get());assertEquals(1,f.adds.get(),"Apple library IDs reconcile through the official catalogId after response loss.");
-            f.api.unlink(f.auth,"apple_music");assertEquals(0,f.db.queryForObject("SELECT COUNT(*) FROM platform_connections WHERE provider='apple_music'",Integer.class));
-            assertEquals(0,rows(f.users.playlist(f.owner,appleId),"items").size());assertEquals(1,rows(f.users.playlist(f.owner,pasted),"items").size(),"Disconnecting Apple preserves unrelated user-owned YouTube rows.");
             f.assertHealthy();
         }
     }
@@ -428,8 +429,8 @@ class PlatformCheckTest {
             users=new Store(db,manager,json,200,20);Map<String,String> first=users.register(),second=users.register();owner=first.get("userId");auth="Bearer "+first.get("token");otherAuth="Bearer "+second.get("token");
             store=new PlatformStore(db,manager,json,Base64.getEncoder().encodeToString(new byte[32]));
             server.setExecutor(worker);server.createContext("/",this::serve);server.start();String base="http://127.0.0.1:"+server.getAddress().getPort();
-            Map<String,String> config=new LinkedHashMap<>(Map.of("SPOTIFY_CLIENT_ID","test-client","SPOTIFY_REDIRECT_URI",base+"/connections/spotify/callback","PUBLIC_BASE_URL",base,"YOUTUBE_API_KEY","test-key","APPLE_MUSIC_DEVELOPER_TOKEN","test-developer-token"));
-            Map<String,String> endpoints=new LinkedHashMap<>();for(String key:List.of("spotify","spotify_auth","youtube","google_auth","google_authorize","apple_music"))endpoints.put(key,base+"/"+key);
+            Map<String,String> config=new LinkedHashMap<>(Map.of("SPOTIFY_CLIENT_ID","test-client","SPOTIFY_REDIRECT_URI",base+"/connections/spotify/callback","PUBLIC_BASE_URL",base,"YOUTUBE_API_KEY","test-key"));
+            Map<String,String> endpoints=new LinkedHashMap<>();for(String key:List.of("spotify","spotify_auth","youtube","google_auth","google_authorize"))endpoints.put(key,base+"/"+key);
             config.put("GOOGLE_CLIENT_ID","google-client");config.put("GOOGLE_CLIENT_SECRET","google-secret");config.put("GOOGLE_REDIRECT_URI",base+"/connections/youtube/callback");
             remote=new PlatformClient(json,config,endpoints);api=new PlatformApi(users,store,remote,json,manager);
             }catch(Exception|Error error){server.stop(0);worker.shutdownNow();if(schemaOwner!=null)try{schemaOwner.execute("DROP SCHEMA IF EXISTS "+testSchema+" CASCADE");}catch(RuntimeException cleanup){error.addSuppressed(cleanup);}throw error;}
@@ -459,14 +460,6 @@ class PlatformCheckTest {
                 else if(path.equals("/youtube/playlistItems")&&method.equals("POST")){assertEquals("PLTARGET",value.path("snippet").path("playlistId").asString());assertEquals(VIDEO,value.path("snippet").path("resourceId").path("videoId").asString());remoteItems.add(VIDEO);if(adds.incrementAndGet()==1){lost(exchange);return;}response=Map.of("id","added");}
                 else if(path.equals("/youtube/playlistItems")){int count=exchange.getRequestURI().getRawQuery().contains("playlistId=PLTEST")?2:remoteItems.size();List<Object> items=new ArrayList<>();for(int i=0;i<count;i++)items.add(Map.of("contentDetails",Map.of("videoId",VIDEO),"snippet",Map.of("title","Song","videoOwnerChannelTitle","Artist")));response=Map.of("items",items);}
                 else if(path.equals("/youtube/videos")){videos.incrementAndGet();if(stallVideo.get()){exchange.sendResponseHeaders(200,64);exchange.getResponseBody().write('{');exchange.getResponseBody().flush();videoStarted.countDown();releaseVideo.await(25,java.util.concurrent.TimeUnit.SECONDS);return;}response=Map.of("items",List.of(Map.of("id",VIDEO,"snippet",Map.of("title","Official video","description","0:00 Artist - Song one\n1:10 Artist - Song two"),"contentDetails",Map.of("duration","PT3M"))));}
-                else if(path.equals("/apple_music/me/storefront")){assertEquals("test-developer-token",exchange.getRequestHeaders().getFirst("Authorization").substring(7));assertEquals("test-user-token",exchange.getRequestHeaders().getFirst("Music-User-Token"));response=Map.of("data",List.of(Map.of("id","us")));}
-                else if(path.equals("/apple_music/catalog/us/search"))response=Map.of("results",Map.of("songs",Map.of("data",List.of(Map.of("id","123456","attributes",Map.of("name","Apple song","artistName","Artist","durationInMillis",180000))))));
-                else if(path.equals("/apple_music/me/library/playlists")&&method.equals("POST")){marker=value.path("attributes").path("description").asString();creates.incrementAndGet();lost(exchange);return;}
-                else if(path.equals("/apple_music/me/library/playlists")){List<Object> lists=new ArrayList<>();lists.add(Map.of("id","p.123","attributes",Map.of("name","My Apple list","playParams",Map.of("globalId","pl.u-123"))));if(!marker.isEmpty())lists.add(Map.of("id","p.created","attributes",Map.of("description",Map.of("standard",marker))));response=Map.of("data",lists);}
-                else if(path.equals("/apple_music/me/library/playlists/p.created/tracks")&&method.equals("POST")){assertEquals("123456",value.path("data").get(0).path("id").asString());remoteItems.add("123456");if(adds.incrementAndGet()==1){lost(exchange);return;}response=Map.of();}
-                else if(path.equals("/apple_music/me/library/playlists/p.created/tracks")){List<Object> songs=new ArrayList<>();for(String id:remoteItems)songs.add(Map.of("id","i.library-"+id,"attributes",Map.of("name","Apple song","artistName","Artist","playParams",Map.of("catalogId",id))));response=Map.of("data",songs);}
-                else if(path.equals("/apple_music/me/library/playlists/p.123"))response=Map.of("data",List.of(Map.of("id","p.123","attributes",Map.of("name","My Apple list"))));
-                else if(path.equals("/apple_music/me/library/playlists/p.123/tracks"))response=Map.of("data",List.of(Map.of("id","123456","attributes",Map.of("name","Apple song","artistName","Artist","durationInMillis",180000))));
                 else throw new AssertionError("Unexpected mocked provider request: "+method+" "+path);
                 byte[] result=json.writeValueAsBytes(response);exchange.getResponseHeaders().set("Content-Type","application/json");exchange.sendResponseHeaders(200,result.length);exchange.getResponseBody().write(result);
             }catch(Throwable error){failure.compareAndSet(null,error);try{exchange.sendResponseHeaders(500,-1);}catch(Exception ignored){}}

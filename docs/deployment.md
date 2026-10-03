@@ -29,17 +29,16 @@ DATABASE_PASSWORD=replace-with-a-long-random-password
 openssl rand -base64 32
 ```
 
-Spotify와 Google 개발자 콘솔에는 각각 아래 콜백을 등록한다. Spotify는 PKCE를 사용하므로 `SPOTIFY_CLIENT_ID`만 필요하며 Client Secret은 사용하지 않는다. Google은 `GOOGLE_CLIENT_ID`와 `GOOGLE_CLIENT_SECRET`에 발급받은 값을 넣는다. Apple Music은 `APPLE_MUSIC_DEVELOPER_TOKEN`과 storefront를 설정한다. 키가 없는 서비스는 앱에서 설정 필요 상태로 표시된다.
+Spotify와 Google 개발자 콘솔에는 각각 아래 콜백을 등록한다. Spotify는 PKCE를 사용하므로 `SPOTIFY_CLIENT_ID`만 필요하며 Client Secret은 사용하지 않는다. Google은 `GOOGLE_CLIENT_ID`와 `GOOGLE_CLIENT_SECRET`에 발급받은 값을 넣는다. 키가 없는 서비스는 앱에서 설정 필요 상태로 표시된다.
 
 ```text
 https://실제도메인/connections/spotify/callback
 https://실제도메인/connections/youtube/callback
-https://실제도메인/connections/apple_music/callback
 ```
 
 ## 공개 안내 페이지와 플랫폼 설정
 
-서버는 로그인 없이 `https://실제도메인/`에서 앱 소개, `https://실제도메인/privacy`에서 현재 데이터 처리 안내를 제공합니다. 공개 목록과 Apple Music 허용 화면에서도 안내에 연결합니다. OpenAI에 보내는 직접 입력·대화 조건, 기기에 보관하는 최근 요청, 외부 메타데이터의 30일 보관, 공개·연결 해제·계정 삭제 범위를 설명합니다.
+서버는 로그인 없이 `https://실제도메인/`에서 앱 소개, `https://실제도메인/privacy`에서 현재 데이터 처리 안내를 제공합니다. 공개 목록에서도 안내에 연결합니다. OpenAI에 보내는 직접 입력·대화 조건, 기기에 보관하는 최근 요청, 외부 메타데이터의 30일 보관, 공개·연결 해제·계정 삭제 범위를 설명합니다.
 
 운영자의 실제 문의 주소를 `SUPPORT_EMAIL`에 설정하면 안내 페이지에 메일 앱 링크를 표시합니다. 값이 없거나 형식이 잘못되면 문의 주소를 만들지 않습니다. 공개 운영 전에 실제 운영자 정보와 서버의 로그·백업 보관 정책을 확인해 안내에 반영해야 합니다.
 
