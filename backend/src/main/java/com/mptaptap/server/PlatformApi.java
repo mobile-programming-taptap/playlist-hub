@@ -117,7 +117,7 @@ public class PlatformApi {
             if(edit!=null){row.put("title",text(edit.title(),300));row.put("artist",optionalText(edit.artist(),300));}
             if(item.containsKey("timestamp")){
                 int seconds=edit!=null&&edit.seconds()!=null?edit.seconds():((Number)item.get("timestamp")).intValue();
-                int length=((Number)item.getOrDefault("videoDurationSeconds",-1)).intValue(),maximum=length>0?length:21600;
+                int length=((Number)item.getOrDefault("videoDurationSeconds",-1)).intValue(),maximum=length>0?length-1:21600;
                 if(seconds<0||seconds>maximum)throw new IllegalArgumentException("영상 범위 안의 시간을 입력하거나 해당 행을 제외해 주세요.");
                 checked.put("timestamp",seconds);row.put("sourceUrl","https://www.youtube.com/watch?v="+data.get("videoId")+"&t="+seconds+"s");
             }else if(edit!=null&&edit.seconds()!=null)throw new IllegalArgumentException("영상 타임라인의 시간만 수정할 수 있어요.");
@@ -143,7 +143,7 @@ public class PlatformApi {
     public record MatchBody(String importId,String targetProvider,Integer offset){}
     @PostMapping("/matches") public synchronized Map<String,Object> matches(@RequestHeader(value="Authorization",required=false)String auth,@RequestBody MatchBody body){
         String u=user(auth),p=provider(body.targetProvider());Map<String,Object> data=store.document(u,body.importId(),"import");List<Map<String,Object>> source=items(data,data.containsKey("reviewedItems")?"reviewedItems":"items");List<Map<String,Object>> reviews=data.containsKey("reviews")&&p.equals(data.get("targetProvider"))?items(data,"reviews"):new ArrayList<>();
-        if(reviews.isEmpty())for(Map<String,Object> item:source){Map<String,Object> r=new LinkedHashMap<>();r.put("sourceIndex",item.get("sourceIndex"));r.put("source",item.get("track"));r.put("candidates",List.of());r.put("status","UNKNOWN");r.put("selected",null);r.put("approved",false);reviews.add(r);}
+        if(reviews.isEmpty())for(Map<String,Object> item:source){Map<String,Object> r=new LinkedHashMap<>();r.put("sourceIndex",item.get("sourceIndex"));r.put("source",item.get("track"));r.put("candidates",List.of());r.put("status","NOT_SEARCHED");r.put("selected",null);r.put("approved",false);reviews.add(r);}
         int offset=body.offset()==null?0:body.offset();if(offset<0||offset>=Math.max(1,source.size()))throw new IllegalArgumentException("곡 검토 위치를 확인해 주세요.");PlatformClient.Tokens token=token(u,p);int end=Math.min(source.size(),offset+20);
         for(int i=offset;i<end;i++){PlatformTrack track=json.convertValue(source.get(i).get("track"),PlatformTrack.class),scoring=track;
             // A timeline's ID identifies the whole video, not the recording named in this row.

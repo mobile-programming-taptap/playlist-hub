@@ -490,8 +490,8 @@ public class Store {
         if (seconds!=null) {
             String provider = (String)snapshot.get("sourceProvider"), id = (String)snapshot.get("sourceId");
             int maximum = 21_600;
-            if (snapshot.get("videoDurationSeconds") instanceof Number duration && duration.intValue()>0) maximum=duration.intValue();
-            else if (!"timeline".equals(snapshot.get("sourceType")) && snapshot.get("durationMs") instanceof Number duration && duration.intValue()>0) maximum=duration.intValue()/1000;
+            if (snapshot.get("videoDurationSeconds") instanceof Number duration && duration.intValue()>0) maximum=duration.intValue()-1;
+            else if (!"timeline".equals(snapshot.get("sourceType")) && snapshot.get("durationMs") instanceof Number duration && duration.intValue()>0) maximum=(duration.intValue()-1)/1000;
             if (!List.of("youtube","youtube_music").contains(provider) || id==null || !id.matches("[A-Za-z0-9_-]{11}") || seconds<0 || seconds>maximum)
                 throw new IllegalArgumentException("YouTube 시작 시간을 영상 길이 안에서 지정해 주세요.");
             snapshot.put("timestamp",seconds); snapshot.put("sourceUrl","https://www.youtube.com/watch?v="+id+(seconds==0?"":"&t="+seconds+"s"));

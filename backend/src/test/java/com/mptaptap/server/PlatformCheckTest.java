@@ -183,6 +183,30 @@ class PlatformCheckTest {
         }
     }
 
+    @Test void pagedMatchingDistinguishesUnsearchedRowsFromEmptySearchesAndKeepsReview() throws Exception {
+        try(Fixture f=new Fixture()) {
+            f.sourceItems.set(21);
+            Map<String,String> start=f.api.start(f.auth,"spotify");f.challenge=query(URI.create(start.get("authorizationUrl")),"code_challenge");f.api.callback("spotify",start.get("state"),"code-only-for-test",null);
+            String id=UUID.randomUUID().toString();f.api.importPlaylist(f.auth,new PlatformApi.ImportBody(id,"spotify","https://open.spotify.com/playlist/"+SOURCE,null));
+            Map<String,Object> first=f.api.matches(f.auth,new PlatformApi.MatchBody(id,"spotify",0));
+            List<Map<String,Object>> initial=rows(first,"items");assertEquals(21,initial.size());assertEquals(20,first.get("nextOffset"));assertEquals(20,f.searches.get());
+            for(int i=0;i<20;i++){assertEquals("MATCHED",initial.get(i).get("status"));assertEquals(false,initial.get(i).get("approved"));}
+            Map<String,Object> unsearched=initial.get(20);assertEquals("NOT_SEARCHED",unsearched.get("status"));assertTrue(rows(unsearched,"candidates").isEmpty());assertNull(unsearched.get("selected"));assertEquals(false,unsearched.get("approved"));
+            assertEquals(json.readTree(json.writeValueAsString(first)),json.readTree(json.writeValueAsString(f.api.storedReview(f.auth,id,"spotify"))),"Paging state survives the stored JSON round trip.");
+            assertThrows(IllegalArgumentException.class,()->f.api.transfer(f.auth,new PlatformApi.TransferBody(UUID.randomUUID().toString(),id,"spotify","Paged transfer",true)));
+            f.api.review(f.auth,id,new PlatformApi.ReviewBody("spotify",List.of(new PlatformApi.Selection(0,SONG,false),new PlatformApi.Selection(1,null,true))));
+            List<Map<String,Object>> selected=rows(f.api.storedReview(f.auth,id,"spotify"),"items");Map<String,Object> approved=new LinkedHashMap<>(selected.get(0)),excluded=new LinkedHashMap<>(selected.get(1));
+            assertEquals(true,approved.get("approved"));assertEquals("USER_EXCLUDED",excluded.get("status"));assertEquals(true,excluded.get("approved"));
+            f.emptySearch.set(true);Map<String,Object> last=f.api.matches(f.auth,new PlatformApi.MatchBody(id,"spotify",20));
+            assertEquals(21,f.searches.get());assertEquals(-1,last.get("nextOffset"));List<Map<String,Object>> completed=rows(last,"items");
+            assertEquals(approved,completed.get(0));assertEquals(excluded,completed.get(1),"Loading a later page preserves explicit earlier approval and exclusion.");
+            Map<String,Object> missing=completed.get(20);assertEquals("UNKNOWN",missing.get("status"));assertTrue(rows(missing,"candidates").isEmpty());assertNull(missing.get("selected"));assertEquals(false,missing.get("approved"));
+            assertEquals(json.readTree(json.writeValueAsString(last)),json.readTree(json.writeValueAsString(f.api.storedReview(f.auth,id,"spotify"))));
+            assertThrows(IllegalArgumentException.class,()->f.api.transfer(f.auth,new PlatformApi.TransferBody(UUID.randomUUID().toString(),id,"spotify","Paged transfer",true)),"Searching all pages never approves any unreviewed row.");
+            assertEquals(0,f.creates.get());assertEquals(0,f.adds.get());f.assertHealthy();
+        }
+    }
+
     @Test void outerTransactionsKeepPlatformMonitorThroughCommit() throws Exception {
         var armed=new java.util.concurrent.atomic.AtomicBoolean();var held=new java.util.concurrent.atomic.AtomicBoolean();
         AtomicReference<Fixture> current=new AtomicReference<>();AtomicReference<Throwable> overlapFailure=new AtomicReference<>();
@@ -250,11 +274,33 @@ class PlatformCheckTest {
             assertEquals(url+"&t=150s",track.get("sourceUrl"));assertEquals("0:00 Artist - Song one",track.get("sourceRow"));
             assertEquals(150,((Number)rows(f.api.imported(f.auth,id),"reviewedItems").get(0).get("timestamp")).intValue());
             assertThrows(IllegalArgumentException.class,()->f.api.saveImport(f.auth,id,new PlatformApi.SaveImport("Reviewed timeline",null,List.of(new PlatformApi.TimelineEdit(0,"Song","Artist",false,181),new PlatformApi.TimelineEdit(1,"Song","Artist",true,null)))));
+            var atEnd=new PlatformApi.SaveImport("Reviewed timeline",null,List.of(new PlatformApi.TimelineEdit(0,"Song","Artist",false,180),new PlatformApi.TimelineEdit(1,"Song","Artist",true,null)));
+            String savedItem=(String)saved.get(0).get("id");
+            assertAll("A known video end is not a playable start",
+                ()->assertThrows(IllegalArgumentException.class,()->f.api.saveImport(f.auth,id,atEnd)),
+                ()->assertThrows(IllegalArgumentException.class,()->f.users.editExternal(f.owner,id,savedItem,"Song","Artist",180)));
+            assertEquals(track,map(rows(f.users.playlist(f.owner,id),"items").get(0).get("track")),"Rejected start times preserve the saved snapshot.");
+            f.api.saveImport(f.auth,id,new PlatformApi.SaveImport("Reviewed timeline",null,List.of(new PlatformApi.TimelineEdit(0,"Song","Artist",false,179),new PlatformApi.TimelineEdit(1,"Song","Artist",true,null))));
+            assertEquals(179,map(f.users.editExternal(f.owner,id,savedItem,"Song","Artist",179).get("track")).get("timestamp"));
             String pasted=UUID.randomUUID().toString();
             f.api.conversion(f.auth,new PlatformApi.Conversion(pasted,url,"0:00 Artist - User supplied",null));
             f.api.saveImport(f.auth,pasted,new PlatformApi.SaveImport("Owned text",null,null));
             assertEquals(1,f.videos.get(),"User-owned timeline conversion does not pretend to retrieve video metadata.");
             assertEquals(0,((Number)map(rows(f.users.playlist(f.owner,pasted),"items").get(0).get("track")).get("videoDurationSeconds")).intValue());
+            for(int unknown:List.of(0,-1)){
+                String unknownId=UUID.randomUUID().toString();f.api.conversion(f.auth,new PlatformApi.Conversion(unknownId,url,"0:00 Artist - Unknown length",unknown));
+                f.api.saveImport(f.auth,unknownId,new PlatformApi.SaveImport("Unknown length",null,List.of(new PlatformApi.TimelineEdit(0,"Song","Artist",false,21600))));
+                Map<String,Object> unknownItem=rows(f.users.playlist(f.owner,unknownId),"items").get(0);assertEquals(21600,map(unknownItem.get("track")).get("timestamp"));
+                assertEquals(21600,map(f.users.editExternal(f.owner,unknownId,(String)unknownItem.get("id"),"Song","Artist",21600).get("track")).get("timestamp"));
+                assertThrows(IllegalArgumentException.class,()->f.api.saveImport(f.auth,unknownId,new PlatformApi.SaveImport("Unknown length",null,List.of(new PlatformApi.TimelineEdit(0,"Song","Artist",false,21601)))));
+            }
+            String shortVideos=UUID.randomUUID().toString();f.users.createPlaylist(f.owner,"Short videos",shortVideos);
+            for(int[] boundary:List.of(new int[]{500,0},new int[]{2000,1})){
+                Map<String,Object> row=Map.of("platform","youtube","externalId",VIDEO,"title","Short video","artist","Artist","sourceUrl",url,"durationMs",boundary[0],"sourceIndex",boundary[0]);
+                String item=(String)f.users.addExternal(f.owner,shortVideos,List.of(row),UUID.randomUUID().toString()).get(0).get("id");
+                assertEquals(boundary[1],map(f.users.editExternal(f.owner,shortVideos,item,"Short video","Artist",boundary[1]).get("track")).get("timestamp"));
+                assertThrows(IllegalArgumentException.class,()->f.users.editExternal(f.owner,shortVideos,item,"Short video","Artist",boundary[1]+1));
+            }
             assertEquals(Map.of(),f.users.feedback(f.owner));assertEquals(0,f.creates.get());
 
             Map<String,String> apple=f.api.start(f.auth,"apple_music");
@@ -361,9 +407,9 @@ class PlatformCheckTest {
         final HttpServer server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
         final java.util.concurrent.ExecutorService worker=Executors.newCachedThreadPool();
         final AtomicReference<Throwable> failure=new AtomicReference<>();
-        final AtomicInteger creates=new AtomicInteger(),adds=new AtomicInteger(),videos=new AtomicInteger(),sourceItems=new AtomicInteger(2),refreshes=new AtomicInteger(),revokes=new AtomicInteger(),markerPages=new AtomicInteger();
+        final AtomicInteger creates=new AtomicInteger(),adds=new AtomicInteger(),videos=new AtomicInteger(),sourceItems=new AtomicInteger(2),refreshes=new AtomicInteger(),revokes=new AtomicInteger(),markerPages=new AtomicInteger(),searches=new AtomicInteger();
         final List<String> remoteItems=new CopyOnWriteArrayList<>();
-        final java.util.concurrent.atomic.AtomicBoolean stallVideo=new java.util.concurrent.atomic.AtomicBoolean(),holdExchange=new java.util.concurrent.atomic.AtomicBoolean(),holdCreate=new java.util.concurrent.atomic.AtomicBoolean(),unavailableSpotifyItems=new java.util.concurrent.atomic.AtomicBoolean();
+        final java.util.concurrent.atomic.AtomicBoolean stallVideo=new java.util.concurrent.atomic.AtomicBoolean(),holdExchange=new java.util.concurrent.atomic.AtomicBoolean(),holdCreate=new java.util.concurrent.atomic.AtomicBoolean(),unavailableSpotifyItems=new java.util.concurrent.atomic.AtomicBoolean(),emptySearch=new java.util.concurrent.atomic.AtomicBoolean();
         final java.util.concurrent.CountDownLatch videoStarted=new java.util.concurrent.CountDownLatch(1),releaseVideo=new java.util.concurrent.CountDownLatch(1),exchangeStarted=new java.util.concurrent.CountDownLatch(1),releaseExchange=new java.util.concurrent.CountDownLatch(1),createStarted=new java.util.concurrent.CountDownLatch(1),releaseCreate=new java.util.concurrent.CountDownLatch(1);
         final JdbcTemplate db;final Store users;final PlatformStore store;final PlatformClient remote;final PlatformApi api;
         final String owner,auth,otherAuth,testSchema;final JdbcTemplate schemaOwner;String challenge="";volatile String marker="";
@@ -401,7 +447,7 @@ class PlatformCheckTest {
                 else if(path.equals("/spotify/me"))response=Map.of("id","owner");
                 else if(path.equals("/spotify/playlists/"+SOURCE))response=Map.of("name","Repeated songs","owner",Map.of("id","owner"),"collaborative",false);
                 else if(path.equals("/spotify/playlists/"+SOURCE+"/items")){List<Object> items=new ArrayList<>();for(int i=0;i<Math.max(sourceItems.get(),unavailableSpotifyItems.get()?3:0);i++){if(i<sourceItems.get())items.add(Map.of("item",spotifyTrack(SONG)));if(unavailableSpotifyItems.get()&&i<3)items.add(i==0?Map.of("item",spotifyTrack(SONG),"is_local",true):i==1?Map.of("item",Map.of("id",SONG,"type","episode")):Map.of("item",Map.of()));}response=Map.of("items",items);}
-                else if(path.equals("/spotify/search"))response=Map.of("tracks",Map.of("items",List.of(spotifyTrack(SONG))));
+                else if(path.equals("/spotify/search")){searches.incrementAndGet();response=Map.of("tracks",Map.of("items",emptySearch.get()?List.of():List.of(spotifyTrack(SONG))));}
                 else if(path.equals("/spotify/me/playlists")&&method.equals("GET"))response=Map.of("items",marker.isEmpty()?List.of():List.of(Map.of("id",TARGET,"description",marker)));
                 else if(path.equals("/spotify/me/playlists")&&method.equals("POST")){assertFalse(value.path("public").asBoolean(true));marker=value.path("description").asString();creates.incrementAndGet();if(holdCreate.get()){createStarted.countDown();assertTrue(releaseCreate.await(10,java.util.concurrent.TimeUnit.SECONDS));}lost(exchange);return;}
                 else if(path.equals("/spotify/playlists/"+TARGET+"/items")&&method.equals("GET"))response=Map.of("items",remoteItems.stream().map(id->Map.of("item",spotifyTrack(id))).toList());
