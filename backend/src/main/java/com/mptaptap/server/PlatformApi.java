@@ -125,7 +125,8 @@ public class PlatformApi {
             if(item.containsKey("sourceRow"))row.put("sourceRow",item.get("sourceRow"));rows.add(row);
         }
         if(rows.isEmpty())throw new IllegalArgumentException("저장할 곡을 하나 이상 선택해 주세요.");String playlist=body.playlistId()==null?id:body.playlistId();String name=title(body.title()==null?(String)data.get("title"):body.title());
-        synchronized(users){return tx.execute(status->{
+        // Keep users -> store monitors through commit; expiry writes must not invert a row lock and the store monitor.
+        synchronized(users){synchronized(store){return tx.execute(status->{
             boolean sameSource=Boolean.TRUE.equals(data.get("saved"))&&playlist.equals(data.get("localPlaylistId"));
             Map<String,Object> target;
             if(body.playlistId()==null&&!sameSource)target=users.createPlaylist(u,name,playlist);
@@ -137,7 +138,7 @@ public class PlatformApi {
             if(!reviewed.equals(data.get("reviewedItems"))){data.remove("reviews");data.remove("targetProvider");data.remove("nextOffset");}
             data.put("saved",true);data.put("title",savedTitle);data.put("localPlaylistId",playlist);data.put("reviewedItems",reviewed);store.update(u,id,"import",data);
             return Map.of("id",playlist,"title",savedTitle,"items",saved,"size",saved.size());
-        });}
+        });}}
     }
     public record MatchBody(String importId,String targetProvider,Integer offset){}
     @PostMapping("/matches") public synchronized Map<String,Object> matches(@RequestHeader(value="Authorization",required=false)String auth,@RequestBody MatchBody body){
@@ -207,7 +208,17 @@ public class PlatformApi {
     }
     public record SyncApply(Boolean confirmed,String previewId){}
     @PostMapping("/sync/{id}/apply") public synchronized Map<String,Object> syncApply(@RequestHeader(value="Authorization",required=false)String auth,@PathVariable String id,@RequestBody SyncApply body){
-        String u=user(auth);confirmed(body.confirmed());synchronized(users){Map<String,Object> preview=store.document(u,body.previewId(),"sync"),current=store.document(u,id,"import");if(!id.equals(preview.get("importId"))||Instant.parse((String)preview.get("createdAt")).plusSeconds(900).isBefore(Instant.now())||!preview.get("beforeFingerprint").equals(PlatformStore.hash(json.writeValueAsString(currentItems(u,current)))))throw new ResponseStatusException(HttpStatus.CONFLICT,"목록이 바뀌었거나 확인이 만료됐어요. 다시 미리 보기를 열어주세요.");Map<String,Object> fresh=cast(preview.get("after"));if(Boolean.TRUE.equals(current.get("saved"))){String local=(String)current.get("localPlaylistId");List<Map<String,Object>> rows=new ArrayList<>();for(Map<String,Object> item:items(fresh,"items")){Map<String,Object> row=new LinkedHashMap<>(cast(item.get("track")));row.put("sourceIndex",item.get("sourceIndex"));rows.add(row);}users.refreshExternal(u,local,rows,id);fresh.put("saved",true);fresh.put("localPlaylistId",local);}store.refreshed(u,id,fresh);store.delete(u,body.previewId(),"sync");return fresh;}
+        String u=user(auth);confirmed(body.confirmed());synchronized(users){synchronized(store){return tx.execute(status->{
+            Map<String,Object> preview=store.document(u,body.previewId(),"sync"),current=store.document(u,id,"import");
+            if(!id.equals(preview.get("importId"))||Instant.parse((String)preview.get("createdAt")).plusSeconds(900).isBefore(Instant.now())||!preview.get("beforeFingerprint").equals(PlatformStore.hash(json.writeValueAsString(currentItems(u,current)))))throw new ResponseStatusException(HttpStatus.CONFLICT,"목록이 바뀌었거나 확인이 만료됐어요. 다시 미리 보기를 열어주세요.");
+            Map<String,Object> fresh=cast(preview.get("after"));
+            if(Boolean.TRUE.equals(current.get("saved"))){
+                String local=(String)current.get("localPlaylistId");List<Map<String,Object>> rows=new ArrayList<>();
+                for(Map<String,Object> item:items(fresh,"items")){Map<String,Object> row=new LinkedHashMap<>(cast(item.get("track")));row.put("sourceIndex",item.get("sourceIndex"));rows.add(row);}
+                users.refreshExternal(u,local,rows,id);fresh.put("saved",true);fresh.put("localPlaylistId",local);
+            }
+            store.refreshed(u,id,fresh);store.delete(u,body.previewId(),"sync");return fresh;
+        });}}
     }
     private List<Map<String,Object>> currentItems(String u,Map<String,Object> document){
         if(!Boolean.TRUE.equals(document.get("saved")))return items(document,"items");

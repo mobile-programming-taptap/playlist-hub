@@ -119,7 +119,17 @@ class PlatformCheckTest {
             Map<String,Object> other=Map.of("platform","spotify","externalId",SONG,"title","Other import","artist","Artist","sourceUrl","https://open.spotify.com/track/"+SONG,"sourceIndex",99);
             String unrelated=(String)f.users.addExternal(f.owner,id,List.of(other),UUID.randomUUID().toString()).get(0).get("id");
             Map<String,Object> confirmed=f.api.syncPreview(f.auth,id);assertEquals(1,confirmed.get("added"));assertEquals(1,confirmed.get("changed"));
+            String confirmedId=(String)confirmed.get("previewId");
+            Map<String,Object> beforeSyncPlaylist=f.users.playlist(f.owner,id),beforeSyncImport=f.api.imported(f.auth,id),beforeSyncPreview=f.store.document(f.owner,confirmedId,"sync");
+            String beforeSyncExpiry=f.db.queryForObject("SELECT metadata_expires_at FROM platform_documents WHERE id=?",String.class,id);
+            f.db.execute("ALTER TABLE platform_documents ADD CONSTRAINT taptap_sync_rollback CHECK(id <> '"+id+"' OR kind <> 'import' OR document_json LIKE '%\"reviewedItems\"%')");
+            try{assertThrows(org.springframework.dao.DataIntegrityViolationException.class,()->f.api.syncApply(f.auth,id,new PlatformApi.SyncApply(true,confirmedId)));}
+            finally{f.db.execute("ALTER TABLE platform_documents DROP CONSTRAINT taptap_sync_rollback");}
+            assertEquals(beforeSyncPlaylist,f.users.playlist(f.owner,id),"A failed sync document write rolls back track snapshots, order and other sources.");
+            assertEquals(beforeSyncImport,f.api.imported(f.auth,id));assertEquals(beforeSyncExpiry,f.db.queryForObject("SELECT metadata_expires_at FROM platform_documents WHERE id=?",String.class,id));
+            assertEquals(beforeSyncPreview,f.store.document(f.owner,confirmedId,"sync"),"The same preview remains available after a failed apply.");
             f.api.syncApply(f.auth,id,new PlatformApi.SyncApply(true,(String)confirmed.get("previewId")));assertEquals(3,rows(f.users.playlist(f.owner,id),"items").size());
+            assertEquals(404,assertThrows(ResponseStatusException.class,()->f.store.document(f.owner,confirmedId,"sync")).getStatusCode().value(),"Retrying the unchanged preview succeeds and consumes it.");
             assertTrue(rows(f.users.playlist(f.owner,id),"items").stream().anyMatch(item->"Other import".equals(map(item.get("track")).get("title"))));f.users.remove(f.owner,id,unrelated);
             Map<String,Object> orderPreview=f.api.syncPreview(f.auth,id);List<Map<String,Object>> currentRows=rows(f.users.playlist(f.owner,id),"items");
             f.users.reorder(f.owner,id,List.of((String)currentRows.get(1).get("id"),(String)currentRows.get(0).get("id")));
@@ -170,6 +180,53 @@ class PlatformCheckTest {
             f.sourceItems.set(0);var unreadableRequest=new PlatformApi.ImportBody(UUID.randomUUID().toString(),"spotify","https://open.spotify.com/playlist/"+SOURCE,null);
             Map<String,Object> unreadable=f.api.importPlaylist(f.auth,unreadableRequest);assertEquals(3,unreadable.get("skippedCount"));assertEquals(false,unreadable.get("saved"));assertTrue(rows(unreadable,"items").isEmpty());assertTrue(((String)unreadable.get("notice")).contains("3개 항목"));
             assertEquals(unreadable,f.api.importPlaylist(f.auth,unreadableRequest));assertEquals(1,f.users.playlists(f.owner).size(),"An unreadable source still shows its reasons without creating an empty app list.");f.assertHealthy();
+        }
+    }
+
+    @Test void outerTransactionsKeepPlatformMonitorThroughCommit() throws Exception {
+        var armed=new java.util.concurrent.atomic.AtomicBoolean();var held=new java.util.concurrent.atomic.AtomicBoolean();
+        AtomicReference<Fixture> current=new AtomicReference<>();AtomicReference<Throwable> overlapFailure=new AtomicReference<>();
+        List<java.util.concurrent.Future<?>> overlapping=new ArrayList<>();Thread caller=Thread.currentThread();
+        try(Fixture f=new Fixture(()->{
+            if(Thread.currentThread()!=caller||!armed.compareAndSet(true,false))return;
+            Fixture active=current.get();held.set(Thread.holdsLock(active.users)&&Thread.holdsLock(active.store));
+            // OLD code records the unsafe boundary without starting SQL that could deadlock.
+            if(!held.get())return;
+            try {
+                var started=new java.util.concurrent.CountDownLatch(2);List<AtomicReference<Thread>> threads=new ArrayList<>();
+                for(boolean purge:List.of(true,false)) {
+                    AtomicReference<Thread> thread=new AtomicReference<>();threads.add(thread);
+                    overlapping.add(active.worker.submit(()->{thread.set(Thread.currentThread());started.countDown();if(purge)active.store.purgeExpired();else active.store.documents(active.owner,"import");}));
+                }
+                assertTrue(started.await(2,java.util.concurrent.TimeUnit.SECONDS));
+                long deadline=System.nanoTime()+Duration.ofSeconds(2).toNanos();boolean blocked=false;
+                do {
+                    blocked=true;
+                    for(var thread:threads) {
+                        var info=java.lang.management.ManagementFactory.getThreadMXBean().getThreadInfo(thread.get().getId());
+                        blocked&=info!=null&&info.getThreadState()==Thread.State.BLOCKED&&info.getLockInfo()!=null
+                                &&info.getLockInfo().getIdentityHashCode()==System.identityHashCode(active.store)&&info.getLockOwnerId()==caller.getId();
+                    }
+                    if(!blocked)Thread.sleep(10);
+                }while(!blocked&&System.nanoTime()<deadline);
+                assertTrue(blocked,"Purge and read wait for the store monitor until the actual JDBC commit finishes.");
+            }catch(Throwable error){overlapFailure.set(error);}
+        })) {
+            current.set(f);f.store.connection(f.owner,"spotify",new PlatformClient.Tokens("test-access","test-refresh","owner","playlist-read-private",Instant.now().plusSeconds(600)));
+            String id=UUID.randomUUID().toString();f.api.importPlaylist(f.auth,new PlatformApi.ImportBody(id,"spotify","https://open.spotify.com/playlist/"+SOURCE,null));
+            for(boolean sync:List.of(false,true)) {
+                Map<String,Object> preview=sync?f.api.syncPreview(f.auth,id):Map.of();String expired=UUID.randomUUID().toString();
+                f.store.create(f.owner,expired,"import","spotify",new LinkedHashMap<>(Map.of("id",expired,"title","Expired metadata","sourceRow","private provider text")));
+                f.db.update("UPDATE platform_documents SET metadata_expires_at=? WHERE id=?",Instant.now().minusSeconds(1).toString(),expired);
+                armed.set(true);held.set(false);
+                if(sync)f.api.syncApply(f.auth,id,new PlatformApi.SyncApply(true,(String)preview.get("previewId")));
+                else f.api.saveImport(f.auth,id,new PlatformApi.SaveImport("Monitor source",id,null));
+                assertTrue(held.get(),"Both outer transactions must retain users -> store monitors through JDBC commit.");
+                assertNull(overlapFailure.get());for(var future:overlapping)future.get(3,java.util.concurrent.TimeUnit.SECONDS);overlapping.clear();
+                Map<String,Object> reference=f.store.document(f.owner,expired,"import");assertEquals(true,reference.get("needsRefresh"));assertFalse(reference.containsKey("sourceRow"));
+                assertEquals(2,rows(f.users.playlist(f.owner,id),"items").size());
+            }
+            f.assertHealthy();
         }
     }
 
@@ -310,7 +367,8 @@ class PlatformCheckTest {
         final java.util.concurrent.CountDownLatch videoStarted=new java.util.concurrent.CountDownLatch(1),releaseVideo=new java.util.concurrent.CountDownLatch(1),exchangeStarted=new java.util.concurrent.CountDownLatch(1),releaseExchange=new java.util.concurrent.CountDownLatch(1),createStarted=new java.util.concurrent.CountDownLatch(1),releaseCreate=new java.util.concurrent.CountDownLatch(1);
         final JdbcTemplate db;final Store users;final PlatformStore store;final PlatformClient remote;final PlatformApi api;
         final String owner,auth,otherAuth,testSchema;final JdbcTemplate schemaOwner;String challenge="";volatile String marker="";
-        Fixture() throws Exception {
+        Fixture() throws Exception {this(null);}
+        Fixture(Runnable beforeCommit) throws Exception {
             String configured=System.getenv("TAPTAP_TEST_DATABASE_URL");boolean postgres=configured!=null&&!configured.isBlank();
             String username=postgres?System.getenv().getOrDefault("TAPTAP_TEST_DATABASE_USER","sa"):"sa",password=postgres?System.getenv().getOrDefault("TAPTAP_TEST_DATABASE_PASSWORD",""):"";
             testSchema=postgres?"platform_"+UUID.randomUUID().toString().replace("-",""):null;
@@ -319,7 +377,8 @@ class PlatformCheckTest {
             if(postgres)schemaOwner.execute("CREATE SCHEMA "+testSchema);
             String database=postgres?configured+(configured.contains("?")?"&":"?")+"currentSchema="+testSchema:"jdbc:h2:mem:platform-"+UUID.randomUUID()+";MODE=PostgreSQL;DB_CLOSE_DELAY=-1";
             var data=new DriverManagerDataSource(database,username,password);
-            db=new JdbcTemplate(data);new ResourceDatabasePopulator(new ClassPathResource("schema.sql")).execute(data);var manager=new DataSourceTransactionManager(data);
+            db=new JdbcTemplate(data);new ResourceDatabasePopulator(new ClassPathResource("schema.sql")).execute(data);
+            var manager=new DataSourceTransactionManager(data){@Override protected void doCommit(org.springframework.transaction.support.DefaultTransactionStatus status){if(beforeCommit!=null)beforeCommit.run();super.doCommit(status);}};
             users=new Store(db,manager,json,200,20);Map<String,String> first=users.register(),second=users.register();owner=first.get("userId");auth="Bearer "+first.get("token");otherAuth="Bearer "+second.get("token");
             store=new PlatformStore(db,manager,json,Base64.getEncoder().encodeToString(new byte[32]));
             server.setExecutor(worker);server.createContext("/",this::serve);server.start();String base="http://127.0.0.1:"+server.getAddress().getPort();

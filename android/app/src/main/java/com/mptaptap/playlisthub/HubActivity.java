@@ -384,7 +384,7 @@ public final class HubActivity extends AppCompatActivity {
     }
 
     private void community() {
-        heading("다른 사람의 음악 목록");field(content,"공개 목록 검색","query",200,false);
+        heading("다른 사람의 음악 목록");EditText query=field(content,"공개 목록 검색","query",100,false);put("query",query.getText().toString());
         addButton(content,"검색",this::loadPublic);addButton(content,"인기순",()->{put("sort","popular");loadPublic();});addButton(content,"최신순",()->{put("sort","recent");loadPublic();});
         CheckBox favourites=new CheckBox(this);favourites.setText("즐겨찾기한 목록만");favourites.setMinHeight(dp(48));favourites.setChecked(requests.data.optBoolean("favourites"));
         favourites.setOnCheckedChangeListener((v,checked)->{put("favourites",checked);loadPublic();});controls.add(favourites);content.addView(favourites);
@@ -396,7 +396,7 @@ public final class HubActivity extends AppCompatActivity {
             addButton(box,"목록 열기",()->{put("shareId",row.optString("shareId"));send("publicDetail","GET","/public/playlists/"+Uri.encode(row.optString("shareId")),null);});
         }
     }
-    private void loadPublic(){send("community","GET","/public/playlists?q="+Uri.encode(value("query"))+"&sort="+(value("sort").equals("recent")?"recent":"popular")+"&favourites="+requests.data.optBoolean("favourites"),null);}
+    private void loadPublic(){String query=value("query");if(query.length()>100){message("검색어는 100자까지 입력해 주세요.");return;}send("community","GET","/public/playlists?q="+Uri.encode(query)+"&sort="+(value("sort").equals("recent")?"recent":"popular")+"&favourites="+requests.data.optBoolean("favourites"),null);}
     private void publicDetail() {
         JSONObject detail=requests.data.optJSONObject("publicDetail");if(detail==null){paragraph("공개 목록을 확인하고 있어요.");return;}
         heading(detail.optString("title"));paragraph(detail.optString("author")+" · "+detail.optInt("size")+"곡 · 즐겨찾기 "+detail.optInt("favourites"));
@@ -460,9 +460,14 @@ public final class HubActivity extends AppCompatActivity {
             case "publicDetail":put("publicDetail",value);put("screen","publicDetail");break;
             case "favourite":JSONObject detail=requests.data.optJSONObject("publicDetail");if(detail!=null){set(detail,"favourited",value.optBoolean("favourite"));set(detail,"favourites",value.optInt("favourites"));}break;
             case "publication":put("publication",value);put("screen","publication");break;
-            case "saved":case "copied":
+            case "saved":case "copied": {
                 if(route.equals("saved"))put("saveId",value.optString("id"));
-                setResult(RESULT_OK,new Intent().putExtra("playlistId",value.optString("id")));dialog().setTitle("내 목록에 저장했어요").setMessage("저장한 음악은 추천 화면의 내 목록에서 확인할 수 있어요.").setPositiveButton("내 목록으로",(d,w)->finish()).setNegativeButton("계속 보기",null).show();message("내 목록에 저장했어요.");return;
+                String savedPlaylist=value.optString("id"),savedBase=base,savedOwner=requests.fingerprint(this,base);
+                setResult(RESULT_OK,new Intent().putExtra("playlistId",savedPlaylist));
+                dialog().setTitle("내 목록에 저장했어요").setMessage("저장한 음악은 추천 화면의 내 목록에서 확인할 수 있어요.").setPositiveButton("내 목록으로",(d,w)->{
+                    setResult(RESULT_OK,new Intent().putExtra("openPlaylist",true).putExtra("playlistId",savedPlaylist).putExtra("serverBase",savedBase).putExtra("owner",savedOwner));finish();
+                }).setNegativeButton("계속 보기",null).show();message("내 목록에 저장했어요.");return;
+            }
         }
         render();
     }

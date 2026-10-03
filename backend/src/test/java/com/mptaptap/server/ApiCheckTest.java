@@ -1,6 +1,7 @@
 package com.mptaptap.server;
 
 import com.sun.net.httpserver.HttpServer;
+import com.mptaptap.core.Conversation;
 import com.mptaptap.core.Recommender;
 import java.net.InetSocketAddress;
 import java.net.URI;
@@ -69,6 +70,12 @@ class ApiCheckTest {
 
     @Test void recommendationOwnershipStorageAndOpenAiContract() throws Exception {
         List<JsonNode> aiRequests=new CopyOnWriteArrayList<>();
+        String mixedUnknown="Gregorian chant only, no Bossa Nova";
+        String genreComplement=mixedUnknown+".",explicitPiano=genreComplement+" no piano",resetComplement="처음부터 "+explicitPiano;
+        List<String> explicitNegativeComplements=List.of("exclude","avoid","without").stream().map(cue->genreComplement+" "+cue+" piano").toList();
+        List<String> supportedGenres=Recommender.GENRES.stream().filter(tag->!tag.equals("unsupported_genre")).toList();
+        String explicitGenres=mixedUnknown+"; "+supportedGenres.stream().map(tag->"no "+tag).collect(java.util.stream.Collectors.joining(", "));
+        List<String> actualComplement=Recommender.LABELS.keySet().stream().filter(tag->!List.of("unsupported_genre","calm").contains(tag)).toList();
         HttpServer stub=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
         stub.createContext("/v1/responses",exchange->{
             JsonNode incoming=json.readTree(exchange.getRequestBody().readAllBytes());aiRequests.add(incoming);
@@ -89,6 +96,12 @@ class ApiCheckTest {
             if(List.of("no Gregorian chant, piano","not Gregorian chant, piano","piano without Gregorian chant","exclude Gregorian chant, piano","avoid Gregorian chant, piano","piano except Gregorian chant","I dislike Gregorian chant, piano","I hate Gregorian chant, piano","don't recommend Gregorian chant, piano").contains(latest))
                 conditions="{\"tags\":[\"piano\"],\"excludedTags\":[\"unsupported_genre\"],\"language\":\"\",\"languageSpecified\":false}";
             if(latest.equals("Gregorian chant only; no piano"))conditions="{\"tags\":[\"unsupported_genre\"],\"excludedTags\":[\"piano\"],\"language\":\"\",\"languageSpecified\":false}";
+            if(latest.equals(mixedUnknown))conditions="{\"tags\":[\"unsupported_genre\"],\"excludedTags\":[\"unsupported_genre\"],\"language\":\"\",\"languageSpecified\":false}";
+            if(latest.equals(mixedUnknown+" invalid language"))conditions="{\"tags\":[\"unsupported_genre\"],\"excludedTags\":[\"unsupported_genre\"],\"language\":\"fr\",\"languageSpecified\":false}";
+            if(latest.equals(mixedUnknown+" invalid tag"))conditions="{\"tags\":[\"unsupported_genre\",\"invented\"],\"excludedTags\":[\"unsupported_genre\"],\"language\":\"\",\"languageSpecified\":false}";
+            if(List.of(genreComplement,explicitPiano,resetComplement,explicitGenres,genreComplement+" invalid language",genreComplement+" invalid tag").contains(latest)
+                    ||explicitNegativeComplements.contains(latest)||explicitNegativeComplements.stream().anyMatch(p->latest.equals("처음부터 "+p)))
+                conditions=json.writeValueAsString(Map.of("tags",latest.endsWith(" invalid tag")?List.of("unsupported_genre","invented"):List.of("unsupported_genre"),"excludedTags",actualComplement,"language",latest.endsWith(" invalid language")?"fr":"","languageSpecified",false));
             if(latest.equals("영어 팝"))conditions="{\"tags\":[\"pop\"],\"excludedTags\":[],\"language\":\"ko\",\"languageSpecified\":false}";
             if(latest.equals("가사 없는 재즈"))conditions="{\"tags\":[\"jazz\",\"instrumental\"],\"excludedTags\":[],\"language\":\"none\",\"languageSpecified\":false}";
             if(input.isArray()&&latest.equals("팝으로 바꿔줘")) {
@@ -98,6 +111,7 @@ class ApiCheckTest {
                 if(first.equals("cozy music"))conditions="{\"tags\":[\"warm\",\"pop\"],\"excludedTags\":[],\"language\":\"\",\"languageSpecified\":false}";
                 if(first.equals("영어 음악")&&input.get(input.size()-2).path("content").asString().contains("Mandarin"))
                     conditions="{\"tags\":[\"pop\"],\"excludedTags\":[],\"language\":\"unsupported\",\"languageSpecified\":true}";
+                if(first.equals(genreComplement)||explicitNegativeComplements.contains(first))conditions=json.writeValueAsString(Map.of("tags",List.of("pop","unsupported_genre"),"excludedTags",actualComplement,"language","","languageSpecified",false));
             }
             if(input.isArray()&&latest.equals("신나는 음악을 추천해줘")&&input.get(0).path("content").asString().equals("cozy music"))
                 conditions="{\"tags\":[\"warm\",\"pop\",\"energetic\"],\"excludedTags\":[],\"language\":\"\",\"languageSpecified\":false}";
@@ -210,6 +224,44 @@ class ApiCheckTest {
                 Recommender.Conditions positiveWithOtherExclusion=ai.extract("Gregorian chant only; no piano");
                 assertEquals(List.of("unsupported_genre"),positiveWithOtherExclusion.tags);assertEquals(List.of("piano"),positiveWithOtherExclusion.excludedTags);
                 assertEquals(0,Recommender.recommend(catalogue,positiveWithOtherExclusion,Map.of(),"openai").tracks.size());
+                Recommender.Conditions mixed=ai.extract(mixedUnknown);
+                assertEquals(List.of("unsupported_genre"),mixed.tags);assertTrue(mixed.excludedTags.isEmpty()&&mixed.language.isEmpty());
+                Recommender.Result mixedResult=Recommender.recommend(catalogue,mixed,Map.of(),"openai");
+                assertEquals(0,mixedResult.tracks.size());assertTrue(mixedResult.notice.contains("장르"));
+                String keptId=catalogue.get(0).id;
+                Recommender.Result mixedKept=Conversation.recommend(catalogue,mixed,Map.of(),"openai",List.of(keptId),List.of());
+                assertEquals(1,mixedKept.tracks.size());assertEquals(keptId,mixedKept.tracks.get(0).track.id);
+                for(String invalid:List.of(" invalid language"," invalid tag"))
+                    assertThrows(IllegalArgumentException.class,()->ai.extract(mixedUnknown+invalid),"Marker recovery must not bypass raw validation.");
+                for(Recommender.Conditions recoveredMixed:List.of(ai.extract("팝으로 바꿔줘",List.of(),mixed),ai.extract("팝으로 바꿔줘",List.of(mixedUnknown)))) {
+                    assertEquals(List.of("pop"),recoveredMixed.tags);assertTrue(recoveredMixed.language.isEmpty());
+                    assertFalse(Recommender.recommend(catalogue,recoveredMixed,Map.of(),"openai").tracks.isEmpty());
+                }
+                Recommender.Conditions compressed=ai.extract(genreComplement);
+                assertEquals(List.of("unsupported_genre"),compressed.tags);assertTrue(compressed.excludedTags.isEmpty()&&compressed.language.isEmpty(),"An unknown genre's only constraint must not exclude unrelated genres and moods.");
+                assertEquals(0,Recommender.recommend(catalogue,compressed,Map.of(),"openai").tracks.size());
+                for(Recommender.Conditions recoveredComplement:List.of(ai.extract("팝으로 바꿔줘",List.of(),compressed),ai.extract("팝으로 바꿔줘",List.of(genreComplement)))) {
+                    assertEquals(List.of("pop"),recoveredComplement.tags);assertTrue(recoveredComplement.excludedTags.isEmpty()&&recoveredComplement.language.isEmpty());
+                    assertFalse(Recommender.recommend(catalogue,recoveredComplement,Map.of(),"openai").tracks.isEmpty());
+                }
+                Recommender.Conditions semanticSnapshot=new Recommender.Conditions();semanticSnapshot.excludedTags.add("warm");
+                Recommender.Conditions explicitComplement=ai.extract(explicitPiano,List.of(),semanticSnapshot);
+                assertEquals(List.of("unsupported_genre"),explicitComplement.tags);assertEquals(List.of("warm","piano"),explicitComplement.excludedTags);
+                assertEquals(List.of("warm","piano"),ai.extract(explicitPiano,List.of("따뜻한 음악 제외")).excludedTags);
+                assertEquals(List.of("piano"),ai.extract(resetComplement,List.of(),semanticSnapshot).excludedTags);
+                assertEquals(supportedGenres,ai.extract(explicitGenres).excludedTags,"Actual explicit exclusions of all supported genres remain intact.");
+                for(String request:explicitNegativeComplements) {
+                    Recommender.Conditions negative=ai.extract(request,List.of(),semanticSnapshot);
+                    assertEquals(List.of("unsupported_genre"),negative.tags,request);assertEquals(List.of("warm","piano"),negative.excludedTags,request);
+                    Recommender.Conditions nextPop=ai.extract("팝으로 바꿔줘",List.of(),negative);
+                    assertEquals(List.of("pop"),nextPop.tags);assertEquals(List.of("warm","piano"),nextPop.excludedTags);
+                    Recommender.Result filteredPop=Recommender.recommend(catalogue,nextPop,Map.of(),"openai");
+                    assertFalse(filteredPop.tracks.isEmpty());assertTrue(filteredPop.tracks.stream().noneMatch(p->p.track.tags.contains("piano")||p.track.tags.contains("warm")));
+                    assertEquals(List.of("piano"),ai.extract("팝으로 바꿔줘",List.of(request)).excludedTags,"History-only refinement preserves the direct exclusion.");
+                    assertEquals(List.of("piano"),ai.extract("처음부터 "+request,List.of(),semanticSnapshot).excludedTags,"Reset removes the prior snapshot, not the latest explicit exclusion.");
+                }
+                for(String invalid:List.of(" invalid language"," invalid tag"))
+                    assertThrows(IllegalArgumentException.class,()->ai.extract(genreComplement+invalid),"Complement recovery must follow raw validation.");
                 Recommender.Conditions replaced=ai.extract("팝으로 바꿔줘",List.of(),unlisted);
                 assertEquals(List.of("pop"),replaced.tags);assertTrue(replaced.language.isEmpty());
                 assertFalse(Recommender.recommend(catalogue,replaced,Map.of(),"openai").tracks.isEmpty());

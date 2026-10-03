@@ -445,10 +445,10 @@ public class ErrorRecoveryCheckTest {
                     onView(withHint("https://서버주소")).inRoot(isDialog()).check(matches(withText(base)));
                     onView(withText("곡 데이터와 이용 안내")).inRoot(isDialog()).perform(scrollTo(),click());
                     onView(withText(containsString("검증한 40곡"))).inRoot(isDialog()).check(matches(isDisplayed()));
-                    androidx.test.espresso.Espresso.pressBack();
+                    onView(isRoot()).inRoot(isDialog()).perform(pressKey(android.view.KeyEvent.KEYCODE_BACK));
                     onView(withText("좋아요·싫어요 관리 (1)")).inRoot(isDialog()).perform(scrollTo(),click());
                     onView(withText("좋아요 · "+track.title+" — "+track.artist)).inRoot(isDialog()).check(matches(isDisplayed()));
-                    androidx.test.espresso.Espresso.pressBack();
+                    onView(isRoot()).inRoot(isDialog()).perform(pressKey(android.view.KeyEvent.KEYCODE_BACK));
                     failMetadata.set(false);
                     onView(withText("서버에 연결")).inRoot(isDialog()).check(matches(isEnabled())).perform(scrollTo(),click());ready(app);
                     assertNull("Test server failure",serverFailure.get());assertTrue(savedReads.get()>=2);assertEquals(base,settings.getString("server",""));
@@ -461,7 +461,7 @@ public class ErrorRecoveryCheckTest {
                     onView(withId(R.id.settings)).perform(click());
                     onView(withText("곡 데이터와 이용 안내")).inRoot(isDialog()).perform(scrollTo(),click());
                     onView(withText(containsString("검증한 40곡"))).inRoot(isDialog()).check(matches(isDisplayed()));
-                    androidx.test.espresso.Espresso.pressBack();androidx.test.espresso.Espresso.pressBack();
+                    onView(isRoot()).inRoot(isDialog()).perform(pressKey(android.view.KeyEvent.KEYCODE_BACK));onView(isRoot()).inRoot(isDialog()).perform(pressKey(android.view.KeyEvent.KEYCODE_BACK));
                     onView(withId(R.id.nav_recommend)).perform(click());ready(app);
                     onView(withId(R.id.example_study)).perform(closeSoftKeyboard(),scrollTo(),click());
                     onView(withId(R.id.recommend)).perform(scrollTo(),click());ready(app);
@@ -499,7 +499,7 @@ public class ErrorRecoveryCheckTest {
                     onView(withId(R.id.recommend)).check(matches(isEnabled()));
                     onView(withId(R.id.settings)).perform(click());onView(withText("곡 데이터와 이용 안내")).inRoot(isDialog()).perform(scrollTo(),click());
                     onView(withText(containsString("검증한 1곡"))).inRoot(isDialog()).check(matches(isDisplayed()));
-                    androidx.test.espresso.Espresso.pressBack();androidx.test.espresso.Espresso.pressBack();
+                    onView(isRoot()).inRoot(isDialog()).perform(pressKey(android.view.KeyEvent.KEYCODE_BACK));onView(isRoot()).inRoot(isDialog()).perform(pressKey(android.view.KeyEvent.KEYCODE_BACK));
                     assertEquals(0,serverWrites.get());assertNull("Test server failure",serverFailure.get());
                     assertEquals(Collections.singletonMap(track.id,1),data.feedback());assertEquals(1,data.playlist(localId[0]).getJSONArray("items").length());
                 }
@@ -614,7 +614,7 @@ public class ErrorRecoveryCheckTest {
                         onView(withId(R.id.recommend)).check(matches(isEnabled()));onView(withText("서버에 연결하지 않았어요")).check(doesNotExist());
                         onView(withId(R.id.settings)).perform(click());onView(withText("곡 데이터와 이용 안내")).inRoot(isDialog()).perform(scrollTo(),click());
                         onView(withText(containsString("검증한 1곡"))).inRoot(isDialog()).check(matches(isDisplayed()));
-                        androidx.test.espresso.Espresso.pressBack();androidx.test.espresso.Espresso.pressBack();
+                        onView(isRoot()).inRoot(isDialog()).perform(pressKey(android.view.KeyEvent.KEYCODE_BACK));onView(isRoot()).inRoot(isDialog()).perform(pressKey(android.view.KeyEvent.KEYCODE_BACK));
                         assertEquals(Collections.singletonMap(track.id,1),data.feedback());assertEquals(0,serverWrites.get());assertEquals(2,savedReads.get());assertNull("Test server failure",serverFailure.get());
                     } finally {
                         metadataRelease.countDown();

@@ -148,7 +148,7 @@ public class HubFlowCheckTest {
         SharedPreferences settings=context.getSharedPreferences("settings",Context.MODE_PRIVATE),credentials=context.getSharedPreferences("server_credentials",Context.MODE_PRIVATE);
         Map<String,?> oldSettings=settings.getAll(),oldCredentials=credentials.getAll();
         CountDownLatch received=new CountDownLatch(1),release=new CountDownLatch(1);
-        AtomicBoolean running=new AtomicBoolean(true),connected=new AtomicBoolean();AtomicInteger connectionReads=new AtomicInteger();AtomicReference<Throwable> serverFailure=new AtomicReference<>();
+        AtomicBoolean running=new AtomicBoolean(true),connected=new AtomicBoolean();AtomicInteger connectionReads=new AtomicInteger(),publicReads=new AtomicInteger();AtomicReference<String> publicQuery=new AtomicReference<>();AtomicReference<Throwable> serverFailure=new AtomicReference<>();
         var worker=Executors.newSingleThreadExecutor();
         try(ServerSocket server=new ServerSocket(0,5,InetAddress.getByName("127.0.0.1"))) {
             server.setSoTimeout(500);String base="http://127.0.0.1:"+server.getLocalPort(),token="HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH";
@@ -165,7 +165,10 @@ public class HubFlowCheckTest {
                         case "/connections":
                             int read=connectionReads.incrementAndGet();content=connected.get()?"[{\"provider\":\"spotify\",\"connected\":true}]":"[]";
                             if(read==1){received.countDown();assertTrue("Release the old connection snapshot",release.await(15,TimeUnit.SECONDS));}break;
-                        default:throw new AssertionError("Unexpected test path: "+request[1]);
+                        default:
+                            if(!request[1].startsWith("/public/playlists?"))throw new AssertionError("Unexpected test path: "+request[1]);
+                            String query=Uri.parse("http://fixture"+request[1]).getQueryParameter("q");assertNotNull(query);assertTrue(query.length()<=100);
+                            publicQuery.set(query);publicReads.incrementAndGet();content="[]";
                     }
                     byte[] bytes=content.getBytes(StandardCharsets.UTF_8);
                     socket.getOutputStream().write(("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "+bytes.length+"\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.UTF_8));
@@ -195,6 +198,18 @@ public class HubFlowCheckTest {
                 try(ActivityScenario<HubActivity> cold=ActivityScenario.launch(new Intent(context,HubActivity.class).setData(Uri.parse("taptap://connected?provider=spotify&status=connected")))) {
                     ready(cold);assertEquals("A cold callback must read connections only once",3,connectionReads.get());
                     onView(withText("연결됨")).perform(scrollTo()).check(matches(isDisplayed()));assertEquals(token,credentials.getString(base,""));
+                }
+                String first100=String.join("",java.util.Collections.nCopies(100,"s")),oversized=first100+"x";
+                try(ActivityScenario<HubActivity> app=launch(context,"community")) {
+                    ready(app);assertEquals(1,publicReads.get());
+                    onView(withHint("공개 목록 검색")).perform(scrollTo(),replaceText(oversized),closeSoftKeyboard());
+                    onView(withHint("공개 목록 검색")).check(matches(withText(first100)));
+                    onView(withText("검색")).perform(scrollTo(),click());ready(app);assertEquals(first100,publicQuery.get());assertEquals(2,publicReads.get());
+                    app.onActivity(a->hubDraft(a,"query",oversized));app.recreate();ready(app);focused(app);
+                    onView(withHint("공개 목록 검색")).check(matches(withText(first100)));assertEquals(first100,publicQuery.get());assertEquals(3,publicReads.get());
+                    app.onActivity(a->hubDraft(a,"query",oversized));onView(withText("검색")).perform(scrollTo(),click());ready(app);
+                    onView(withText("검색어는 100자까지 입력해 주세요.")).perform(scrollTo()).check(matches(isDisplayed()));
+                    assertEquals("An invalid draft must not send or replace the last valid query",3,publicReads.get());assertEquals(first100,publicQuery.get());
                 }
                 assertNull("Test server failure",serverFailure.get());
             } finally {running.set(false);release.countDown();server.close();replies.get(2,TimeUnit.SECONDS);}
@@ -232,14 +247,14 @@ public class HubFlowCheckTest {
             String deviceToken=client.object("POST","/accounts/login",new JSONObject().put("email",email).put("password",password)).getString("token");
             assertNotEquals("A second device has its own session",client.identity(),deviceToken);String extraItem=null;
             try(ActivityScenario<MainActivity> main=ActivityScenario.launch(MainActivity.class)) {
-                readyMain(main);onView(withId(R.id.settings)).perform(click());onView(withText("좋아요·싫어요 관리 (0)")).perform(scrollTo()).check(matches(isDisplayed()));
-                androidx.test.espresso.Espresso.pressBack();main.moveToState(Lifecycle.State.CREATED);
+                readyMain(main);onView(withId(R.id.settings)).perform(click());onView(withText("좋아요·싫어요 관리 (0)")).inRoot(isDialog()).perform(scrollTo()).check(matches(isDisplayed()));
+                onView(isRoot()).inRoot(isDialog()).perform(pressKey(android.view.KeyEvent.KEYCODE_BACK));main.moveToState(Lifecycle.State.CREATED);
                 deviceRequest(base,deviceToken,"PUT","/me/feedback/"+anotherId,new JSONObject().put("reaction",1));
                 extraItem=deviceRequest(base,deviceToken,"POST","/playlists/"+list+"/items",new JSONObject().put("trackId",anotherId)).getString("id");
                 main.moveToState(Lifecycle.State.RESUMED);readyMain(main);
-                onView(withId(R.id.settings)).perform(click());onView(withText("좋아요·싫어요 관리 (1)")).perform(scrollTo(),click());
-                onView(withText("좋아요 · "+anotherTrack.getString("title")+" — "+anotherTrack.getString("artist"))).check(matches(isDisplayed()));
-                androidx.test.espresso.Espresso.pressBack();androidx.test.espresso.Espresso.pressBack();
+                onView(withId(R.id.settings)).perform(click());onView(withText("좋아요·싫어요 관리 (1)")).inRoot(isDialog()).perform(scrollTo(),click());
+                onView(withText("좋아요 · "+anotherTrack.getString("title")+" — "+anotherTrack.getString("artist"))).inRoot(isDialog()).check(matches(isDisplayed()));
+                onView(isRoot()).inRoot(isDialog()).perform(pressKey(android.view.KeyEvent.KEYCODE_BACK));onView(isRoot()).inRoot(isDialog()).perform(pressKey(android.view.KeyEvent.KEYCODE_BACK));
                 main.onActivity(a->{try{var field=MainActivity.class.getDeclaredField("savedTracks");field.setAccessible(true);assertTrue("The foreground must update saved-card state",((java.util.Set<?>)field.get(a)).contains(anotherId));}catch(ReflectiveOperationException error){throw new AssertionError(error);}});
                 onView(withId(R.id.nav_library)).perform(click());readyMain(main);onView(withText("익명 목록 "+suffix+"\n2곡")).perform(scrollTo()).check(matches(isDisplayed()));
             } finally {
@@ -286,19 +301,19 @@ public class HubFlowCheckTest {
                 onView(withText(title+"\n2곡")).perform(scrollTo(),click());readyMain(main);
                 onView(withText("1. Reviewed Sample\nSample artist · 가져온 곡")).check(matches(isDisplayed()));
                 onView(withText("1. Reviewed Sample\nSample artist · 가져온 곡")).perform(scrollTo(),click());
-                onView(withText("곡 정보 수정")).perform(click());
-                onView(withHint("곡명")).perform(replaceText("Edited Sample"),closeSoftKeyboard());
-                onView(withHint("영상 시작 위치 · 초")).perform(replaceText("999999"),closeSoftKeyboard());
-                onView(withText("저장")).perform(click());readyMain(main);
-                onView(withHint("곡명")).check(matches(withText("Edited Sample")));
-                onView(withHint("영상 시작 위치 · 초")).perform(replaceText("20"),closeSoftKeyboard());
-                onView(withText("저장")).perform(click());readyMain(main);
+                onView(withText("곡 정보 수정")).inRoot(isDialog()).perform(click());
+                onView(withHint("곡명")).inRoot(isDialog()).perform(replaceText("Edited Sample"),closeSoftKeyboard());
+                onView(withHint("영상 시작 위치 · 초")).inRoot(isDialog()).perform(replaceText("999999"),closeSoftKeyboard());
+                onView(withText("저장")).inRoot(isDialog()).perform(click());readyMain(main);
+                onView(withHint("곡명")).inRoot(isDialog()).check(matches(withText("Edited Sample")));
+                onView(withHint("영상 시작 위치 · 초")).inRoot(isDialog()).perform(replaceText("20"),closeSoftKeyboard());
+                onView(withText("저장")).inRoot(isDialog()).perform(click());readyMain(main);
                 assertEquals("Edited Sample",client.object("GET","/playlists/"+converted,null).getJSONArray("items").getJSONObject(0).getJSONObject("track").getString("title"));
                 onView(withText("공개 설정 · 공유 링크")).perform(scrollTo()).check(matches(isDisplayed()));
             }
             String shareId;
             try(ActivityScenario<HubActivity> app=ActivityScenario.launch(new Intent(context,HubActivity.class).putExtra("mode","community").putExtra("playlistId",converted))) {
-                ready(app);onView(withText("커뮤니티에 공개")).perform(scrollTo(),click());onView(withText("공개")).perform(click());ready(app);
+                ready(app);onView(withText("커뮤니티에 공개")).perform(scrollTo(),click());onView(withText("공개")).inRoot(isDialog()).perform(click());ready(app);
                 JSONObject publication=client.object("GET","/playlists/"+converted+"/publication",null);assertTrue(publication.getBoolean("public"));shareId=publication.getString("shareId");
                 onView(withText("공개 링크 공유")).perform(scrollTo()).check(matches(isDisplayed()));
             }
@@ -347,11 +362,51 @@ public class HubFlowCheckTest {
                 timelineOpen("1. 01:00","https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=90s");
             }
             assertEquals(1,client.array("/me/saved-tracks").length());
+            String returnTitle="돌아올 목록 "+suffix.substring(0,8);
+            try(ActivityScenario<MainActivity> main=ActivityScenario.launch(MainActivity.class)) {
+                readyMain(main);onView(withId(R.id.nav_create)).perform(click());readyHub();
+                androidx.test.espresso.Espresso.closeSoftKeyboard();androidx.test.espresso.Espresso.pressBack();readyReturnedMain(main);
+                onView(withId(R.id.recommend_page)).check(matches(isDisplayed()));onView(withId(R.id.library_scroll)).check(matches(withEffectiveVisibility(Visibility.GONE)));
+                onView(withId(R.id.nav_create)).perform(click());readyHub();
+                onView(withHint("YouTube 영상 주소")).perform(scrollTo(),replaceText("https://www.youtube.com/watch?v=dQw4w9WgXcQ"),closeSoftKeyboard());
+                onView(withHint("영상 설명의 시간표 붙여넣기 (선택)")).perform(scrollTo(),replaceText("00:00 Bridge song by Bridge artist"),closeSoftKeyboard());
+                onView(withText("영상 시간표 확인")).perform(scrollTo(),click());readyHub();
+                onView(withHint("새 목록 이름")).perform(scrollTo(),replaceText(returnTitle),closeSoftKeyboard());
+                onView(withText("선택한 곡을 앱 목록에 저장")).perform(scrollTo(),click());readyHub();
+                onView(withText("계속 보기")).inRoot(isDialog()).perform(click());
+                onView(withHint("새 목록 이름")).check(matches(withText(returnTitle)));
+                onView(withText("선택한 곡을 앱 목록에 저장")).perform(scrollTo(),click());readyHub();
+                String returnedId=null;JSONArray returnedLists=client.array("/playlists");
+                for(int i=0;i<returnedLists.length();i++)if(returnTitle.equals(returnedLists.getJSONObject(i).getString("title")))returnedId=returnedLists.getJSONObject(i).getString("id");
+                assertNotNull("The result must refer to the actual saved playlist",returnedId);
+                assertEquals(1,client.object("GET","/playlists/"+returnedId,null).getJSONArray("items").length());
+                onView(withText("내 목록으로")).inRoot(isDialog()).perform(click());readyReturnedMain(main);
+                onView(withId(R.id.library_scroll)).check(matches(isDisplayed()));onView(withText(returnTitle)).perform(scrollTo()).check(matches(isDisplayed()));
+                onView(withText("1. Bridge song\nBridge artist · 가져온 곡")).perform(scrollTo()).check(matches(isDisplayed()));
+                String savedId=returnedId;main.onActivity(a->{try{var f=MainActivity.class.getDeclaredField("playlistId");f.setAccessible(true);assertEquals(savedId,f.get(a));}catch(ReflectiveOperationException e){throw new AssertionError(e);}});
+                main.recreate();readyReturnedMain(main);onView(withText(returnTitle)).perform(scrollTo()).check(matches(isDisplayed()));
+                onView(withId(R.id.nav_community)).perform(click());readyHub();androidx.test.espresso.Espresso.closeSoftKeyboard();androidx.test.espresso.Espresso.pressBack();readyReturnedMain(main);
+                onView(withText(returnTitle)).perform(scrollTo()).check(matches(isDisplayed()));
+                onView(withId(R.id.nav_community)).perform(click());readyHub();
+                onView(withHint("공개 목록 검색")).perform(scrollTo(),replaceText(title),closeSoftKeyboard());onView(withText("검색")).perform(scrollTo(),click());readyHub();
+                onView(withText("목록 열기")).perform(scrollTo(),click());readyHub();onView(withText("내 목록으로 복사")).perform(scrollTo(),click());
+                String copyTitle="복사 복귀 "+suffix.substring(0,8);
+                onView(withHint("복사할 목록 이름")).inRoot(isDialog()).perform(replaceText(copyTitle),closeSoftKeyboard());
+                onView(withText("복사")).inRoot(isDialog()).perform(click());readyHub();
+                String copiedId=null;JSONArray copiedLists=client.array("/playlists");
+                for(int i=0;i<copiedLists.length();i++)if(copyTitle.equals(copiedLists.getJSONObject(i).getString("title")))copiedId=copiedLists.getJSONObject(i).getString("id");
+                assertNotNull("The copy must have its own actual playlist",copiedId);assertNotEquals(returnedId,copiedId);
+                assertEquals(2,client.object("GET","/playlists/"+copiedId,null).getJSONArray("items").length());
+                onView(withText("내 목록으로")).inRoot(isDialog()).perform(click());readyReturnedMain(main);
+                onView(withText(copyTitle)).perform(scrollTo()).check(matches(isDisplayed()));
+                onView(withText("1. Edited Sample\nSample artist · 가져온 곡")).perform(scrollTo()).check(matches(isDisplayed()));
+                String actualCopy=copiedId;main.onActivity(a->{try{var f=MainActivity.class.getDeclaredField("playlistId");f.setAccessible(true);assertEquals(actualCopy,f.get(a));}catch(ReflectiveOperationException e){throw new AssertionError(e);}});
+            }
             String accountOwner=client.identity();
             try(ActivityScenario<MainActivity> main=ActivityScenario.launch(MainActivity.class)) {
                 readyMain(main);credentials.edit().remove(base).commit();
                 onView(withId(R.id.settings)).perform(click());
-                onView(withText("서버에 연결")).perform(closeSoftKeyboard(),scrollTo(),click());readyMain(main);
+                onView(withText("서버에 연결")).inRoot(isDialog()).perform(closeSoftKeyboard(),scrollTo(),click());readyMain(main);
                 onView(withHint("https://서버주소")).check(doesNotExist());
                 assertFalse(client.identity().isEmpty());assertNotEquals(accountOwner,client.identity());
             } finally {credentials.edit().putString(base,accountOwner).commit();client.connect();}
@@ -379,6 +434,7 @@ public class HubFlowCheckTest {
         var intents=androidx.test.runner.intent.IntentMonitorRegistry.getInstance();IntentFilter filter=new IntentFilter(Intent.ACTION_VIEW);filter.addDataScheme("https");filter.addDataScheme("http");filter.addCategory(Intent.CATEGORY_BROWSABLE);
         var blocked=instrumentation.addMonitor(filter,new android.app.Instrumentation.ActivityResult(android.app.Activity.RESULT_CANCELED,null),true);intents.addIntentCallback(callback);
         try {
+            androidx.test.espresso.Espresso.closeSoftKeyboard();
             onView(allOf(withText("원본 영상의 이 시간 열기"),hasSibling(withText(rowLabel)))).perform(scrollTo(),click());instrumentation.waitForIdleSync();
             if(expectedUrl==null){assertNull("Invalid times must not launch an external activity",sent.get());assertEquals(0,blocked.getHits());}
             else{assertNotNull("Capture the actual external intent",sent.get());assertEquals(expectedUrl,sent.get().getDataString());assertEquals("Block the browser on both API24 and newer Android",1,blocked.getHits());}
@@ -399,6 +455,13 @@ public class HubFlowCheckTest {
         throw new java.io.EOFException("Incomplete test HTTP header");
     }
     private static ActivityScenario<HubActivity> launch(Context context,String mode){return ActivityScenario.launch(new Intent(context,HubActivity.class).putExtra("mode",mode));}
+    private static void hubDraft(HubActivity app,String key,String value){try{var f=HubActivity.class.getDeclaredField("requests");f.setAccessible(true);((HubRequest)f.get(app)).data.put(key,value);}catch(Exception e){throw new AssertionError(e);}}
+    private static void readyHub(){waitUntil(()->{AtomicBoolean ready=new AtomicBoolean();InstrumentationRegistry.getInstrumentation().runOnMainSync(()->{
+        for(android.app.Activity app:androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(androidx.test.runner.lifecycle.Stage.RESUMED))if(app instanceof HubActivity){
+            try{var f=HubActivity.class.getDeclaredField("requests");f.setAccessible(true);ready.set(!((HubRequest)f.get(app)).busy());}catch(Exception e){throw new AssertionError(e);}
+        }
+    });return ready.get();});}
+    private static void readyReturnedMain(ActivityScenario<MainActivity> app){waitUntil(()->{AtomicBoolean ready=new AtomicBoolean();app.onActivity(a->{try{var f=MainActivity.class.getDeclaredField("busy");f.setAccessible(true);ready.set(!f.getBoolean(a)&&a.hasWindowFocus());}catch(Exception e){throw new AssertionError(e);}});return ready.get();});}
     private static void ready(ActivityScenario<HubActivity> app){waitUntil(()->{AtomicBoolean ready=new AtomicBoolean();app.onActivity(a->{try{var f=HubActivity.class.getDeclaredField("requests");f.setAccessible(true);ready.set(!((HubRequest)f.get(a)).busy());}catch(Exception e){throw new AssertionError(e);}});return ready.get();});}
     private static void focused(ActivityScenario<HubActivity> app){waitUntil(()->{AtomicBoolean focused=new AtomicBoolean();app.onActivity(a->focused.set(a.hasWindowFocus()));return focused.get();});}
     private static void readyMain(ActivityScenario<MainActivity> app){waitUntil(()->{AtomicBoolean ready=new AtomicBoolean();app.onActivity(a->{try{var f=MainActivity.class.getDeclaredField("busy");f.setAccessible(true);ready.set(!f.getBoolean(a));}catch(Exception e){throw new AssertionError(e);}});return ready.get();});}
