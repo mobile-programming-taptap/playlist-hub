@@ -48,6 +48,117 @@ import static org.junit.Assert.*;
 
 @RunWith(AndroidJUnit4.class)
 public class ErrorRecoveryCheckTest {
+    @Test public void playlistNameFailuresKeepDraftAndAllowRetry() throws Exception {
+        Context context=InstrumentationRegistry.getInstrumentation().getTargetContext();
+        if(android.os.Build.VERSION.SDK_INT>=37) InstrumentationRegistry.getInstrumentation().getUiAutomation()
+            .grantRuntimePermission(context.getPackageName(),android.Manifest.permission.ACCESS_LOCAL_NETWORK);
+        SharedPreferences settings=context.getSharedPreferences("settings",Context.MODE_PRIVATE);
+        SharedPreferences credentials=context.getSharedPreferences("server_credentials",Context.MODE_PRIVATE);
+        Map<String,?> previousSettings=settings.getAll();
+        LocalStore data=new LocalStore(context);Map<String,Integer> previousFeedback=data.feedback();
+        String catalogue=ApiClient.read(context.getAssets().open("tracks.json"));
+        String id="11111111-1111-4111-8111-111111111111",title="다시 시도해 만든 목록",renamed="다시 시도해 바꾼 이름";
+        JSONObject created=new JSONObject().put("id",id).put("title",title).put("size",0).put("createdAt","2026-10-03T10:00:00Z");
+        JSONObject changed=new JSONObject().put("id",id).put("title",renamed).put("size",0).put("createdAt","2026-10-03T10:00:00Z");
+        String createdList=new JSONArray().put(created).toString(),changedList=new JSONArray().put(changed).toString();
+        String createdDetail=new JSONObject(created.toString()).put("items",new JSONArray()).toString();
+        String changedDetail=new JSONObject(changed.toString()).put("items",new JSONArray()).toString();
+        AtomicInteger creates=new AtomicInteger(),renames=new AtomicInteger();
+        ExecutorService serverWorker=Executors.newSingleThreadExecutor();
+        try(ServerSocket server=new ServerSocket(0,5,InetAddress.getByName("127.0.0.1"))) {
+            server.setSoTimeout(8000);
+            String base="http://127.0.0.1:"+server.getLocalPort();
+            String previousCredential=credentials.getString(base,null);
+            String token="EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE";
+            Future<?> replies=serverWorker.submit(()->{
+                String[] methods={"GET","GET","GET","GET","GET","POST","POST","GET","GET","PUT","PUT","GET","GET"};
+                String[] paths={"/health","/catalogue","/me/feedback","/me/saved-tracks","/playlists","/playlists","/playlists","/playlists","/playlists/"+id,"/playlists/"+id,"/playlists/"+id,"/playlists/"+id,"/playlists"};
+                try {
+                    for(int i=0;i<paths.length;i++)try(Socket socket=server.accept()) {
+                        socket.setSoTimeout(5000);
+                        DataInputStream input=new DataInputStream(socket.getInputStream());
+                        String request=httpLine(input);assertTrue(request,request.startsWith(methods[i]+" "+paths[i]+" HTTP/"));
+                        String header;int length=0;boolean authenticated=false;
+                        while(!(header=httpLine(input)).isEmpty()) {
+                            String lower=header.toLowerCase(java.util.Locale.ROOT);
+                            if(lower.startsWith("content-length:"))length=Integer.parseInt(header.substring(header.indexOf(':')+1).trim());
+                            if(lower.startsWith("authorization:"))authenticated=header.endsWith("Bearer "+token);
+                        }
+                        assertTrue("The test must reuse its seeded session",authenticated);assertTrue(length>=0&&length<=4096);
+                        byte[] body=new byte[length];input.readFully(body);
+                        if(i==5||i==6){assertEquals(title,new JSONObject(new String(body,StandardCharsets.UTF_8)).getString("title"));creates.incrementAndGet();}
+                        if(i==9||i==10){assertEquals(renamed,new JSONObject(new String(body,StandardCharsets.UTF_8)).getString("title"));renames.incrementAndGet();}
+                        String content;
+                        switch(i) {
+                            case 0: content="{\"status\":\"ok\"}";break;
+                            case 1: content=catalogue;break;
+                            case 2: content="{}";break;
+                            case 5: content="{\"message\":\"생성 검사 오류\"}";break;
+                            case 6: content=created.toString();break;
+                            case 7: content=createdList;break;
+                            case 8: content=createdDetail;break;
+                            case 9: content="{\"message\":\"이름 변경 검사 오류\"}";break;
+                            case 10: content="";break;
+                            case 11: content=changedDetail;break;
+                            case 12: content=changedList;break;
+                            default: content="[]";
+                        }
+                        byte[] bytes=content.getBytes(StandardCharsets.UTF_8);
+                        String status=i==5||i==9?"500 Internal Server Error":i==6?"201 Created":i==10?"204 No Content":"200 OK";
+                        String response="HTTP/1.1 "+status+"\r\nContent-Type: application/json\r\nContent-Length: "+bytes.length+"\r\nConnection: close\r\n\r\n";
+                        socket.getOutputStream().write(response.getBytes(StandardCharsets.UTF_8));socket.getOutputStream().write(bytes);socket.getOutputStream().flush();
+                    }
+                } catch(Exception error){throw new RuntimeException(error);}
+            });
+            try {
+                assertTrue(credentials.edit().putString(base,token).commit());
+                assertTrue(settings.edit().putString("server",base).remove("prompt").commit());
+                try(ActivityScenario<MainActivity> app=ActivityScenario.launch(MainActivity.class)) {
+                    ready(app);onView(withId(R.id.nav_library)).perform(closeSoftKeyboard(),click());ready(app);
+                    onView(withText("+ 새 플레이리스트")).perform(scrollTo(),click());
+                    onView(withHint("예: 비 오는 날의 음악")).inRoot(isDialog()).perform(replaceText(title),closeSoftKeyboard());
+                    onView(withText("만들기")).inRoot(isDialog()).perform(click());ready(app);
+                    onView(withText("새 플레이리스트")).inRoot(isDialog()).check(matches(isDisplayed()));
+                    onView(withHint("예: 비 오는 날의 음악")).inRoot(isDialog()).check((view,error)->{
+                        if(error!=null)throw error;
+                        android.widget.EditText name=(android.widget.EditText)view;
+                        assertEquals(title,name.getText().toString());assertEquals("생성 검사 오류",name.getError());
+                    });
+                    onView(withText("만들기")).inRoot(isDialog()).check(matches(isEnabled())).perform(click());ready(app);
+                    onView(withText(title+"\n0곡 · 앱 추천에서 저장")).perform(scrollTo(),click());ready(app);
+                    onView(withText(title)).check(matches(isDisplayed()));
+                    onView(withText("이름 변경")).perform(scrollTo(),click());
+                    onView(withHint("예: 비 오는 날의 음악")).inRoot(isDialog()).perform(replaceText(renamed),closeSoftKeyboard());
+                    onView(withText("변경")).inRoot(isDialog()).perform(click());ready(app);
+                    onView(withText("목록 이름 변경")).inRoot(isDialog()).check(matches(isDisplayed()));
+                    onView(withHint("예: 비 오는 날의 음악")).inRoot(isDialog()).check((view,error)->{
+                        if(error!=null)throw error;
+                        android.widget.EditText name=(android.widget.EditText)view;
+                        assertEquals(renamed,name.getText().toString());assertEquals("이름 변경 검사 오류",name.getError());
+                    });
+                    onView(withText("변경")).inRoot(isDialog()).check(matches(isEnabled())).perform(click());ready(app);
+                    onView(withText(renamed)).check(matches(isDisplayed()));
+                    onView(withText("‹ 내 목록으로")).perform(scrollTo(),click());ready(app);
+                    onView(withText(renamed+"\n0곡 · 앱 추천에서 저장")).perform(scrollTo()).check(matches(isDisplayed()));
+                    replies.get(10,TimeUnit.SECONDS);assertEquals(2,creates.get());assertEquals(2,renames.get());
+                    assertEquals(previousFeedback,data.feedback());
+                }
+            } finally {
+                if(!data.feedback().equals(previousFeedback)) {
+                    data.clearFeedback();for(Map.Entry<String,Integer> reaction:previousFeedback.entrySet())data.react(reaction.getKey(),reaction.getValue());
+                }
+                SharedPreferences.Editor restore=settings.edit();
+                for(String key:new String[]{"server","prompt"}) {
+                    if(previousSettings.containsKey(key))restore.putString(key,(String)previousSettings.get(key));else restore.remove(key);
+                }
+                assertTrue(restore.commit());
+                SharedPreferences.Editor restoreCredential=credentials.edit();
+                if(previousCredential==null)restoreCredential.remove(base);else restoreCredential.putString(base,previousCredential);
+                assertTrue(restoreCredential.commit());
+            }
+        } finally {serverWorker.shutdownNow();data.close();}
+    }
+
     @Test public void pendingServerRecommendationSurvivesRecreationWithoutDuplicatePost() throws Exception {
         Context context=InstrumentationRegistry.getInstrumentation().getTargetContext();
         if(android.os.Build.VERSION.SDK_INT>=37) InstrumentationRegistry.getInstrumentation().getUiAutomation()
