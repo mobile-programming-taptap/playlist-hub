@@ -70,7 +70,7 @@ public class CommunityApi {
             else page.append(label);
             page.append("<small>").append(escape(track.getOrDefault("artist",""))).append("</small></li>");
         }
-        page.append("</ol><p><small>TapTap 공개 목록 · 곡 정보의 출처는 각 원본 링크에서 확인할 수 있어요. 즐겨찾기 순위는 TapTap 안의 반응을 기준으로 해요.</small></p></html>");
+        page.append("</ol><p><small>TapTap 공개 목록 · 곡 정보의 출처는 각 원본 링크에서 확인할 수 있어요. 즐겨찾기 순위는 TapTap 안의 반응을 기준으로 해요. <a href=\"/privacy\">개인정보 처리 안내</a></small></p></html>");
         return ResponseEntity.ok().contentType(MediaType.parseMediaType("text/html;charset=UTF-8"))
             .header("Content-Security-Policy","default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'")
             .header("X-Content-Type-Options","nosniff").header("Cache-Control","no-store").body(page.toString());

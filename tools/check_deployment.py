@@ -107,6 +107,13 @@ def main():
             base = "https://localhost:" + port(443)
             health = ready()
             assert health["catalogueSize"] == 40 and health["aiConfigured"] is False
+            home, home_headers = api("GET", "/", html=True)
+            privacy, privacy_headers = api("GET", "/privacy", html=True)
+            assert "TapTap" in home and 'href="/privacy"' in home
+            assert "OpenAI" in privacy and "YouTube" in privacy and "30일" in privacy
+            for headers in (home_headers, privacy_headers):
+                assert headers.get("Content-Security-Policy") and headers.get("X-Content-Type-Options") == "nosniff"
+                assert not any(name.lower() == "set-cookie" for name in headers)
             assert docker("inspect", containers["app"], "--format", "{{.HostConfig.ReadonlyRootfs}}") == "true"
             assert docker("exec", containers["app"], "id", "-u") == "10001"
             docker("cp", containers["app"] + ":/app/taptap.jar", str(private / "container.jar"))
@@ -182,7 +189,7 @@ def main():
             second_client("DELETE", "/accounts/me", {"password": password}, 204, token)
             proof["checks"] = ["Production Compose validates without printing private settings",
                                "App and database expose no host ports", "App uses a read-only filesystem and UID 10001",
-                               "Container JAR hash and available packaged host JAR match", "TLS hostname and private CA verification",
+                               "Container JAR hash and available packaged host JAR match", "TLS hostname and private CA verification", "Anonymous app introduction and privacy pages without cookies",
                                "HTTP redirects to HTTPS", "Bearer auth, recommendation, playlist and anonymous public share through TLS",
                                "App, database and Caddy restart retain session, playlist, share and CA",
                                "Unpublication and account deletion", "Spoofed X-Forwarded-For cannot bypass login IP limits",

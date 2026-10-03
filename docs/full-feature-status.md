@@ -20,13 +20,16 @@
 | 외부 변경 반영 | 실제 저장 곡과 비교, 미리 보기 후 확인 적용 | 수정·순서·삭제 후 오래된 미리 보기 거절, 다른 원본 보존 통과. 실계정 대기 |
 | 기록 관리 | 변환·가져오기·전송 재열기, 검토 초안 복원, 기록만 삭제 | 소유권·전송 중 삭제 거절·앱 흐름 통과. 삭제된 앱 목록 재저장·재시도 통과 |
 | 보관 정책 | 원본 조회 후 30일 만료, 연결 해제·계정 삭제 | 수동 수정으로 보관 기간 연장 방지, 교차 플랫폼 후보·공개 스냅샷 제거 통과 |
+| 공개 안내 | 비로그인 앱 소개·개인정보 안내, 공유/Apple 허용 화면 연결, 선택적 실제 문의 주소 | HTTP·보안 헤더·문의 주소 검증. 실제 운영자·보관 정책·공개 도메인·Google 심사는 별도 |
 | 배포 | 서버 JAR, Android APK, PostgreSQL·Caddy HTTPS 실행 설정 | Android 빌드·lint, 최종 이미지·로컬 TLS·전체 서버 재시작 보존·접속자별 로그인 제한 통과. 실제 도메인·배포·휴대폰 대기 |
 
 ## 이번 빌드의 검사 근거
 
 - Android 화면 검사: API24 기본·대화 13개 + Hub 3개, API37 기본·대화 15개 + Hub 3개, 합계 34개 통과. Hub 검사는 OS 연결 복귀·화면 재생성·초기 복귀, 계정·변환·공개·별도 로그인 세션의 반응/목록 변경 후 복귀 갱신을 확인한다. 추천이 진행되는 동안 회전 없이 앱을 배경·복귀시켜 반응·저장 상태가 끝난 뒤 정확히 한 번 갱신되는지도 확인했다. 가져오기·곡 수정·후보 선택·제외·전송 확인·부분 실패 재시도·결과 복원, 수정 시각의 실제 외부 Intent 및 음수/범위 초과 차단을 검사했다. 외부 서비스 응답은 모의 서버이며 실제 플랫폼 OAuth 승인은 포함하지 않는다. [API24](../output/checks/baseline-full/android-api24-tests.json), [API37](../output/checks/baseline-full/android-api37-tests.json), [Hub API24](../output/checks/hub-full/android-api24-tests.json), [Hub API37](../output/checks/hub-full/android-api37-tests.json).
+- 최신 카드 화면: [사진·스와이프 기록](../output/checks/android-deck-current.json). 최신 APK의 기본 추천에서 실제 사진 2장, 사진에 따른 배경색 변경, 1/8 → 2/8 스와이프, 5개 탭·이어서 요청·평가/재생 버튼의 화면 내 배치를 확인했다. 전체 사진 주소 검증과 실제 AI 호출은 포함하지 않으며 원래 기기 상태를 복원했다.
 - 실제 YouTube: [최신 APK 재생 기록](../output/checks/android-live-player-current.json). API37에서 `Dynamite` 공식 플레이어 버튼을 직접 눌렀다. 시작 전 정지 상태, 재생 중 두 시점의 같은 영상 ID·상태·5초 진행, 배경 전환 뒤 WebView 종료·복귀 시 부재를 확인했다. 소리 청취·전체 40곡·실제 휴대폰 검증은 포함하지 않는다. 검사 후 기기의 원래 설정·데이터·권한을 복원했다.
 - 서버: [H2 9개](../output/checks/backend-h2-full.json), [PostgreSQL 15 9개](../output/checks/backend-postgresql-full.json), [최종 JAR 재시작](../output/checks/packaged-server-full.json) 통과. PostgreSQL 실행 중 레거시 H2 이전·AI HTTP stub 검사는 H2를 사용한다.
+- 공개 안내 페이지: [실행·브라우저 기록](../output/checks/public-pages-current.json). 실행 중인 로컬 서버의 익명 `/`·`/privacy`, 보안 헤더·쿠키/스크립트 부재, 390px 화면의 두 페이지와 왕복 링크를 확인했다. 최근 요청의 기기 내 보관도 명시한다. 같은 최종 서버 파일의 H2·PostgreSQL·HTTPS 검사에 포함되며 실제 운영 정책·공개 도메인·Google 승인은 별도다.
 - 배포 패키지: [최종 Docker 이미지의 로컬 HTTPS 검사](../output/checks/https-local-full.json)에서 인증서·호스트 이름 검증, 읽기 전용 파일시스템·UID 10001·PostgreSQL 15·앱/DB/프록시 재시작 후 계정/목록/공유 보존을 확인했다. 로그인 실패 주소의 전달·위조 방지와 다른 접속자의 정상 로그인도 통과했다. 검사 후 전용 컨테이너/볼륨을 제거했다. 실제 공개 도메인·공인 인증서 검증은 포함하지 않는다. 재실행 도구는 [배포 검사](../tools/check_deployment.py)다.
 - 실제 OpenAI: [직전 빌드의 실제 호출 근거](../output/checks/openai-full.json). 이후 AI 구현은 바꾸지 않았다. 최초 6곡은 조건에 맞는 카탈로그 부족 안내, 추가 요청 7곡은 유지 곡 포함. 두 응답 모두 OpenAI 모드, 허용 곡만 반환, 반응 데이터 변경 없음. 검사 계정 삭제 완료.
 - APK와 서버의 정확한 파일 해시는 [체크섬](../output/checksums.json)에 기록한다. [APK](../output/apk/TapTap-debug.apk), [서버](../output/server/taptap-backend.jar). 검사·패키지는 로컬 산출물이며 Git에 올리지 않는다.
