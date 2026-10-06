@@ -45,7 +45,7 @@ import org.json.JSONObject;
 public final class HubActivity extends AppCompatActivity {
     private static final String[] PROVIDERS={"spotify","youtube"};
     private static final String[] PROVIDER_NAMES={"Spotify","YouTube Music"};
-    private static final String[] SAVED_TEXT={"screen","importId","targetProvider","transferId","transferKey","saveId","sourceKey","importRequestId","conversionRequestId","publicationId","shareId","videoUrl","timeline","timelineExpanded","listUrl","listTitle","email","name","sourceProvider","query","sort","copyId","copyTitle","copyShare"};
+    private static final String[] SAVED_TEXT={"screen","importId","targetProvider","transferId","transferKey","saveId","sourceKey","importRequestId","conversionRequestId","publicationId","shareId","videoUrl","timeline","timelineExpanded","linkExpanded","listUrl","listTitle","email","name","sourceProvider","query","sort","copyId","copyTitle","copyShare","libraryProvider","libraryCursor","libraryRequestCursor","libraryReset","libraryLoaded","libraryConnect","batchActiveId"};
     private HubRequest requests;
     private String base,mode;
     private LinearLayout content;
@@ -69,13 +69,13 @@ public final class HubActivity extends AppCompatActivity {
             if(saved!=null&&!changed&&requests.fingerprint(this,base).equals(saved.getString("hubOwner",requests.fingerprint(this,base)))) {
                 for(String key:SAVED_TEXT)if(saved.containsKey(key))put(key,saved.getString(key));
                 put("favourites",saved.getBoolean("favourites"));
-                restoreArray(saved,"edits");restoreArray(saved,"selections");
+                restoreArray(saved,"edits");restoreArray(saved,"selections");restoreArray(saved,"libraryItems");restoreArray(saved,"librarySelections");restoreArray(saved,"batchImports");
             }
             if(!requests.data.has("screen"))put("screen",mode);
             String playlist=getIntent().getStringExtra("playlistId");
             if(playlist!=null&&!playlist.isEmpty()){put("publicationId",playlist);put("screen","publication");}
         }
-        if(callback){put("screen","account");put("authorizationPending",true);}
+        if(callback){if(value("libraryConnect").equals("true"))mode="create";put("screen","account");put("authorizationPending",true);}
         LinearLayout root=new LinearLayout(this);root.setOrientation(LinearLayout.VERTICAL);root.setBackgroundColor(getColor(R.color.background));
         setContentView(root);if(saved==null){root.setFocusableInTouchMode(true);root.requestFocus();}
         ViewCompat.setOnApplyWindowInsetsListener(root,(view,insets)->{
@@ -120,12 +120,14 @@ public final class HubActivity extends AppCompatActivity {
         JSONArray selections=new JSONArray(),chosen=requests.data.optJSONArray("selections");
         if(chosen!=null)for(int i=0;i<chosen.length();i++){JSONObject row=chosen.optJSONObject(i);if(row!=null)selections.put(json("sourceIndex",row.optInt("sourceIndex"),"targetId",row.optString("targetId"),"excluded",row.optBoolean("excluded")));}
         out.putString("selections",selections.toString());
+        for(String key:new String[]{"libraryItems","librarySelections","batchImports"})if(requests.data.has(key))out.putString(key,array(key).toString());
         super.onSaveInstanceState(out);
     }
 
     private void reload() {
         String screen=value("screen");
         if(screen.equals("account"))send("account","GET","/accounts/me",null);
+        else if(screen.equals("library")&&!value("libraryLoaded").equals("true"))loadLibraryPage("",true);
         else if(screen.equals("history"))send("history","GET","/imports/playlists?summary=true",null);
         else if(screen.equals("community"))loadPublic();
         else if(screen.equals("publicDetail"))send("publicDetail","GET","/public/playlists/"+Uri.encode(value("shareId")),null);
@@ -146,6 +148,8 @@ public final class HubActivity extends AppCompatActivity {
         if(base.isEmpty()) {heading("서버 연결이 필요해요");paragraph("기존 추천 화면의 설정에서 서버에 연결하면 계정, 영상 변환, 음악 서비스 연동과 커뮤니티를 사용할 수 있어요.");addButton(content,"추천 화면으로 돌아가기",this::finish);return;}
         switch(value("screen")) {
             case "account":account();break;
+            case "library":library();break;
+            case "batch":batchResult();break;
             case "community":community();break;
             case "publicDetail":publicDetail();break;
             case "publication":publication();break;
@@ -174,9 +178,16 @@ public final class HubActivity extends AppCompatActivity {
         manual.addView(text("설명을 가져오기 어렵거나 직접 정리한 시간표가 있을 때 사용해요.",13,false));
         EditText timeline=createField(manual,"시간표","영상 설명의 시간표 붙여넣기","timeline",65536,true);
         addButton(manual,"입력한 시간표로 만들기",()->convertVideo(url,timeline));
-        LinearLayout service=card(content);service.addView(text("음악 서비스 목록 가져오기",20,true));service.addView(text("가져온 곡을 확인하고 원하는 음악 서비스로 옮겨요.",13,false));service.addView(text("음악 서비스",12,true));fillInput(providerPicker(service,"sourceProvider"));
-        createField(service,"목록 주소","플레이리스트 주소","listUrl",2048,false);createField(service,"목록 이름","새 목록 이름","listTitle",80,false);
-        addPrimaryButton(service,"플레이리스트 가져오기",()->{
+        if(value("sourceProvider").isEmpty())put("sourceProvider","youtube");
+        LinearLayout service=card(content);service.addView(text("내 플레이리스트 가져오기",20,true));service.addView(text("음악 계정을 연결하고 가져올 목록을 체크하세요. 선택한 목록은 내 목록에 각각 저장해요.",13,false));service.addView(text("음악 서비스",12,true));fillInput(providerPicker(service,"sourceProvider"));
+        addPrimaryButton(service,"내 플레이리스트 선택",()->openLibrary(provider("sourceProvider")));
+        if(array("batchImports").length()>0)addButton(service,"이전 가져오기 결과",()->{put("screen","batch");render();});
+        LinearLayout link=column();MaterialButton linkToggle=button("",()->{});linkToggle.setStrokeWidth(0);linkToggle.setBackgroundTintList(android.content.res.ColorStateList.valueOf(android.graphics.Color.TRANSPARENT));linkToggle.setTextColor(getColor(R.color.muted));
+        boolean linkVisible=value("linkExpanded").equals("true");link.setVisibility(linkVisible?View.VISIBLE:View.GONE);linkToggle.setText(linkVisible?"링크 입력 닫기":"링크로 직접 가져오기");
+        linkToggle.setOnClickListener(v->{if(requests.busy())return;boolean show=link.getVisibility()!=View.VISIBLE;put("linkExpanded",String.valueOf(show));link.setVisibility(show?View.VISIBLE:View.GONE);linkToggle.setText(show?"링크 입력 닫기":"링크로 직접 가져오기");});
+        service.addView(linkToggle,new LinearLayout.LayoutParams(-1,-2));service.addView(link,new LinearLayout.LayoutParams(-1,-2));
+        createField(link,"목록 주소","플레이리스트 주소","listUrl",2048,false);createField(link,"목록 이름","새 목록 이름","listTitle",80,false);
+        addButton(link,"플레이리스트 가져오기",()->{
             if(provider("sourceProvider").isEmpty()){message("지원하는 음악 서비스를 선택해 주세요.");return;}
             if(value("listUrl").trim().isEmpty()){message("가져올 플레이리스트 주소를 입력해 주세요.");return;}
             beginSource(provider("sourceProvider")+":"+value("listUrl").trim()+":"+value("listTitle").trim(),"importRequestId");
@@ -194,6 +205,86 @@ public final class HubActivity extends AppCompatActivity {
         beginSource("youtube:"+address+":"+(rows==null?"automatic":"manual:"+rows),"conversionRequestId");
         JSONObject body=json("id",value("conversionRequestId"),"url",address);if(rows!=null)set(body,"timeline",rows);
         put("edits",new JSONArray());put("selections",new JSONArray());send("conversion","POST","/conversions/youtube",body);
+    }
+
+    private void openLibrary(String provider) {
+        if(!supportedProvider(provider)){message("지원하는 음악 서비스를 선택해 주세요.");return;}
+        if(!provider.equals(value("libraryProvider"))){clearLibrary();put("libraryProvider",provider);}
+        put("screen","library");render();scrollToTop();loadLibraryPage("",true);
+    }
+    private void clearLibrary(){for(String key:new String[]{"libraryItems","librarySelections","libraryCursor","libraryRequestCursor","libraryReset","libraryLoaded"})requests.data.remove(key);}
+    private void loadLibraryPage(String cursor,boolean reset) {
+        String provider=value("libraryProvider");if(!supportedProvider(provider)){message("음악 서비스를 다시 선택해 주세요.");return;}
+        put("libraryRequestCursor",cursor);put("libraryReset",String.valueOf(reset));
+        send("library","GET","/connections/"+provider+"/playlists"+(cursor.isEmpty()?"":"?cursor="+Uri.encode(cursor)),null);
+    }
+    private void library() {
+        String provider=value("libraryProvider");boolean loaded=value("libraryLoaded").equals("true");heading("내 플레이리스트");paragraph(providerName(provider)+"에서 직접 만든 목록을 가져와요.");
+        if(provider.equals("youtube"))paragraph("좋아요·자동 생성 목록은 보이지 않을 수 있어요.");
+        Runnable connect=()->{
+            clearLibrary();requests.data.remove("batchImports");requests.data.remove("batchActiveId");put("libraryConnect","true");
+            send("auth","POST","/connections/"+provider+"/start",null);
+        };
+        if(!loaded)addButton(content,providerName(provider)+" 계정 연결",connect);
+        LinearLayout tools=new LinearLayout(this);tools.setGravity(Gravity.CENTER_VERTICAL);content.addView(tools);
+        TextView counter=text(array("librarySelections").length()+"개 선택",14,true);counter.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);tools.addView(counter,new LinearLayout.LayoutParams(0,-2,1));
+        MaterialButton refresh=button("목록 새로고침",()->loadLibraryPage("",true));refresh.setTextSize(13);refresh.setMinWidth(0);refresh.setStrokeWidth(0);refresh.setBackgroundTintList(android.content.res.ColorStateList.valueOf(android.graphics.Color.TRANSPARENT));refresh.setTextColor(getColor(R.color.muted));tools.addView(refresh);
+        addPrimaryButton(content,"선택한 목록 가져오기",this::startLibraryImport);
+        JSONArray rows=array("libraryItems");
+        if(rows.length()==0)paragraph(value("libraryLoaded").equals("true")?"연결된 계정에 가져올 플레이리스트가 없어요.":"계정을 연결하면 내 플레이리스트를 불러올 수 있어요.");
+        for(int i=0;i<rows.length();i++) {
+            JSONObject row=rows.optJSONObject(i);if(row==null)continue;String id=row.optString("id"),title=row.optString("title","이름 없는 플레이리스트");
+            LinearLayout box=card(content),line=new LinearLayout(this);line.setGravity(Gravity.CENTER_VERTICAL);box.addView(line);
+            CheckBox check=new CheckBox(this);check.setMinHeight(dp(48));check.setContentDescription("선택: "+title);check.setChecked(find(array("librarySelections"),"id",id)!=null);controls.add(check);line.addView(check,new LinearLayout.LayoutParams(dp(48),-2));
+            LinearLayout labels=column();line.addView(labels,new LinearLayout.LayoutParams(0,-2,1));labels.addView(text(title,16,true));int count=row.optInt("itemCount",-1);String privacy=row.optString("privacyStatus");
+            labels.addView(text((count<0?"곡 수 확인 필요":count+"곡")+" · "+(privacy.equals("private")?"비공개":privacy.equals("public")?"공개":privacy.equals("unlisted")?"일부 공개":"공개 상태 확인 필요"),13,false));
+            labels.setOnClickListener(v->{if(!requests.busy())check.setChecked(!check.isChecked());});
+            check.setOnCheckedChangeListener((v,checked)->{
+                JSONArray selected=array("librarySelections");
+                if(checked&&selected.length()>=20){check.setChecked(false);message("한 번에 20개 목록까지 선택할 수 있어요.");return;}
+                if(checked){if(find(selected,"id",id)==null)selected.put(json("id",id,"title",title,"sourceUrl",row.optString("sourceUrl")));}
+                else{JSONArray remaining=new JSONArray();for(int j=0;j<selected.length();j++){JSONObject item=selected.optJSONObject(j);if(item!=null&&!item.optString("id").equals(id))remaining.put(item);}put("librarySelections",remaining);}
+                counter.setText(array("librarySelections").length()+"개 선택");
+            });
+        }
+        if(!value("libraryCursor").isEmpty())addButton(content,"다음 목록 불러오기",()->loadLibraryPage(value("libraryCursor"),false));
+        if(rows.length()>=200)paragraph("200개 목록까지 표시해요. 다른 목록은 링크로 직접 가져올 수 있어요.");
+        if(loaded)addButton(content,providerName(provider)+" 계정 연결",connect);
+    }
+    private void startLibraryImport() {
+        JSONArray selected=array("librarySelections");String provider=value("libraryProvider");
+        if(!supportedProvider(provider)){message("음악 서비스를 다시 선택해 주세요.");return;}
+        if(selected.length()==0||selected.length()>20){message("가져올 목록을 1~20개 선택해 주세요.");return;}
+        // ponytail: bound queue/Bundle size; larger imports can run in separate batches.
+        JSONArray queue=new JSONArray();for(int i=0;i<selected.length();i++) {
+            JSONObject row=selected.optJSONObject(i);if(row==null)continue;String title=row.optString("title").trim();if(title.isEmpty())title="가져온 음악";
+            if(title.length()>80){title=title.substring(0,80);if(Character.isHighSurrogate(title.charAt(title.length()-1)))title=title.substring(0,title.length()-1);}
+            queue.put(json("requestId",UUID.randomUUID().toString(),"provider",provider,"url",row.optString("sourceUrl"),"title",title,"status","PENDING"));
+        }
+        clearSource();requests.data.remove("sourceKey");put("batchImports",queue);put("screen","batch");render();scrollToTop();nextLibraryImport();
+    }
+    private void nextLibraryImport() {
+        JSONArray queue=array("batchImports");for(int i=0;i<queue.length();i++) {
+            JSONObject row=queue.optJSONObject(i);if(row==null||row.optString("status").equals("DONE")||row.optString("status").equals("EMPTY"))continue;
+            set(row,"status","IMPORTING");set(row,"notice","");put("batchActiveId",row.optString("requestId"));put("screen","batch");render();
+            send("batchImport","POST","/imports/playlists",json("id",row.optString("requestId"),"provider",row.optString("provider"),"url",row.optString("url"),"title",row.optString("title")));return;
+        }
+        requests.data.remove("batchActiveId");put("librarySelections",new JSONArray());render();
+    }
+    private void batchResult() {
+        heading("가져오기 결과");JSONArray queue=array("batchImports");int completed=0;boolean remaining=false;
+        for(int i=0;i<queue.length();i++){JSONObject row=queue.optJSONObject(i);if(row==null)continue;if(row.optString("status").equals("DONE"))completed++;else if(!row.optString("status").equals("EMPTY"))remaining=true;}
+        paragraph(queue.length()+"개 중 "+completed+"개 저장 완료");
+        for(int i=0;i<queue.length();i++) {
+            JSONObject row=queue.optJSONObject(i);if(row==null)continue;LinearLayout box=card(content);box.addView(text(row.optString("title"),17,true));String state=row.optString("status");
+            box.addView(text(state.equals("DONE")?row.optInt("size")+"곡 · 저장 완료":state.equals("EMPTY")?"가져올 곡 없음":state.equals("FAILED")?"가져오기 실패":state.equals("IMPORTING")?"가져오는 중":"대기 중",13,false));
+            if(!row.optString("notice").isEmpty())box.addView(text(row.optString("notice"),13,false));
+            if(state.equals("DONE"))addButton(box,"가져온 곡 확인",()->{
+                clearSource();requests.data.remove("sourceKey");put("importId",row.optString("requestId"));put("listTitle",row.optString("title"));put("screen","preview");render();send("import","GET","/imports/playlists/"+Uri.encode(row.optString("requestId")),null);
+            });
+        }
+        if(remaining)addPrimaryButton(content,"남은 목록 다시 가져오기",this::nextLibraryImport);
+        addButton(content,"다른 플레이리스트 선택",()->openLibrary(value("libraryProvider")));
     }
 
     private void history() {
@@ -257,7 +348,7 @@ public final class HubActivity extends AppCompatActivity {
             boolean enabled=capability!=null&&capability.optBoolean("configured"),connected=connection!=null&&connection.optBoolean("connected");
             row.addView(text(connected?"연결됨":enabled?"연결할 수 있어요":"서버에서 연결 설정이 필요해요",13,false));
             if(capability!=null&&!capability.optString("notice").isEmpty())row.addView(text(capability.optString("notice"),13,false));
-            if(connected)addButton(row,"연결 해제",()->send("disconnected","DELETE","/connections/"+provider,null));
+            if(connected){addButton(row,"내 플레이리스트 선택",()->openLibrary(provider));addButton(row,"연결 해제",()->send("disconnected","DELETE","/connections/"+provider,null));}
             else if(enabled)addButton(row,"브라우저에서 연결",()->send("auth","POST","/connections/"+provider+"/start",null));
         }
         addButton(content,"연결 상태 새로고침",()->send("account","GET","/accounts/me",null));
@@ -449,7 +540,14 @@ public final class HubActivity extends AppCompatActivity {
 
     private void delivered(String route,JSONObject value) {
         switch(route) {
-            case "account":put("account",value);put("screen","account");break;
+            case "account":
+                put("account",value);
+                if(value("libraryConnect").equals("true")){
+                    put("libraryConnect","false");JSONObject connection=find(value.optJSONArray("connections"),"provider",value("libraryProvider"));
+                    if(connection!=null&&connection.optBoolean("connected")){openLibrary(value("libraryProvider"));return;}
+                    put("screen","library");render();message("음악 계정 연결을 마치지 못했어요. 다시 연결해 주세요.");return;
+                }
+                put("screen","account");break;
             case "signedIn":case "signedOut":clearSource();requests.data.remove("sourceKey");requests.data.remove("history");put("account",new JSONObject());put("screen","account");render();send("account","GET","/accounts/me",null);return;
             case "history":put("history",value);put("screen","history");break;
             case "historyDeleted":
@@ -458,8 +556,28 @@ public final class HubActivity extends AppCompatActivity {
                 requests.data.remove("deletingKind");requests.data.remove("deletingId");requests.data.remove("history");put("screen","history");render();reload();return;
             case "auth":put("authorizationPending",true);open(value.optString("authorizationUrl"));message("브라우저에서 연결을 마친 뒤 돌아와 주세요.");return;
             case "disconnected":
+                clearLibrary();requests.data.remove("batchImports");requests.data.remove("batchActiveId");put("libraryConnect","false");
                 if(value.optBoolean("providerRevocationRequired")&&!value.optString("manageAccessUrl").isEmpty())dialog().setTitle("서비스 권한도 확인해 주세요").setMessage("TapTap 연결은 해제했어요. 음악 서비스의 연결 앱 설정에서도 권한을 해제할 수 있어요.").setPositiveButton("권한 설정 열기",(d,w)->open(value.optString("manageAccessUrl"))).setNegativeButton("닫기",null).show();
                 send("account","GET","/accounts/me",null);return;
+            case "library": {
+                if(!value.optString("provider").equals(value("libraryProvider"))){message("음악 서비스가 변경됐어요. 목록을 다시 불러와 주세요.");return;}
+                if(value("libraryReset").equals("true"))put("librarySelections",new JSONArray());
+                JSONArray rows=value("libraryReset").equals("true")?new JSONArray():array("libraryItems"),page=value.optJSONArray("items");
+                if(page!=null)for(int i=0;i<page.length()&&rows.length()<200;i++){
+                    JSONObject row=page.optJSONObject(i);if(row==null||row.optString("id").isEmpty()||find(rows,"id",row.optString("id"))!=null)continue;
+                    rows.put(json("id",row.optString("id"),"title",row.optString("title"),"itemCount",row.optInt("itemCount",-1),"privacyStatus",row.optString("privacyStatus"),"sourceUrl",row.optString("sourceUrl")));
+                }
+                String next=value.optString("nextCursor");if(rows.length()>=200||next.equals(value("libraryRequestCursor")))next="";
+                put("libraryItems",rows);put("libraryCursor",next);put("libraryLoaded","true");put("screen","library");break;
+            }
+            case "batchImport": {
+                JSONObject row=find(array("batchImports"),"requestId",value("batchActiveId"));
+                if(row==null||!row.optString("requestId").equals(value.optString("id"))){failure(route,new IllegalStateException("가져오기 결과를 확인하지 못했어요."));return;}
+                boolean saved=value.optBoolean("saved")&&!value.optString("localPlaylistId").isEmpty();set(row,"status",saved?"DONE":"EMPTY");set(row,"localPlaylistId",value.optString("localPlaylistId"));set(row,"notice",value.optString("notice"));
+                JSONArray items=value.optJSONArray("reviewedItems");if(items==null)items=value.optJSONArray("items");set(row,"size",items==null?0:items.length());
+                if(saved)setResult(RESULT_OK,new Intent().putExtra("playlistId",value.optString("localPlaylistId")));
+                nextLibraryImport();return;
+            }
             case "conversion":case "import":
                 if(route.equals("conversion")&&previewEntries(value).length()==0){put("screen","create");put("timelineExpanded","true");render();message(value.optString("notice","영상 설명에서 시간표를 찾지 못했어요. 직접 시간표를 입력할 수 있어요."));return;}
                 boolean fresh=!value.optString("id").equals(value("importId"));
@@ -496,11 +614,16 @@ public final class HubActivity extends AppCompatActivity {
             }
         }
         render();
+        if(route.equals("library")&&value("libraryReset").equals("true"))scrollToTop();
     }
+    private void scrollToTop(){content.post(()->{if(content.getParent() instanceof NestedScrollView)((NestedScrollView)content.getParent()).scrollTo(0,0);});}
     private void failure(String route,Exception error) {
         if(route.equals("identity")){put("screen",mode);render();message(error.getMessage());addButton(content,"현재 계정으로 다시 확인",this::reload);return;}
         if(route.equals("historyDeleted")&&error instanceof ApiClient.ApiError&&((ApiClient.ApiError)error).statusCode==404){delivered(route,new JSONObject());return;}
         String message=error instanceof ApiClient.ApiError?error.getMessage():"서버와 연결하지 못했어요. 연결 상태를 확인하고 다시 시도해 주세요.";
+        if(route.equals("batchImport")){JSONObject row=find(array("batchImports"),"requestId",value("batchActiveId"));if(row!=null){set(row,"status","FAILED");set(row,"notice",message);}put("screen","batch");render();message("가져오기를 멈췄어요. 저장한 목록은 유지되며 남은 목록만 다시 가져올 수 있어요.");return;}
+        if(route.equals("library")){put("screen","library");render();message(message);return;}
+        if(route.equals("auth")&&value("libraryConnect").equals("true"))put("libraryConnect","false");
         message(message);
         if(route.equals("account")){paragraph("계정 또는 음악 서비스 정보를 확인하지 못했어요.");}
         addButton(content,"같은 요청 다시 시도",()->requests.retry(getApplicationContext(),base));
