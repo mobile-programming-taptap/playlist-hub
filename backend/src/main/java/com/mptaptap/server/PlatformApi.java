@@ -45,6 +45,10 @@ public class PlatformApi {
         return Map.of("providers",providers,"tokenStorageConfigured",store.configured());
     }
     @GetMapping("/connections") public List<Map<String,Object>> connections(@RequestHeader(value="Authorization",required=false)String auth){return store.connections(user(auth)).stream().filter(row->PlatformClient.PROVIDERS.contains(row.get("provider"))).toList();}
+    @GetMapping("/connections/{platform}/playlists") public PlatformClient.PlaylistPage playlists(@RequestHeader(value="Authorization",required=false)String auth,@PathVariable String platform,@RequestParam(defaultValue="")String cursor){
+        String u=user(auth),p=provider(platform),page=PlatformClient.playlistCursor(p,cursor);
+        return remote.playlists(p,page,token(u,p));
+    }
     @PostMapping("/connections/{platform}/start") public Map<String,String> start(@RequestHeader(value="Authorization",required=false)String auth,@PathVariable String platform){
         String u=user(auth),p=provider(platform);if(!store.configured()||!remote.configured(p))throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"서버의 플랫폼 연결 환경과 암호화 키를 먼저 설정해 주세요.");
         Map<String,String> state=store.start(u,p,auth);String url=remote.authorize(p,state.get("state"),state.get("challenge"));

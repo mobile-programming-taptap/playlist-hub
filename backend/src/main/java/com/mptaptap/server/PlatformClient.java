@@ -32,6 +32,8 @@ public class PlatformClient {
         RemotePlaylist(String id,String title,String url,List<PlatformTrack> tracks,boolean truncated){this(id,title,url,tracks,truncated,java.util.stream.IntStream.range(0,tracks.size()).boxed().toList(),List.of());}
     }
     public record Video(String videoId,String title,String description,int durationSeconds,String sourceUrl) {}
+    public record PlaylistSummary(String id,String title,int itemCount,String privacyStatus,String sourceUrl) {}
+    public record PlaylistPage(String provider,List<PlaylistSummary> items,String nextCursor) {}
     static final class Failure extends RuntimeException {
         final int status;
         Failure(int status) { super(status==429?"플랫폼 요청 한도에 도달했어요. 잠시 후 다시 시도해 주세요.":status==401?"플랫폼 계정을 다시 연결해 주세요.":status==403?"플랫폼이 이 작업을 허용하지 않았어요. 계정 권한과 앱의 이용 모드를 확인해 주세요.":"플랫폼 응답을 확인하지 못했어요. 상태를 확인한 뒤 다시 시도해 주세요.");this.status=status; }
@@ -113,6 +115,37 @@ public class PlatformClient {
         try { duration=Math.toIntExact(Duration.parse(row.path("contentDetails").path("duration").asString()).getSeconds()); }
         catch(RuntimeException error){throw new Failure(502);}
         return new Video(id,row.path("snippet").path("title").asString(""),row.path("snippet").path("description").asString(""),duration,trackUrl("youtube",id));
+    }
+    static String playlistCursor(String provider,String cursor) {
+        provider(provider);if(cursor==null)return "";
+        if(cursor.length()>1024||cursor.chars().anyMatch(c->c<33||c>126))throw new IllegalArgumentException("다음 목록 조회 정보를 확인해 주세요.");
+        if(provider.equals("spotify")&&!cursor.isEmpty()&&(!cursor.matches("0|[1-9][0-9]{0,5}")||Integer.parseInt(cursor)>100000))throw new IllegalArgumentException("다음 목록 조회 정보를 확인해 주세요.");
+        return cursor;
+    }
+    PlaylistPage playlists(String provider,String cursor,Tokens tokens) {
+        cursor=playlistCursor(provider,cursor);
+        if(tokens.accountId()==null||tokens.accountId().isBlank())throw new Failure(401);
+        boolean spotify=provider.equals("spotify");int offset=spotify&&!cursor.isEmpty()?Integer.parseInt(cursor):0;
+        String path=spotify?"/me/playlists?limit=50&offset="+offset:"/playlists?part=snippet,status,contentDetails&mine=true&maxResults=50"+(cursor.isEmpty()?"":"&pageToken="+encode(cursor));
+        JsonNode page=api(provider,"GET",path,tokens.accessToken(),null),rows=page.path("items");
+        if(!rows.isArray()||rows.size()>50)throw new Failure(502);
+        List<PlaylistSummary> summaries=new ArrayList<>();
+        for(JsonNode row:rows) {
+            String owner=spotify?row.path("owner").path("id").asString(""):row.path("snippet").path("channelId").asString("");
+            if(!tokens.accountId().equals(owner))continue;
+            String id=required(row,"id");try{validPlaylistId(provider,id);}catch(IllegalArgumentException error){throw new Failure(502);}
+            int count=spotify?row.path("items").path("total").asInt(row.path("tracks").path("total").asInt(-1)):row.path("contentDetails").path("itemCount").asInt(-1);
+            String privacy=spotify?(row.path("public").isBoolean()?(row.path("public").asBoolean()?"public":"private"):"unknown"):row.path("status").path("privacyStatus").asString("unknown");
+            if(!List.of("public","private","unlisted").contains(privacy))privacy="unknown";
+            String title=spotify?row.path("name").asString(""):row.path("snippet").path("title").asString("");
+            if(title.length()>300)title=title.substring(0,Character.isHighSurrogate(title.charAt(299))?299:300);
+            summaries.add(new PlaylistSummary(id,title,Math.max(-1,count),privacy,playlistUrl(provider,id)));
+        }
+        // The provider's next URL is never followed or returned to the app.
+        String next=spotify?(!page.path("next").asString("").isEmpty()&&offset<=99950?String.valueOf(offset+50):""):page.path("nextPageToken").asString("");
+        try{next=playlistCursor(provider,next);}catch(IllegalArgumentException error){throw new Failure(502);}
+        if(!next.isEmpty()&&next.equals(cursor))throw new Failure(502);
+        return new PlaylistPage(provider,List.copyOf(summaries),next);
     }
     RemotePlaylist playlist(String provider,String id,Tokens tokens) {
         validPlaylistId(provider,id);

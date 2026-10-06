@@ -127,6 +127,7 @@ public class HubFlowCheckTest {
                     app.onActivity(a->hubDraft(a,"sourceProvider","apple_music"));app.recreate();ready(app);focused(app);
                     onView(isAssignableFrom(android.widget.Spinner.class)).check(doesNotExist());
                     onView(withText("이전에 선택한 서비스는 지원하지 않아요. 음악 서비스를 다시 선택해 주세요.")).perform(scrollTo()).check(matches(isDisplayed()));
+                    onView(withText("링크로 직접 가져오기")).perform(closeSoftKeyboard(),scrollTo(),click());
                     onView(withText("플레이리스트 가져오기")).perform(closeSoftKeyboard(),scrollTo(),click());ready(app);
                     onView(withText("지원하는 음악 서비스를 선택해 주세요.")).perform(scrollTo()).check(matches(isDisplayed()));assertEquals("An unsupported provider must not send an import",0,imports.get());
                     onView(withText("음악 서비스 선택")).perform(scrollTo(),click());onView(withText("Spotify")).inRoot(isDialog()).check(matches(isDisplayed()));onView(withText("YouTube Music")).inRoot(isDialog()).check(matches(isDisplayed()));onView(withText("Apple Music")).inRoot(isDialog()).check(doesNotExist());onView(withText("Spotify")).inRoot(isDialog()).perform(click());
