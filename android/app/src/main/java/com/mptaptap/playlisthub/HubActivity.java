@@ -45,7 +45,7 @@ import org.json.JSONObject;
 public final class HubActivity extends AppCompatActivity {
     private static final String[] PROVIDERS={"spotify","youtube"};
     private static final String[] PROVIDER_NAMES={"Spotify","YouTube Music"};
-    private static final String[] SAVED_TEXT={"screen","importId","targetProvider","transferId","transferKey","saveId","sourceKey","importRequestId","conversionRequestId","publicationId","shareId","videoUrl","timeline","listUrl","listTitle","email","name","sourceProvider","query","sort","copyId","copyTitle","copyShare"};
+    private static final String[] SAVED_TEXT={"screen","importId","targetProvider","transferId","transferKey","saveId","sourceKey","importRequestId","conversionRequestId","publicationId","shareId","videoUrl","timeline","timelineExpanded","listUrl","listTitle","email","name","sourceProvider","query","sort","copyId","copyTitle","copyShare"};
     private HubRequest requests;
     private String base,mode;
     private LinearLayout content;
@@ -160,16 +160,20 @@ public final class HubActivity extends AppCompatActivity {
     }
 
     private void create() {
-        LinearLayout video=card(content);video.addView(text("영상에서 음악 목록 만들기",20,true));video.addView(text("영상 설명의 시간표를 곡 목록으로 정리해요. 저장 전에 곡 정보를 확인하고 수정할 수 있어요.",13,false));
+        LinearLayout video=card(content);video.addView(text("영상에서 음악 목록 만들기",20,true));video.addView(text("주소만 넣으면 영상 설명의 시간표를 자동으로 가져와요. 곡 정보를 확인한 뒤 내 목록에 저장할 수 있어요.",13,false));
         EditText url=createField(video,"영상 주소","YouTube 영상 주소","videoUrl",2048,false);
-        EditText timeline=createField(video,"시간표 · 선택","영상 설명의 시간표 붙여넣기 (선택)","timeline",65536,true);
-        addPrimaryButton(video,"영상 시간표 확인",()->{
-            if(url.getText().toString().trim().isEmpty()){url.setError("영상 주소를 입력해 주세요.");return;}
-            beginSource("youtube:"+url.getText().toString().trim()+":"+timeline.getText(),"conversionRequestId");
-            JSONObject body=json("id",value("conversionRequestId"),"url",url.getText().toString().trim());
-            if(!timeline.getText().toString().trim().isEmpty())set(body,"timeline",timeline.getText().toString());
-            put("edits",new JSONArray());put("selections",new JSONArray());send("conversion","POST","/conversions/youtube",body);
+        addPrimaryButton(video,"영상에서 곡 목록 가져오기",()->convertVideo(url,null));
+        LinearLayout manual=column();
+        MaterialButton expand=button("",()->{});expand.setStrokeWidth(0);expand.setBackgroundTintList(android.content.res.ColorStateList.valueOf(android.graphics.Color.TRANSPARENT));expand.setTextColor(getColor(R.color.muted));
+        expand.setOnClickListener(v->{
+            if(requests.busy())return;
+            boolean show=manual.getVisibility()!=View.VISIBLE;put("timelineExpanded",String.valueOf(show));manual.setVisibility(show?View.VISIBLE:View.GONE);expand.setText(show?"직접 입력 닫기":"직접 시간표 입력");
         });
+        video.addView(expand,new LinearLayout.LayoutParams(-1,-2));video.addView(manual,new LinearLayout.LayoutParams(-1,-2));
+        boolean expanded=value("timelineExpanded").equals("true");manual.setVisibility(expanded?View.VISIBLE:View.GONE);expand.setText(expanded?"직접 입력 닫기":"직접 시간표 입력");
+        manual.addView(text("설명을 가져오기 어렵거나 직접 정리한 시간표가 있을 때 사용해요.",13,false));
+        EditText timeline=createField(manual,"시간표","영상 설명의 시간표 붙여넣기","timeline",65536,true);
+        addButton(manual,"입력한 시간표로 만들기",()->convertVideo(url,timeline));
         LinearLayout service=card(content);service.addView(text("음악 서비스 목록 가져오기",20,true));service.addView(text("가져온 곡을 확인하고 원하는 음악 서비스로 옮겨요.",13,false));service.addView(text("음악 서비스",12,true));fillInput(providerPicker(service,"sourceProvider"));
         createField(service,"목록 주소","플레이리스트 주소","listUrl",2048,false);createField(service,"목록 이름","새 목록 이름","listTitle",80,false);
         addPrimaryButton(service,"플레이리스트 가져오기",()->{
@@ -181,6 +185,15 @@ public final class HubActivity extends AppCompatActivity {
             send("import","POST","/imports/playlists",json("id",id,"provider",provider("sourceProvider"),"url",value("listUrl").trim(),"title",value("listTitle").trim()));
         });
         MaterialButton connection=button("계정과 음악 서비스 연결",()->{put("screen","account");render();reload();});connection.setStrokeWidth(0);connection.setBackgroundTintList(android.content.res.ColorStateList.valueOf(android.graphics.Color.TRANSPARENT));connection.setTextColor(getColor(R.color.muted));content.addView(connection,new LinearLayout.LayoutParams(-1,-2));
+    }
+
+    private void convertVideo(EditText url,EditText timeline) {
+        String address=url.getText().toString().trim(),rows=timeline==null?null:timeline.getText().toString();
+        if(address.isEmpty()){url.setError("영상 주소를 입력해 주세요.");return;}
+        if(rows!=null&&rows.trim().isEmpty()){timeline.setError("시간표를 입력해 주세요.");return;}
+        beginSource("youtube:"+address+":"+(rows==null?"automatic":"manual:"+rows),"conversionRequestId");
+        JSONObject body=json("id",value("conversionRequestId"),"url",address);if(rows!=null)set(body,"timeline",rows);
+        put("edits",new JSONArray());put("selections",new JSONArray());send("conversion","POST","/conversions/youtube",body);
     }
 
     private void history() {
@@ -448,6 +461,7 @@ public final class HubActivity extends AppCompatActivity {
                 if(value.optBoolean("providerRevocationRequired")&&!value.optString("manageAccessUrl").isEmpty())dialog().setTitle("서비스 권한도 확인해 주세요").setMessage("TapTap 연결은 해제했어요. 음악 서비스의 연결 앱 설정에서도 권한을 해제할 수 있어요.").setPositiveButton("권한 설정 열기",(d,w)->open(value.optString("manageAccessUrl"))).setNegativeButton("닫기",null).show();
                 send("account","GET","/accounts/me",null);return;
             case "conversion":case "import":
+                if(route.equals("conversion")&&previewEntries(value).length()==0){put("screen","create");put("timelineExpanded","true");render();message(value.optString("notice","영상 설명에서 시간표를 찾지 못했어요. 직접 시간표를 입력할 수 있어요."));return;}
                 boolean fresh=!value.optString("id").equals(value("importId"));
                 if(fresh){requests.data.remove("saveId");requests.data.remove("transferId");requests.data.remove("transferKey");}
                 put("imported",value);put("importId",value.optString("id"));if(!value.optString("localPlaylistId").isEmpty()){put("saveId",value.optString("localPlaylistId"));setResult(RESULT_OK,new Intent().putExtra("playlistId",value.optString("localPlaylistId")));}if(value("listTitle").trim().isEmpty()&&!value.optString("title").isEmpty())put("listTitle",value.optString("title"));
