@@ -172,6 +172,86 @@ public class HubFlowCheckTest {
         } finally {running.set(false);worker.shutdownNow();restore(settings,oldSettings);restore(credentials,oldCredentials);}
     }
 
+    @Test public void automaticVideoImportKeepsManualDraftSeparateAndAllowsRecovery() throws Exception {
+        var instrumentation=InstrumentationRegistry.getInstrumentation();Context context=instrumentation.getTargetContext();
+        if(android.os.Build.VERSION.SDK_INT>=37)instrumentation.getUiAutomation().grantRuntimePermission(context.getPackageName(),android.Manifest.permission.ACCESS_LOCAL_NETWORK);
+        SharedPreferences settings=context.getSharedPreferences("settings",Context.MODE_PRIVATE),credentials=context.getSharedPreferences("server_credentials",Context.MODE_PRIVATE);
+        Map<String,?> oldSettings=settings.getAll(),oldCredentials=credentials.getAll();
+        AtomicBoolean running=new AtomicBoolean(true);AtomicReference<Throwable> serverFailure=new AtomicReference<>();
+        AtomicInteger automatic=new AtomicInteger(),manual=new AtomicInteger();AtomicReference<String> emptyId=new AtomicReference<>(),automaticId=new AtomicReference<>(),manualId=new AtomicReference<>();
+        String emptyUrl="https://www.youtube.com/watch?v=dQw4w9WgXcQ",url="https://www.youtube.com/watch?v=aaaaaaaaaa1",draft="00:00 검사 가수 - 직접 입력 곡",emptyNotice="설명에서 시간표를 찾지 못했어요. 직접 가진 시간표를 입력해 주세요.",failureMessage="자동 조회 검사 오류";
+        var worker=Executors.newSingleThreadExecutor();
+        try(ServerSocket server=new ServerSocket(0,5,InetAddress.getByName("127.0.0.1"))) {
+            server.setSoTimeout(500);String base="http://127.0.0.1:"+server.getLocalPort(),token=String.join("",java.util.Collections.nCopies(43,"T"));
+            var replies=worker.submit(()->{
+                JSONObject converted=null;
+                while(running.get())try(Socket socket=server.accept()) {
+                    socket.setSoTimeout(5000);DataInputStream input=new DataInputStream(socket.getInputStream());String[] request=httpLine(input).split(" ");
+                    String header;int length=0;boolean authenticated=false;
+                    while(!(header=httpLine(input)).isEmpty()) {
+                        String lower=header.toLowerCase(java.util.Locale.ROOT);if(lower.startsWith("content-length:"))length=Integer.parseInt(header.substring(header.indexOf(':')+1).trim());
+                        if(lower.startsWith("authorization:")&&header.endsWith("Bearer "+token))authenticated=true;
+                    }
+                    assertTrue("Keep the disposable session",authenticated);assertTrue("Bound the fixture request",length>=0&&length<=100000);
+                    byte[] bodyBytes=new byte[length];input.readFully(bodyBytes);JSONObject body=length==0?new JSONObject():new JSONObject(new String(bodyBytes,StandardCharsets.UTF_8));
+                    JSONObject response;int code=200;
+                    if(request[1].equals("/health")){assertEquals("GET",request[0]);response=new JSONObject().put("status","ok");}
+                    else if(request[1].equals("/conversions/youtube")) {
+                        assertEquals("POST",request[0]);String id=body.getString("id");assertEquals(id,UUID.fromString(id).toString());
+                        boolean supplied=body.has("timeline");int attempt;
+                        if(supplied){assertEquals(1,manual.incrementAndGet());assertEquals(draft,body.getString("timeline"));assertNotEquals("Switching source mode needs a new request ID",automaticId.get(),id);manualId.set(id);attempt=1;}
+                        else{attempt=automatic.incrementAndGet();assertTrue(attempt<=3);if(attempt==1)emptyId.set(id);else if(attempt==2){automaticId.set(id);assertNotEquals("A different URL needs its own preview",emptyId.get(),id);}else assertEquals("Retry the same automatic request",automaticId.get(),id);}
+                        String source=!supplied&&attempt==1?emptyUrl:url;assertEquals(source,body.getString("url"));
+                        if(!supplied&&attempt==2){code=503;response=new JSONObject().put("message",failureMessage);}
+                        else {
+                            JSONArray entries=new JSONArray();String song=supplied?"직접 입력 곡":"자동으로 가져온 곡";
+                            if(supplied||attempt==3)entries.put(new JSONObject().put("sourceIndex",0).put("timestamp","00:00").put("seconds",0).put("startSeconds",0).put("title",song).put("artist","검사 가수").put("sourceRow",supplied?draft:"00:00 검사 가수 - "+song).put("sourceUrl",source+"&t=0s").put("needsReview",false));
+                            response=new JSONObject().put("id",id).put("provider","youtube").put("videoId",Uri.parse(source).getQueryParameter("v")).put("title",supplied?"직접 입력 결과":"영상 설명 결과").put("durationSeconds",180).put("sourceUrl",source)
+                                    .put("entries",entries).put("items",new JSONArray()).put("metadataMode",supplied?"provided_timeline":"official_metadata").put("saved",false).put("notice",entries.length()==0?emptyNotice:"곡 정보를 확인해 주세요.");
+                            converted=response;
+                        }
+                    } else if(converted!=null&&request[1].equals("/imports/playlists/"+converted.getString("id"))){assertEquals("GET",request[0]);response=converted;}
+                    else throw new AssertionError("Unexpected test request: "+request[0]+" "+request[1]);
+                    byte[] bytes=response.toString().getBytes(StandardCharsets.UTF_8);socket.getOutputStream().write(("HTTP/1.1 "+code+" "+(code==200?"OK":"Service Unavailable")+"\r\nContent-Type: application/json\r\nContent-Length: "+bytes.length+"\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.UTF_8));socket.getOutputStream().write(bytes);socket.getOutputStream().flush();
+                }catch(SocketTimeoutException timeout){
+                    // Await the next explicit automatic or manual action.
+                }catch(Throwable error){if(running.get())serverFailure.compareAndSet(null,error);return;}
+            });
+            try {
+                assertTrue(settings.edit().putString("server",base).commit());assertTrue(credentials.edit().putString(base,token).commit());
+                try(ActivityScenario<HubActivity> app=launch(context,"create")) {
+                    ready(app);focused(app);
+                    onView(withHint("영상 설명의 시간표 붙여넣기")).check(matches(withEffectiveVisibility(Visibility.GONE)));
+                    onView(withHint("YouTube 영상 주소")).perform(scrollTo(),replaceText(emptyUrl),closeSoftKeyboard());
+                    onView(withText("영상에서 곡 목록 가져오기")).perform(scrollTo(),click());ready(app);
+                    assertNull("Test server failure",serverFailure.get());assertEquals(1,automatic.get());
+                    onView(withText(emptyNotice)).perform(scrollTo()).check(matches(isDisplayed()));
+                    onView(withHint("YouTube 영상 주소")).check(matches(withText(emptyUrl)));
+                    onView(withText("입력한 시간표로 만들기")).perform(scrollTo(),click());ready(app);
+                    onView(withHint("영상 설명의 시간표 붙여넣기")).check((view,error)->{if(error!=null)throw error;assertNotNull("A blank manual submission must explain the missing input",((android.widget.EditText)view).getError());});
+                    assertEquals("Blank manual input must not fall back to an automatic request",1,automatic.get());assertEquals(0,manual.get());
+                    onView(withHint("영상 설명의 시간표 붙여넣기")).perform(scrollTo(),replaceText(draft),closeSoftKeyboard());app.recreate();ready(app);focused(app);
+                    onView(withText("직접 입력 닫기")).perform(scrollTo()).check(matches(isDisplayed()));onView(withHint("영상 설명의 시간표 붙여넣기")).check(matches(withText(draft)));
+                    onView(withHint("YouTube 영상 주소")).perform(scrollTo(),replaceText(url),closeSoftKeyboard());
+                    onView(withText("영상에서 곡 목록 가져오기")).perform(scrollTo(),click());ready(app);
+                    assertNull("Test server failure",serverFailure.get());assertEquals(2,automatic.get());assertEquals(0,manual.get());
+                    onView(withText(failureMessage)).perform(scrollTo()).check(matches(isDisplayed()));onView(withHint("영상 설명의 시간표 붙여넣기")).check(matches(withText(draft)));
+                    onView(withText("같은 요청 다시 시도")).perform(scrollTo(),click());ready(app);
+                    assertNull("Test server failure",serverFailure.get());assertEquals(3,automatic.get());
+                    onView(withHint("곡명")).check(matches(withText("자동으로 가져온 곡")));
+                    onView(withContentDescription("돌아가기")).perform(closeSoftKeyboard(),click());ready(app);
+                    onView(withText("직접 입력 닫기")).perform(scrollTo(),click());app.recreate();ready(app);focused(app);
+                    onView(withHint("영상 설명의 시간표 붙여넣기")).check(matches(withEffectiveVisibility(Visibility.GONE)));
+                    onView(withText("직접 시간표 입력")).perform(closeSoftKeyboard(),scrollTo(),click());onView(withHint("영상 설명의 시간표 붙여넣기")).check(matches(withText(draft)));
+                    onView(withText("입력한 시간표로 만들기")).perform(scrollTo(),click());ready(app);
+                    assertNull("Test server failure",serverFailure.get());assertEquals(1,manual.get());onView(withHint("곡명")).check(matches(withText("직접 입력 곡")));
+                    app.recreate();ready(app);focused(app);onView(withHint("곡명")).check(matches(withText("직접 입력 곡")));
+                    assertNull("Test server failure",serverFailure.get());assertEquals(3,automatic.get());assertEquals(1,manual.get());assertNotEquals(automaticId.get(),manualId.get());assertEquals(token,credentials.getString(base,""));
+                }
+            } finally {running.set(false);server.close();replies.get(2,TimeUnit.SECONDS);}
+        } finally {running.set(false);worker.shutdownNow();restore(settings,oldSettings);restore(credentials,oldCredentials);}
+    }
+
     @Test public void oauthReturnDuringConnectionReadRefreshesAfterStaleResponse() throws Exception {
         var instrumentation=InstrumentationRegistry.getInstrumentation();Context context=instrumentation.getTargetContext();
         if(android.os.Build.VERSION.SDK_INT>=37)instrumentation.getUiAutomation().grantRuntimePermission(context.getPackageName(),android.Manifest.permission.ACCESS_LOCAL_NETWORK);
@@ -294,10 +374,11 @@ public class HubFlowCheckTest {
             }
             try(ActivityScenario<HubActivity> app=launch(context,"create")) {
                 ready(app);onView(withHint("YouTube 영상 주소")).perform(scrollTo(),replaceText("https://www.youtube.com/watch?v=dQw4w9WgXcQ"),closeSoftKeyboard());
-                onView(withHint("영상 설명의 시간표 붙여넣기 (선택)")).perform(scrollTo(),replaceText("00:00 Sample artist - Sample song\n01:00 Sample artist - Sample song"),closeSoftKeyboard());
+                onView(withText("직접 시간표 입력")).perform(scrollTo(),click());
+                onView(withHint("영상 설명의 시간표 붙여넣기")).perform(scrollTo(),replaceText("00:00 Sample artist - Sample song\n01:00 Sample artist - Sample song"),closeSoftKeyboard());
                 app.recreate();ready(app);focused(app);
                 onView(withHint("YouTube 영상 주소")).check(matches(withText("https://www.youtube.com/watch?v=dQw4w9WgXcQ")));
-                onView(withText("영상 시간표 확인")).perform(closeSoftKeyboard(),scrollTo(),click());ready(app);
+                onView(withText("입력한 시간표로 만들기")).perform(closeSoftKeyboard(),scrollTo(),click());ready(app);
                 onView(withHint("새 목록 이름")).perform(scrollTo(),replaceText(title),closeSoftKeyboard());
                 onView(allOf(withHint("곡명"),hasSibling(withText("1. 00:00")))).perform(scrollTo(),replaceText("Reviewed Sample"),closeSoftKeyboard());
                 onView(allOf(withHint("시작 시간 (초)"),hasSibling(withText("1. 00:00")))).perform(scrollTo(),replaceText("-1"),closeSoftKeyboard());
@@ -423,8 +504,9 @@ public class HubFlowCheckTest {
                 onView(withId(R.id.recommend_page)).check(matches(isDisplayed()));onView(withId(R.id.library_scroll)).check(matches(withEffectiveVisibility(Visibility.GONE)));
                 onView(withId(R.id.nav_create)).perform(click());readyHub();
                 onView(withHint("YouTube 영상 주소")).perform(scrollTo(),replaceText("https://www.youtube.com/watch?v=dQw4w9WgXcQ"),closeSoftKeyboard());
-                onView(withHint("영상 설명의 시간표 붙여넣기 (선택)")).perform(scrollTo(),replaceText("00:00 Bridge song by Bridge artist"),closeSoftKeyboard());
-                onView(withText("영상 시간표 확인")).perform(scrollTo(),click());readyHub();
+                onView(withText("직접 시간표 입력")).perform(scrollTo(),click());
+                onView(withHint("영상 설명의 시간표 붙여넣기")).perform(scrollTo(),replaceText("00:00 Bridge song by Bridge artist"),closeSoftKeyboard());
+                onView(withText("입력한 시간표로 만들기")).perform(scrollTo(),click());readyHub();
                 onView(withHint("새 목록 이름")).perform(scrollTo(),replaceText(returnTitle),closeSoftKeyboard());
                 onView(withText("선택한 곡을 앱 목록에 저장")).perform(scrollTo(),click());readyHub();
                 onView(withText("계속 보기")).inRoot(isDialog()).perform(click());
