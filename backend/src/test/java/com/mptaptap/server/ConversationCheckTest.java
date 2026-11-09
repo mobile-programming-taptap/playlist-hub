@@ -27,7 +27,7 @@ class ConversationCheckTest {
         stub.createContext("/responses",exchange->{
             sent.add(json.readTree(exchange.getRequestBody().readAllBytes()));
             byte[] body=json.writeValueAsBytes(Map.of("status","completed","output",List.of(Map.of("type","message","content",List.of(Map.of(
-                "type","output_text","text",modelConditions.get()))))));
+                "type","output_text","text",ApiCheckTest.modelPlan(json,modelConditions.get())))))));
             exchange.sendResponseHeaders(unavailable.get()?503:200,body.length);exchange.getResponseBody().write(body);exchange.close();
         });stub.start();
         try(var app=new SpringApplicationBuilder(TapTapApplication.class).run("--spring.config.import=","--server.port=0","--server.address=127.0.0.1",
@@ -61,7 +61,7 @@ class ConversationCheckTest {
             assertEquals("밤에도",body.path("input").get(8).path("content").asString());
             assertFalse(body.toString().contains(keep));assertFalse(body.toString().contains(skip));
             for(Map<String,Object> bad:List.of(Map.<String,Object>of("tags",List.of("Spotify track title"),"excludedTags",List.of(),"language","en"),
-                    Map.<String,Object>of("tags",List.of("pop"),"excludedTags",List.of(),"language","fr"))) {
+                    Map.<String,Object>of("tags",List.of("pop"),"excludedTags",List.of(),"language","not_a_language"))) {
                 var rejected=client.send(request.POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(Map.of("prompt","팝", "previousConditions",bad)))).build(),HttpResponse.BodyHandlers.ofString());
                 assertEquals(400,rejected.statusCode());assertEquals(2,sent.size(),"Unvalidated values must not reach AI");
             }
@@ -96,27 +96,21 @@ class ConversationCheckTest {
             assertEquals("[]",guardedVocals.path("conditions").path("tags").toString());assertEquals("[\"instrumental\"]",guardedVocals.path("conditions").path("excludedTags").toString());
             for(String invalidLanguageFlag:List.of("{\"tags\":[\"calm\"],\"excludedTags\":[],\"language\":\"\"}",
                     "{\"tags\":[\"calm\"],\"excludedTags\":[],\"language\":\"\",\"languageSpecified\":\"false\"}",
-                    "{\"tags\":[\"calm\"],\"excludedTags\":[],\"language\":\"fr\",\"languageSpecified\":false}")) {
+                    "{\"tags\":[\"calm\"],\"excludedTags\":[],\"language\":\"not_a_language\",\"languageSpecified\":false}")) {
                 modelConditions.set(invalidLanguageFlag);
                 var malformed=client.send(request.POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(Map.of("prompt","잔잔한 음악")))).build(),HttpResponse.BodyHandlers.ofString());
-                assertEquals(200,malformed.statusCode(),malformed.body());JsonNode restored=json.readTree(malformed.body());
-                assertEquals("basic",restored.path("mode").asString());assertTrue(restored.path("notice").asString().contains("AI 연결"));
-                assertFalse(restored.path("conditions").has("languageSpecified"));
+                assertEquals(503,malformed.statusCode(),malformed.body());JsonNode rejected=json.readTree(malformed.body());
+                assertFalse(rejected.has("tracks"));assertTrue(rejected.path("message").asString().contains("AI 연결"));
             }
             unavailable.set(true);
             var fallback=client.send(request.POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(Map.of("prompt","비 오는 날", "history",java.util.Collections.nCopies(8,"밤에도"),
                     "previousConditions",previous)))).build(),HttpResponse.BodyHandlers.ofString());
-            assertEquals(200,fallback.statusCode(),fallback.body());JsonNode fallbackResult=json.readTree(fallback.body());
-            assertEquals("basic",fallbackResult.path("mode").asString());assertEquals("en",fallbackResult.path("conditions").path("language").asString());
-            assertTrue(fallbackResult.path("conditions").path("tags").toString().contains("pop"));assertTrue(fallbackResult.path("conditions").path("tags").toString().contains("calm"));
+            assertEquals(503,fallback.statusCode(),fallback.body());assertFalse(json.readTree(fallback.body()).has("tracks"));
             var reset=client.send(request.POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(Map.of("prompt","처음부터 한국어 록", "previousConditions",previous)))).build(),HttpResponse.BodyHandlers.ofString());
-            assertEquals(200,reset.statusCode(),reset.body());JsonNode resetConditions=json.readTree(reset.body()).path("conditions");
-            assertEquals("ko",resetConditions.path("language").asString());assertEquals("[\"rock\"]",resetConditions.path("tags").toString());assertEquals("[]",resetConditions.path("excludedTags").toString());
+            assertEquals(503,reset.statusCode(),reset.body());assertFalse(json.readTree(reset.body()).has("tracks"));
             var vocals=client.send(request.POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(Map.of("prompt","연주곡 제외", "previousConditions",
                     Map.of("tags",List.of("instrumental"),"excludedTags",List.of(),"language","none"))))).build(),HttpResponse.BodyHandlers.ofString());
-            assertEquals(200,vocals.statusCode(),vocals.body());JsonNode vocalResult=json.readTree(vocals.body());
-            assertEquals("",vocalResult.path("conditions").path("language").asString());assertTrue(vocalResult.path("tracks").size()>0);
-            for(JsonNode pick:vocalResult.path("tracks"))assertNotEquals("none",pick.path("track").path("language").asString());
+            assertEquals(503,vocals.statusCode(),vocals.body());assertFalse(json.readTree(vocals.body()).has("tracks"));
         } finally {stub.stop(0);}
     }
 }
