@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="ko">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<title>YouTube 앱 내 재생 실험</title>
+<style>
+  body { font: 16px/1.6 system-ui,sans-serif; color: #202124; background: #f7f8fa; margin: 0; }
+  main { max-width: 720px; padding: 24px; margin: auto; }
+  h1 { font-size: 24px; }
+  input,button { font: inherit; padding: 10px; margin: 6px 0; }
+  input { width: min(260px,90%); }
+  button { cursor: pointer; }
+  iframe { width: 100%; height: max(220px, min(54vw,405px)); border: 0; background: #111; }
+  #status { padding: 12px; border: 1px solid #ccc; background: white; }
+  a { color: #1459ad; }
+</style>
+<main>
+  <h1>YouTube 앱 내 재생 실험</h1>
+  <p>영상 불러오기 후 플레이어의 재생 버튼을 누르세요. 별도 30초 음원 대신 공식 영상 플레이어를 표시하는 실험입니다.</p>
+  <form id="form">
+    <label for="video">YouTube 영상 ID (11자리)</label><br>
+    <input id="video" required pattern="[A-Za-z0-9_\-]{11}" maxlength="11" value="gdZLi9oWNZg" aria-describedby="help">
+    <button id="load" disabled>영상 불러오기</button>
+  </form>
+  <p id="help">예: youtube.com/watch?v=<strong>gdZLi9oWNZg</strong> — BTS ‘Dynamite’ 공식 MV</p>
+  <p id="status" role="status" aria-live="polite">YouTube API 연결 중…</p>
+  <div id="player"></div>
+  <p><a id="original" href="https://www.youtube.com/watch?v=gdZLi9oWNZg" target="_blank" rel="noopener">YouTube 원본 열기</a></p>
+  <p>재생 불가 시 위 링크로 확인하세요. 이 실험은 데스크톱 웹 기준이며 Android WebView·실제 기기는 별도 검증 대상입니다.</p>
+</main>
+<script id="experiment">
+const form = document.getElementById('form');
+const video = document.getElementById('video');
+const status = document.getElementById('status');
+const load = document.getElementById('load');
+const original = document.getElementById('original');
+let player;
+const errors = {2:'영상 ID 오류', 5:'HTML5 재생 오류', 100:'삭제·비공개 또는 없는 영상', 101:'외부 플레이어 재생 제한', 150:'외부 플레이어 재생 제한', 153:'요청 출처 식별 실패'};
+const states = {'-1':'재생 대기', 0:'재생 종료', 1:'재생 중 — 플레이어 재생 이벤트 확인', 2:'일시정지', 3:'버퍼링', 5:'영상 준비 — 플레이어의 재생 버튼을 누르세요'};
+window.onYouTubeIframeAPIReady = () => {
+  load.disabled = false;
+  status.textContent = 'API 연결됨 — 영상 불러오기를 누르세요';
+};
+form.addEventListener('submit', event => {
+  event.preventDefault();
+  if (!/^[A-Za-z0-9_-]{11}$/.test(video.value)) {
+    status.textContent = '11자리 영상 ID를 입력하세요';
+    return;
+  }
+  original.href = 'https://www.youtube.com/watch?v=' + video.value;
+  status.textContent = '영상 불러오는 중…';
+  if (player) { player.cueVideoById(video.value); return; }
+  player = new YT.Player('player', {
+    videoId: video.value,
+    playerVars: {origin: location.origin, playsinline: 1},
+    events: {
+      onReady: () => { status.textContent = '플레이어 준비됨 — 재생 버튼을 누르세요'; },
+      onStateChange: event => { status.textContent = states[event.data] ?? '상태: ' + event.data; },
+      onError: event => { status.textContent = '오류 ' + event.data + ': ' + (errors[event.data] ?? '재생 불가') + ' — 원본 링크로 확인하세요'; },
+      onAutoplayBlocked: () => { status.textContent = '자동 재생이 차단되었습니다. 플레이어의 재생 버튼을 누르세요'; }
+    }
+  });
+});
+</script>
+<script src="https://www.youtube.com/iframe_api" onerror="document.getElementById('status').textContent='YouTube API 연결 실패 — 네트워크 또는 차단 설정을 확인하세요'"></script>
+</html>

@@ -12,10 +12,13 @@ dependencies {
     implementation(project(":core"))
     implementation("org.springframework.boot:spring-boot-starter-webmvc")
     implementation("org.springframework.boot:spring-boot-starter-jdbc")
-    runtimeOnly("com.h2database:h2")
+    runtimeOnly("com.h2database:h2:2.5.252")
     runtimeOnly("org.postgresql:postgresql")
     testImplementation("org.junit.jupiter:junit-jupiter")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 sourceSets.main { resources.srcDir("../catalog") }
-tasks.test { useJUnitPlatform(); dependsOn(":core:checkRecommendations") }
+tasks.test {
+    useJUnitPlatform(); dependsOn(":core:checkRecommendations")
+    outputs.upToDateWhen { System.getenv("TAPTAP_LIVE_AI_CHECK") != "true" && System.getenv("TAPTAP_LIVE_YOUTUBE_KEY_CHECK") != "true" }
+}

@@ -11,10 +11,22 @@ import org.springframework.web.server.ResponseStatusException;
 @RestController
 public class AccountApi {
     private final Store store;
-    AccountApi(Store store) { this.store=store; }
+    private final KakaoClient kakao;
+    AccountApi(Store store,KakaoClient kakao) { this.store=store;this.kakao=kakao; }
     public record Registration(String email,String password,String name) {}
     public record Login(String email,String password) {}
-    public record Password(String password) {}
+    public record Password(String password,String kakaoAccessToken) {}
+    public record KakaoLogin(String accessToken) {}
+
+    @GetMapping("/accounts/kakao/config")
+    public Map<String,Object> kakaoConfig() { return Map.of("configured",kakao.configured(),"setupMessage",kakao.setupMessage()); }
+
+    @PostMapping("/accounts/kakao")
+    public Map<String,String> kakaoLogin(@RequestHeader(value="Authorization",required=false) String auth,
+            @RequestBody KakaoLogin body,HttpServletRequest request) {
+        kakao.requireConfigured();store.beginKakaoAttempt(body.accessToken(),request.getRemoteAddr());
+        return store.kakaoLogin(auth,kakao.verify(body.accessToken()),body.accessToken());
+    }
 
     @PostMapping("/accounts/register") @ResponseStatus(HttpStatus.CREATED)
     public Map<String,String> register(@RequestHeader(value="Authorization",required=false) String auth,
@@ -33,11 +45,18 @@ public class AccountApi {
     }
 
     @DeleteMapping("/accounts/session") @ResponseStatus(HttpStatus.NO_CONTENT)
-    public void logout(@RequestHeader(value="Authorization",required=false) String auth) { store.logout(auth); }
+    public void logout(@RequestHeader(value="Authorization",required=false) String auth) { synchronized(store.ownerLock(store.user(auth))){store.logout(auth);} }
 
     @DeleteMapping("/accounts/me") @ResponseStatus(HttpStatus.NO_CONTENT)
-    public void delete(@RequestHeader(value="Authorization",required=false) String auth,@RequestBody Password body,HttpServletRequest request) {
-        store.deleteAccount(auth,body.password(),request.getRemoteAddr());
+    public void delete(@RequestHeader(value="Authorization",required=false) String auth,@RequestBody(required=false) Password body,HttpServletRequest request) {
+        String owner=store.user(auth);synchronized(store.ownerLock(owner)){Map<String,String> profile;
+        try{profile=store.account(owner);}
+        catch(ResponseStatusException error){if(error.getStatusCode().value()!=404)throw error;store.deleteAnonymous(auth);return;}
+        if(body==null)throw new IllegalArgumentException("계정 삭제를 위해 본인 확인을 완료해 주세요.");
+        if(profile.get("authProvider").equals("kakao")) {
+            kakao.requireConfigured();store.beginKakaoAttempt(body.kakaoAccessToken(),request.getRemoteAddr());
+            store.deleteKakaoAccount(auth,kakao.verify(body.kakaoAccessToken()));
+        } else store.deleteAccount(auth,body.password(),request.getRemoteAddr());}
     }
 
     @RestControllerAdvice(assignableTypes={AccountApi.class,CommunityApi.class})
@@ -50,7 +69,7 @@ public class AccountApi {
         public Map<String,String> malformed() { return Map.of("code","INVALID_JSON","message","요청 형식을 확인해 주세요."); }
         @ExceptionHandler(ResponseStatusException.class)
         public ResponseEntity<Map<String,String>> failure(ResponseStatusException error) {
-            return ResponseEntity.status(error.getStatusCode()).body(Map.of("code","REQUEST_FAILED","message",error.getReason()==null?"다시 시도해 주세요.":error.getReason()));
+            return ResponseEntity.status(error.getStatusCode()).body(Map.of("code",Store.errorCode(error,"REQUEST_FAILED"),"message",error.getReason()==null?"다시 시도해 주세요.":error.getReason()));
         }
     }
 }

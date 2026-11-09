@@ -46,6 +46,37 @@ class ApiCheckTest {
         return response.body().isEmpty()?json.createObjectNode():json.readTree(response.body());
     }
 
+    static String modelPlan(ObjectMapper json,String conditions) throws java.io.IOException {
+        var plan=(tools.jackson.databind.node.ObjectNode)json.readTree(conditions);
+        var candidates=plan.putArray("candidates");
+        try(var input=new org.springframework.core.io.ClassPathResource("tracks.json").getInputStream()) {
+            for(JsonNode track:json.readTree(input)) {
+                if(candidates.size()==12)break;
+                String language=plan.path("language").asString();
+                if(!language.isEmpty()&&!language.equals(track.path("language").asString()))continue;
+                boolean matches=true;
+                for(JsonNode tag:plan.path("tags"))if(Recommender.GENRES.contains(tag.asString())&&!track.path("tags").toString().contains("\""+tag.asString()+"\""))matches=false;
+                for(JsonNode tag:plan.path("excludedTags"))if(track.path("tags").toString().contains("\""+tag.asString()+"\""))matches=false;
+                if(!matches)continue;
+                var candidate=candidates.addObject();
+                for(String field:List.of("title","artist","tags","language"))candidate.set(field,track.path(field));
+            }
+        }
+        return json.writeValueAsString(plan);
+    }
+
+    @Test void missingAiNeverReturnsFixedTracks() throws Exception {
+        try(var context=new SpringApplicationBuilder(TapTapApplication.class).run("--spring.config.import=","--server.port=0","--server.address=127.0.0.1",
+                "--spring.datasource.url=jdbc:h2:mem:noai"+UUID.randomUUID()+";MODE=PostgreSQL","--taptap.openai.key=",
+                "--logging.level.root=WARN","--spring.main.banner-mode=off")) {
+            base="http://127.0.0.1:"+((WebServerApplicationContext)context).getWebServer().getPort();
+            String token=value("POST","/sessions",null,null,201).path("token").asString();
+            assertEquals(40,value("GET","/catalogue",token,null,200).size());
+            JsonNode rejected=value("POST","/recommendations",token,Map.of("prompt","즐거운 제이팝"),503);
+            assertFalse(rejected.has("tracks"));assertTrue(rejected.path("message").asString().contains("AI 추천이 연결되지"));
+        }
+    }
+
     @Test void aiLimitsRespectPreciseInstants() {
         try(ConfigurableApplicationContext context=start("jdbc:h2:mem:clock"+UUID.randomUUID()+";MODE=PostgreSQL","http://127.0.0.1:1/v1/responses")) {
             var db=context.getBean(org.springframework.jdbc.core.JdbcTemplate.class);
@@ -70,11 +101,11 @@ class ApiCheckTest {
 
     @Test void recommendationOwnershipStorageAndOpenAiContract() throws Exception {
         List<JsonNode> aiRequests=new CopyOnWriteArrayList<>();
-        String mixedUnknown="Gregorian chant only, no Bossa Nova";
+        String mixedUnknown="Gregorian chant only, no Dhrupad";
         String genreComplement=mixedUnknown+".",explicitPiano=genreComplement+" no piano",resetComplement="처음부터 "+explicitPiano;
         List<String> explicitNegativeComplements=List.of("exclude","avoid","without").stream().map(cue->genreComplement+" "+cue+" piano").toList();
         List<String> supportedGenres=Recommender.GENRES.stream().filter(tag->!tag.equals("unsupported_genre")).toList();
-        String explicitGenres=mixedUnknown+"; "+supportedGenres.stream().map(tag->"no "+tag).collect(java.util.stream.Collectors.joining(", "));
+        String explicitGenres=mixedUnknown+"; "+supportedGenres.stream().map(tag->"no "+Recommender.LABELS.get(tag)).collect(java.util.stream.Collectors.joining(", "));
         List<String> actualComplement=Recommender.LABELS.keySet().stream().filter(tag->!List.of("unsupported_genre","calm").contains(tag)).toList();
         HttpServer stub=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
         stub.createContext("/v1/responses",exchange->{
@@ -90,18 +121,18 @@ class ApiCheckTest {
             if(latest.equals("잔잔한 곡은 제외"))conditions="{\"tags\":[],\"excludedTags\":[\"calm\"],\"language\":\"\",\"languageSpecified\":false}";
             if(latest.equals("미국 팝"))conditions="{\"tags\":[\"pop\"],\"excludedTags\":[],\"language\":\"en\",\"languageSpecified\":true}";
             if(List.of("Gregorian chant","처음부터 Gregorian chant").contains(latest))conditions="{\"tags\":[\"unsupported_genre\",\"instrumental\"],\"excludedTags\":[],\"language\":\"none\",\"languageSpecified\":false}";
-            if(latest.equals("Bossa nova"))conditions="{\"tags\":[\"unsupported_genre\"],\"excludedTags\":[],\"language\":\"ko\",\"languageSpecified\":false}";
-            if(List.of("Gregorian chant only","Bossa nova only","처음부터 Gregorian chant only","Gregorian chant no vocals","가사 없는 Gregorian chant").contains(latest))
+            if(latest.equals("Dhrupad"))conditions="{\"tags\":[\"unsupported_genre\"],\"excludedTags\":[],\"language\":\"ko\",\"languageSpecified\":false}";
+            if(List.of("Gregorian chant only","Dhrupad only","처음부터 Gregorian chant only","Gregorian chant no vocals","가사 없는 Gregorian chant").contains(latest))
                 conditions="{\"tags\":[\"instrumental\"],\"excludedTags\":[\"unsupported_genre\"],\"language\":\"none\",\"languageSpecified\":false}";
             if(List.of("no Gregorian chant, piano","not Gregorian chant, piano","piano without Gregorian chant","exclude Gregorian chant, piano","avoid Gregorian chant, piano","piano except Gregorian chant","I dislike Gregorian chant, piano","I hate Gregorian chant, piano","don't recommend Gregorian chant, piano").contains(latest))
                 conditions="{\"tags\":[\"piano\"],\"excludedTags\":[\"unsupported_genre\"],\"language\":\"\",\"languageSpecified\":false}";
             if(latest.equals("Gregorian chant only; no piano"))conditions="{\"tags\":[\"unsupported_genre\"],\"excludedTags\":[\"piano\"],\"language\":\"\",\"languageSpecified\":false}";
             if(latest.equals(mixedUnknown))conditions="{\"tags\":[\"unsupported_genre\"],\"excludedTags\":[\"unsupported_genre\"],\"language\":\"\",\"languageSpecified\":false}";
-            if(latest.equals(mixedUnknown+" invalid language"))conditions="{\"tags\":[\"unsupported_genre\"],\"excludedTags\":[\"unsupported_genre\"],\"language\":\"fr\",\"languageSpecified\":false}";
+            if(latest.equals(mixedUnknown+" invalid language"))conditions="{\"tags\":[\"unsupported_genre\"],\"excludedTags\":[\"unsupported_genre\"],\"language\":\"not_a_language\",\"languageSpecified\":false}";
             if(latest.equals(mixedUnknown+" invalid tag"))conditions="{\"tags\":[\"unsupported_genre\",\"invented\"],\"excludedTags\":[\"unsupported_genre\"],\"language\":\"\",\"languageSpecified\":false}";
             if(List.of(genreComplement,explicitPiano,resetComplement,explicitGenres,genreComplement+" invalid language",genreComplement+" invalid tag").contains(latest)
                     ||explicitNegativeComplements.contains(latest)||explicitNegativeComplements.stream().anyMatch(p->latest.equals("처음부터 "+p)))
-                conditions=json.writeValueAsString(Map.of("tags",latest.endsWith(" invalid tag")?List.of("unsupported_genre","invented"):List.of("unsupported_genre"),"excludedTags",actualComplement,"language",latest.endsWith(" invalid language")?"fr":"","languageSpecified",false));
+                conditions=json.writeValueAsString(Map.of("tags",latest.endsWith(" invalid tag")?List.of("unsupported_genre","invented"):List.of("unsupported_genre"),"excludedTags",actualComplement,"language",latest.endsWith(" invalid language")?"not_a_language":"","languageSpecified",false));
             if(latest.equals("영어 팝"))conditions="{\"tags\":[\"pop\"],\"excludedTags\":[],\"language\":\"ko\",\"languageSpecified\":false}";
             if(latest.equals("가사 없는 재즈"))conditions="{\"tags\":[\"jazz\",\"instrumental\"],\"excludedTags\":[],\"language\":\"none\",\"languageSpecified\":false}";
             if(input.isArray()&&latest.equals("팝으로 바꿔줘")) {
@@ -110,11 +141,12 @@ class ApiCheckTest {
                 if(first.equals("미국 음악"))conditions="{\"tags\":[\"pop\"],\"excludedTags\":[],\"language\":\"en\",\"languageSpecified\":true}";
                 if(first.equals("cozy music"))conditions="{\"tags\":[\"warm\",\"pop\"],\"excludedTags\":[],\"language\":\"\",\"languageSpecified\":false}";
                 if(first.equals("영어 음악")&&input.get(input.size()-2).path("content").asString().contains("Mandarin"))
-                    conditions="{\"tags\":[\"pop\"],\"excludedTags\":[],\"language\":\"unsupported\",\"languageSpecified\":true}";
+                    conditions="{\"tags\":[\"pop\"],\"excludedTags\":[],\"language\":\"zh\",\"languageSpecified\":true}";
                 if(first.equals(genreComplement)||explicitNegativeComplements.contains(first))conditions=json.writeValueAsString(Map.of("tags",List.of("pop","unsupported_genre"),"excludedTags",actualComplement,"language","","languageSpecified",false));
             }
             if(input.isArray()&&latest.equals("신나는 음악을 추천해줘")&&input.get(0).path("content").asString().equals("cozy music"))
                 conditions="{\"tags\":[\"warm\",\"pop\",\"energetic\"],\"excludedTags\":[],\"language\":\"\",\"languageSpecified\":false}";
+            if(incoming.path("text").path("format").path("schema").path("properties").has("candidates"))conditions=modelPlan(json,conditions);
             byte[] reply=json.writeValueAsBytes(Map.of("status","completed","output",List.of(Map.of("type","message","content",List.of(Map.of("type","output_text","text",conditions))))));
             exchange.getResponseHeaders().set("Content-Type","application/json");exchange.sendResponseHeaders(200,reply.length);exchange.getResponseBody().write(reply);exchange.close();
         });stub.start();
@@ -137,9 +169,9 @@ class ApiCheckTest {
                 assertEquals(0,value("GET","/catalogue?q=no-such-track",token,null,200).size());
                 value("GET","/catalogue?q="+"x".repeat(101),token,null,400);
                 value("POST","/recommendations",token,Map.of("prompt"," "),400);
-                JsonNode recovered=value("POST","/recommendations",token,Map.of("prompt","잘못된 AI 응답 검사"),200);
-                assertEquals("basic",recovered.path("mode").asString());
-                assertTrue(recovered.path("notice").asString().contains("AI 연결"));
+                JsonNode recovered=value("POST","/recommendations",token,Map.of("prompt","잘못된 AI 응답 검사"),503);
+                assertFalse(recovered.has("tracks"));
+                assertTrue(recovered.path("message").asString().contains("AI 연결"));
                 String prompt="공부할 때 가사 없는 잔잔한 피아노 음악";
                 JsonNode result=value("POST","/recommendations",token,Map.of("prompt",prompt),200);
                 assertEquals("openai",result.path("mode").asString());assertEquals(8,result.path("tracks").size());
@@ -154,24 +186,22 @@ class ApiCheckTest {
                 result=value("POST","/recommendations",token,Map.of("prompt",prompt),200);
                 assertEquals("openai",result.path("mode").asString());
                 for(JsonNode pick:result.path("tracks"))assertNotEquals(dislike,pick.path("track").path("id").asString());
-                assertEquals("basic",value("POST","/recommendations",token,Map.of("prompt",prompt),200).path("mode").asString());
+                assertFalse(value("POST","/recommendations",token,Map.of("prompt",prompt),429).has("tracks"));
                 assertEquals(3,aiRequests.size(),"The daily cap must include failed calls and prevent extra calls.");
                 for(JsonNode body:aiRequests){
                     assertTrue(List.of(prompt,"잘못된 AI 응답 검사").contains(body.path("input").asString()));assertFalse(body.path("store").asBoolean());
                     assertEquals("json_schema",body.path("text").path("format").path("type").asString());
                     assertTrue(body.path("text").path("format").path("strict").asBoolean());
                     assertFalse(body.toString().contains(saved),"Catalogue and external metadata must not enter the AI request.");
-                    JsonNode tags=body.path("text").path("format").path("schema").path("properties").path("tags").path("items").path("enum");
-                    assertTrue(tags.toString().contains("\"jazz\"")&&tags.toString().contains("\"unsupported_genre\""));
+                    JsonNode tags=body.path("text").path("format").path("schema").path("properties").path("tags").path("items").path("pattern");
+                    assertTrue(tags.asString().contains("jazz"));assertFalse(tags.asString().contains("unsupported_genre"));
                     assertTrue(body.path("instructions").asString().contains("never replace it with a different genre"));
                     assertTrue(body.path("text").path("format").path("schema").path("properties").path("language").path("description").asString().contains("Never infer"));
                     assertEquals("boolean",body.path("text").path("format").path("schema").path("properties").path("languageSpecified").path("type").asString());
                     assertTrue(body.path("text").path("format").path("schema").path("required").toString().contains("languageSpecified"));
                 }
-                JsonNode basicJazz=value("POST","/recommendations",token,Map.of("prompt","가사 없는 재즈"),200);
-                assertEquals("basic",basicJazz.path("mode").asString());assertEquals(0,basicJazz.path("tracks").size());
-                assertTrue(basicJazz.path("conditions").path("tags").toString().contains("\"jazz\""));
-                assertTrue(basicJazz.path("notice").asString().contains("장르"));assertEquals(3,aiRequests.size());
+                JsonNode limited=value("POST","/recommendations",token,Map.of("prompt","가사 없는 재즈"),429);
+                assertFalse(limited.has("tracks"));assertTrue(limited.path("message").asString().contains("한도"));assertEquals(3,aiRequests.size());
                 OpenAi ai=context.getBean(OpenAi.class);
                 var catalogue=context.getBean(Api.class).catalogue("Bearer "+token,"");
                 Recommender.Conditions jazz=ai.extract("재즈만 추천해줘");
@@ -185,15 +215,15 @@ class ApiCheckTest {
                 assertEquals(List.of("unsupported_genre"),chant.tags);assertTrue(chant.language.isEmpty());
                 assertEquals(0,Recommender.recommend(catalogue,chant,Map.of(),"openai").tracks.size());
                 assertFalse(json.writeValueAsString(chant).contains("languageSpecified"));
-                Recommender.Conditions bossa=ai.extract("Bossa nova");
-                assertEquals(List.of("unsupported_genre"),bossa.tags);assertTrue(bossa.language.isEmpty());
+                Recommender.Conditions dhrupad=ai.extract("Dhrupad");
+                assertEquals(List.of("unsupported_genre"),dhrupad.tags);assertTrue(dhrupad.language.isEmpty());
                 Recommender.Conditions explicitNoVocals=ai.extract("가사 없는 재즈");
                 assertEquals("none",explicitNoVocals.language);assertTrue(explicitNoVocals.tags.containsAll(List.of("jazz","instrumental")));
                 Recommender.Conditions explicitEnglish=ai.extract("영어 팝");
                 assertEquals("en",explicitEnglish.language);assertEquals(List.of("pop"),explicitEnglish.tags);
                 Recommender.Conditions excluded=ai.extract("Gregorian chant 제외하고 피아노");
                 assertTrue(excluded.excludedTags.contains("unsupported_genre"));assertEquals(8,Recommender.recommend(catalogue,excluded,Map.of(),"openai").tracks.size());
-                for(String positive:List.of("Gregorian chant only","Bossa nova only")) {
+                for(String positive:List.of("Gregorian chant only","Dhrupad only")) {
                     Recommender.Conditions corrected=ai.extract(positive);
                     assertEquals(List.of("unsupported_genre"),corrected.tags);assertTrue(corrected.excludedTags.isEmpty()&&corrected.language.isEmpty());
                     Recommender.Result zero=Recommender.recommend(catalogue,corrected,Map.of(),"openai");
@@ -293,7 +323,7 @@ class ApiCheckTest {
                 Recommender.Conditions cozyMood=ai.extract("신나는 음악을 추천해줘",List.of("cozy music"));
                 assertTrue(cozyMood.language.isEmpty());assertEquals(List.of("pop","energetic"),cozyMood.tags);
                 Recommender.Conditions mandarinHistory=ai.extract("팝으로 바꿔줘",List.of("영어 음악","이제 Mandarin 보컬로 바꿔줘"));
-                assertEquals("unsupported",mandarinHistory.language);
+                assertEquals("zh",mandarinHistory.language);
                 assertEquals(0,Recommender.recommend(catalogue,mandarinHistory,Map.of(),"openai").tracks.size());
                 Recommender.Conditions historyReset=ai.extract("처음부터 팝",List.of("cozy music"));
                 assertTrue(historyReset.language.isEmpty());assertEquals(List.of("pop"),historyReset.tags);
@@ -398,7 +428,8 @@ class ApiCheckTest {
 
     private void coherentReadsDuringDeletion(String token,List<String> trackIds) throws Exception {
         try(var workers=Executors.newFixedThreadPool(9)) {
-            for(int round=0;round<40;round++) {
+            // Exercise simultaneous snapshots without turning this data-consistency check into an abuse-limit check.
+            for(int round=0;round<8;round++) {
                 String id=value("POST","/playlists",token,Map.of("title","Concurrent detail check"),201).path("id").asString();
                 String path="/playlists/"+id;
                 value("POST",path+"/items/batch",token,Map.of("trackIds",trackIds),200);
