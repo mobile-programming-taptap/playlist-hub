@@ -1,0 +1,756 @@
+{
+  "date": "2026-10-19",
+  "recordedAt": "2026-10-19T06:24:14.620190+00:00",
+  "scope": "출시 수준 구현 및 로컬 검수; 실제 공개 배포·스토어 제출은 수행하지 않음",
+  "backendH2Run": {
+    "exitCode": 0,
+    "tests": 52,
+    "failures": 0,
+    "skipped": 1,
+    "suites": [
+      {
+        "name": "com.mptaptap.server.AccountCommunityCheckTest",
+        "tests": "3",
+        "skipped": "0",
+        "failures": "0",
+        "errors": "0",
+        "timestamp": "2026-10-19T06:13:04.189Z",
+        "hostname": "iyunseong-ui-MacBookAir.local",
+        "time": "2.922"
+      },
+      {
+        "name": "com.mptaptap.server.ApiCheckTest",
+        "tests": "3",
+        "skipped": "0",
+        "failures": "0",
+        "errors": "0",
+        "timestamp": "2026-10-19T06:13:07.111Z",
+        "hostname": "iyunseong-ui-MacBookAir.local",
+        "time": "0.968"
+      },
+      {
+        "name": "com.mptaptap.server.BoundedHttpCheckTest",
+        "tests": "2",
+        "skipped": "0",
+        "failures": "0",
+        "errors": "0",
+        "timestamp": "2026-10-19T06:13:08.079Z",
+        "hostname": "iyunseong-ui-MacBookAir.local",
+        "time": "0.261"
+      },
+      {
+        "name": "com.mptaptap.server.CommunitySafetyCheckTest",
+        "tests": "3",
+        "skipped": "0",
+        "failures": "0",
+        "errors": "0",
+        "timestamp": "2026-10-19T06:13:08.340Z",
+        "hostname": "iyunseong-ui-MacBookAir.local",
+        "time": "0.659"
+      },
+      {
+        "name": "com.mptaptap.server.ConversationCheckTest",
+        "tests": "1",
+        "skipped": "0",
+        "failures": "0",
+        "errors": "0",
+        "timestamp": "2026-10-19T06:13:08.999Z",
+        "hostname": "iyunseong-ui-MacBookAir.local",
+        "time": "0.179"
+      },
+      {
+        "name": "com.mptaptap.server.DynamicCatalogueCheckTest",
+        "tests": "5",
+        "skipped": "0",
+        "failures": "0",
+        "errors": "0",
+        "timestamp": "2026-10-19T06:13:09.178Z",
+        "hostname": "iyunseong-ui-MacBookAir.local",
+        "time": "9.777"
+      },
+      {
+        "name": "com.mptaptap.server.H2PoolRetirementCheckTest",
+        "tests": "2",
+        "skipped": "0",
+        "failures": "0",
+        "errors": "0",
+        "timestamp": "2026-10-19T06:13:18.963Z",
+        "hostname": "iyunseong-ui-MacBookAir.local",
+        "time": "0.382"
+      },
+      {
+        "name": "com.mptaptap.server.KakaoCheckTest",
+        "tests": "7",
+        "skipped": "1",
+        "failures": "0",
+        "errors": "0",
+        "timestamp": "2026-10-19T06:13:19.345Z",
+        "hostname": "iyunseong-ui-MacBookAir.local",
+        "time": "0.777"
+      },
+      {
+        "name": "com.mptaptap.server.PlatformCheckTest",
+        "tests": "11",
+        "skipped": "0",
+        "failures": "0",
+        "errors": "0",
+        "timestamp": "2026-10-19T06:13:20.122Z",
+        "hostname": "iyunseong-ui-MacBookAir.local",
+        "time": "16.39"
+      },
+      {
+        "name": "com.mptaptap.server.PlatformConcurrencyCheckTest",
+        "tests": "5",
+        "skipped": "0",
+        "failures": "0",
+        "errors": "0",
+        "timestamp": "2026-10-19T06:13:36.512Z",
+        "hostname": "iyunseong-ui-MacBookAir.local",
+        "time": "0.436"
+      },
+      {
+        "name": "com.mptaptap.server.PlaybackCheckTest",
+        "tests": "3",
+        "skipped": "0",
+        "failures": "0",
+        "errors": "0",
+        "timestamp": "2026-10-19T06:13:36.948Z",
+        "hostname": "iyunseong-ui-MacBookAir.local",
+        "time": "0.169"
+      },
+      {
+        "name": "com.mptaptap.server.PublicPagesCheckTest",
+        "tests": "3",
+        "skipped": "0",
+        "failures": "0",
+        "errors": "0",
+        "timestamp": "2026-10-19T06:13:37.117Z",
+        "hostname": "iyunseong-ui-MacBookAir.local",
+        "time": "0.149"
+      },
+      {
+        "name": "com.mptaptap.server.RequestLimitsCheckTest",
+        "tests": "4",
+        "skipped": "0",
+        "failures": "0",
+        "errors": "0",
+        "timestamp": "2026-10-19T06:13:37.267Z",
+        "hostname": "iyunseong-ui-MacBookAir.local",
+        "time": "0.136"
+      }
+    ],
+    "PostgreSQLConfigured": false,
+    "H2SpecificFixturesRemainH2": true
+  },
+  "backendPostgresRun": {
+    "exitCode": 0,
+    "tests": 52,
+    "failures": 0,
+    "skipped": 0,
+    "suites": [
+      {
+        "name": "com.mptaptap.server.AccountCommunityCheckTest",
+        "tests": "3",
+        "skipped": "0",
+        "failures": "0",
+        "errors": "0",
+        "timestamp": "2026-10-19T06:13:42.535Z",
+        "hostname": "iyunseong-ui-MacBookAir.local",
+        "time": "3.287"
+      },
+      {
+        "name": "com.mptaptap.server.ApiCheckTest",
+        "tests": "3",
+        "skipped": "0",
+        "failures": "0",
+        "errors": "0",
+        "timestamp": "2026-10-19T06:13:45.822Z",
+        "hostname": "iyunseong-ui-MacBookAir.local",
+        "time": "1.35"
+      },
+      {
+        "name": "com.mptaptap.server.BoundedHttpCheckTest",
+        "tests": "2",
+        "skipped": "0",
+        "failures": "0",
+        "errors": "0",
+        "timestamp": "2026-10-19T06:13:47.172Z",
+        "hostname": "iyunseong-ui-MacBookAir.local",
+        "time": "0.259"
+      },
+      {
+        "name": "com.mptaptap.server.CommunitySafetyCheckTest",
+        "tests": "3",
+        "skipped": "0",
+        "failures": "0",
+        "errors": "0",
+        "timestamp": "2026-10-19T06:13:47.431Z",
+        "hostname": "iyunseong-ui-MacBookAir.local",
+        "time": "1.334"
+      },
+      {
+        "name": "com.mptaptap.server.ConversationCheckTest",
+        "tests": "1",
+        "skipped": "0",
+        "failures": "0",
+        "errors": "0",
+        "timestamp": "2026-10-19T06:13:48.765Z",
+        "hostname": "iyunseong-ui-MacBookAir.local",
+        "time": "0.193"
+      },
+      {
+        "name": "com.mptaptap.server.DynamicCatalogueCheckTest",
+        "tests": "5",
+        "skipped": "0",
+        "failures": "0",
+        "errors": "0",
+        "timestamp": "2026-10-19T06:13:48.958Z",
+        "hostname": "iyunseong-ui-MacBookAir.local",
+        "time": "10.166"
+      },
+      {
+        "name": "com.mptaptap.server.H2PoolRetirementCheckTest",
+        "tests": "2",
+        "skipped": "0",
+        "failures": "0",
+        "errors": "0",
+        "timestamp": "2026-10-19T06:13:59.129Z",
+        "hostname": "iyunseong-ui-MacBookAir.local",
+        "time": "0.298"
+      },
+      {
+        "name": "com.mptaptap.server.KakaoCheckTest",
+        "tests": "7",
+        "skipped": "0",
+        "failures": "0",
+        "errors": "0",
+        "timestamp": "2026-10-19T06:13:59.427Z",
+        "hostname": "iyunseong-ui-MacBookAir.local",
+        "time": "1.583"
+      },
+      {
+        "name": "com.mptaptap.server.PlatformCheckTest",
+        "tests": "11",
+        "skipped": "0",
+        "failures": "0",
+        "errors": "0",
+        "timestamp": "2026-10-19T06:14:01.010Z",
+        "hostname": "iyunseong-ui-MacBookAir.local",
+        "time": "25.688"
+      },
+      {
+        "name": "com.mptaptap.server.PlatformConcurrencyCheckTest",
+        "tests": "5",
+        "skipped": "0",
+        "failures": "0",
+        "errors": "0",
+        "timestamp": "2026-10-19T06:14:26.698Z",
+        "hostname": "iyunseong-ui-MacBookAir.local",
+        "time": "0.459"
+      },
+      {
+        "name": "com.mptaptap.server.PlaybackCheckTest",
+        "tests": "3",
+        "skipped": "0",
+        "failures": "0",
+        "errors": "0",
+        "timestamp": "2026-10-19T06:14:27.157Z",
+        "hostname": "iyunseong-ui-MacBookAir.local",
+        "time": "0.167"
+      },
+      {
+        "name": "com.mptaptap.server.PublicPagesCheckTest",
+        "tests": "3",
+        "skipped": "0",
+        "failures": "0",
+        "errors": "0",
+        "timestamp": "2026-10-19T06:14:27.324Z",
+        "hostname": "iyunseong-ui-MacBookAir.local",
+        "time": "0.15"
+      },
+      {
+        "name": "com.mptaptap.server.RequestLimitsCheckTest",
+        "tests": "4",
+        "skipped": "0",
+        "failures": "0",
+        "errors": "0",
+        "timestamp": "2026-10-19T06:14:27.474Z",
+        "hostname": "iyunseong-ui-MacBookAir.local",
+        "time": "0.121"
+      }
+    ],
+    "PostgreSQLConfigured": true,
+    "H2SpecificFixturesRemainH2": true
+  },
+  "android": {
+    "api37": {
+      "passed": true,
+      "durationSeconds": 272.02,
+      "passedTests": 43,
+      "failedTests": 0,
+      "runtimeSkippedTests": 0,
+      "serial": "emulator-5558",
+      "appApkSha256": "c11094b8e63aa196beac0b5c1a4f056396bce2882df98fd327aa3cbe064d9aff",
+      "testApkSha256": "4f12e4bbd2e93862c14528a469e49f7d7981420bac47caf50dc6816738513945",
+      "sourceTestCount": 43,
+      "discoveredTests": 43,
+      "sdkFilteredTests": 0,
+      "fullServer": "http://10.0.2.2:60529",
+      "backendJarSha256": "0af1d4be5649437bf782d05e706063fa6cbdf92904f8217fba5d47e8864b129f",
+      "apkSha256": "c11094b8e63aa196beac0b5c1a4f056396bce2882df98fd327aa3cbe064d9aff",
+      "skippedTests": 0,
+      "sdk": 37,
+      "fixtureOnly": true,
+      "realProviderOAuthTested": false,
+      "packagedServerJarSha256": "0af1d4be5649437bf782d05e706063fa6cbdf92904f8217fba5d47e8864b129f"
+    },
+    "api24": {
+      "passed": true,
+      "durationSeconds": 160.59,
+      "passedTests": 42,
+      "failedTests": 0,
+      "runtimeSkippedTests": 0,
+      "serial": "emulator-5560",
+      "appApkSha256": "c11094b8e63aa196beac0b5c1a4f056396bce2882df98fd327aa3cbe064d9aff",
+      "testApkSha256": "4f12e4bbd2e93862c14528a469e49f7d7981420bac47caf50dc6816738513945",
+      "sourceTestCount": 43,
+      "discoveredTests": 42,
+      "sdkFilteredTests": 1,
+      "fullServer": "http://10.0.2.2:60529",
+      "backendJarSha256": "0af1d4be5649437bf782d05e706063fa6cbdf92904f8217fba5d47e8864b129f",
+      "apkSha256": "c11094b8e63aa196beac0b5c1a4f056396bce2882df98fd327aa3cbe064d9aff",
+      "skippedTests": 0,
+      "sdk": 24,
+      "fixtureOnly": true,
+      "realProviderOAuthTested": false,
+      "packagedServerJarSha256": "0af1d4be5649437bf782d05e706063fa6cbdf92904f8217fba5d47e8864b129f"
+    }
+  },
+  "androidBuild": {
+    "passed": true,
+    "durationSeconds": 11.16,
+    "tasks": [
+      ":app:assembleDebug",
+      ":app:assembleDebugAndroidTest",
+      ":app:assembleRelease",
+      ":app:bundleRelease",
+      ":app:lintDebug"
+    ],
+    "app": {
+      "path": "android/app/build/outputs/apk/debug/app-debug.apk",
+      "sha256": "c11094b8e63aa196beac0b5c1a4f056396bce2882df98fd327aa3cbe064d9aff"
+    },
+    "test": {
+      "path": "android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk",
+      "sha256": "4f12e4bbd2e93862c14528a469e49f7d7981420bac47caf50dc6816738513945"
+    },
+    "unsignedRelease": {
+      "path": "android/app/build/outputs/apk/release/app-release-unsigned.apk",
+      "sha256": "18655619c3d45e22b71ecd89bf746bdffa1200f0702414d7753ca4bb7de90481"
+    },
+    "unsignedBundle": {
+      "path": "android/app/build/outputs/bundle/release/app-release.aab",
+      "sha256": "36bf43e3b1955025f263a05136ecd1b78aad1f6d5e9f29c935579b2e0d205f32"
+    },
+    "testOnlyRebuild": {
+      "passed": true,
+      "durationSeconds": 7.15
+    }
+  },
+  "packagedJarRestartPassed": true,
+  "packagedJarRestartEvidence": "output/checks/release-quality/final-backend/packaged-restart.json",
+  "packageChecks": {
+    "checkedAt": "2026-10-19T06:16:21.697158+00:00",
+    "passed": true,
+    "runtime": "Production Compose, Caddy 2, PostgreSQL 15, local HTTPS with hostname and private CA verification",
+    "actualPublicHttpsVerified": false,
+    "actualProviderOAuthVerified": false,
+    "hostTrustedCertificatesChanged": false,
+    "checks": [
+      "Production Compose validates without printing private settings",
+      "App and database expose no host ports",
+      "App uses a read-only filesystem and UID 10001",
+      "Container JAR hash and expected packaged host JAR match",
+      "TLS hostname and private CA verification",
+      "Anonymous introduction, privacy and external account-deletion mail draft without cookies",
+      "HTTP redirects to HTTPS",
+      "Bearer auth, strict AI-unconfigured error, playlist and anonymous public share through TLS",
+      "App, database and Caddy restart retain session, playlist, share and CA",
+      "PostgreSQL pg_dump restored into a new database retains session, playlist and public share",
+      "Current posting rules gate publication; persisted report, personal block and rules acceptance survive backup restore",
+      "Personal blocks hide authenticated detail while public web sharing remains available; unconfigured moderation returns 503",
+      "Unpublication and account deletion",
+      "Spoofed X-Forwarded-For cannot bypass login IP limits",
+      "A different client can log in after the first client reaches its IP limit"
+    ],
+    "imageId": "sha256:daee8bc9706fcf7e00526df395394784676edd993363ec36e4762d5757c90509",
+    "containerJarSha256": "0af1d4be5649437bf782d05e706063fa6cbdf92904f8217fba5d47e8864b129f",
+    "hostJarSha256": "0af1d4be5649437bf782d05e706063fa6cbdf92904f8217fba5d47e8864b129f",
+    "backupSha256": "bd3b1e2c759af3e7ed7bc55197928dddc929d4923c474c8f85495196b5f10aec",
+    "backupRestoredIntoFreshDatabase": true,
+    "temporaryStackRemoved": true
+  },
+  "secretScan": {
+    "status": "passed",
+    "checkedAt": "2026-10-19T06:16:51.763971+00:00",
+    "secretFieldsLoaded": [
+      "OPENAI_API_KEY",
+      "GOOGLE_CLIENT_SECRET",
+      "PLATFORM_TOKEN_SECRET"
+    ],
+    "secretFieldsNotConfigured": [
+      "SPOTIFY_CLIENT_SECRET"
+    ],
+    "missingConfigFiles": [],
+    "publicIdsIntentionallyExcluded": [
+      "KAKAO_NATIVE_APP_KEY",
+      "KAKAO_APP_ID",
+      "GOOGLE_CLIENT_ID",
+      "SPOTIFY_CLIENT_ID"
+    ],
+    "sourceFiles": 170,
+    "archiveMembers": 17418,
+    "bytesInspected": 151589534,
+    "artifacts": [
+      {
+        "name": "app-debug.apk",
+        "sha256": "c11094b8e63aa196beac0b5c1a4f056396bce2882df98fd327aa3cbe064d9aff"
+      },
+      {
+        "name": "taptap-backend.jar",
+        "sha256": "0af1d4be5649437bf782d05e706063fa6cbdf92904f8217fba5d47e8864b129f"
+      },
+      {
+        "name": "app-release.aab",
+        "sha256": "36bf43e3b1955025f263a05136ecd1b78aad1f6d5e9f29c935579b2e0d205f32"
+      },
+      {
+        "name": "app-release-unsigned.apk",
+        "sha256": "18655619c3d45e22b71ecd89bf746bdffa1200f0702414d7753ca4bb7de90481"
+      }
+    ],
+    "missingArtifactKinds": [],
+    "findings": [],
+    "errors": [],
+    "scope": "Configured secret values and their literal/URL/base64 forms plus packaged private config/DB. Not a proof that unknown or encrypted secrets are absent."
+  },
+  "realOpenAi": {
+    "recordedAt": "2026-10-19T05:26:30.517634+00:00",
+    "endpoint": "GET https://api.openai.com/v1/models",
+    "status": 401,
+    "errorType": "invalid_request_error",
+    "errorCode": "invalid_api_key",
+    "errorParam": null,
+    "configuredModel": "gpt-4o-mini",
+    "configuredModelAvailable": false,
+    "secretValueRecorded": false,
+    "generationRequested": false
+  },
+  "realOpenAiRecommendationSucceeded": false,
+  "realOpenAiConnectionTestExcludedByUser": true,
+  "realKakaoLoginTested": false,
+  "realSpotifyAndGoogleApprovalTested": false,
+  "artifacts": {
+    "output/release-quality/TapTap-debug.apk": {
+      "sha256": "c11094b8e63aa196beac0b5c1a4f056396bce2882df98fd327aa3cbe064d9aff",
+      "bytes": 11464141
+    },
+    "output/release-quality/TapTap-release-unsigned.apk": {
+      "sha256": "18655619c3d45e22b71ecd89bf746bdffa1200f0702414d7753ca4bb7de90481",
+      "bytes": 9684447
+    },
+    "output/release-quality/TapTap-release-unsigned.aab": {
+      "sha256": "36bf43e3b1955025f263a05136ecd1b78aad1f6d5e9f29c935579b2e0d205f32",
+      "bytes": 8909777
+    },
+    "output/release-quality/taptap-backend.jar": {
+      "sha256": "0af1d4be5649437bf782d05e706063fa6cbdf92904f8217fba5d47e8864b129f",
+      "bytes": 25325385
+    }
+  },
+  "limits": [
+    "현재 OpenAI 키가 공식 API에서401 invalid_api_key로 거절됨. 사용자가 실제 AI 연결 검사를 제외하고 완료하도록 명시함. 실제 추천 성공을 주장하거나 고정 곡으로 대체하지 않음.",
+    "이번 검수는 격리된 서버·계정·기기와 플랫폼 응답 fixture를 사용함. 실계정 Google/Spotify/Kakao 승인·전송과 실제 휴대폰은 이번 빌드에서 재검사하지 않음.",
+    "실제 공개 HTTPS·스토어 제출·제출용 서명은 요청 범위에서 제외함. 로컬 HTTPS는 별도 CA/호스트 검증으로 검사함.",
+    "기존 사용자 에뮬레이터와 포트8080 실행 중 서버는 유지함. 새 서버 JAR은 별도 경로에 보관함.",
+    "설치된 Cursor Canvas SDK·제공 React authoring stubs·TypeScript 6.0.3으로 strict no-emit 검사를 실행했다. SDK 선언 내부는 skipLibCheck=true이며 실제 Canvas 호스트·브라우저 시각 미리보기는 실행하지 않았다."
+  ],
+  "historicalVerification": {
+    "date": "2026-10-13",
+    "backendPostgresRun": {
+      "suites": [
+        {
+          "name": "com.mptaptap.server.PlatformCheckTest",
+          "tests": "9",
+          "skipped": "0",
+          "failures": "0",
+          "errors": "0",
+          "timestamp": "2026-10-13T12:52:35.164Z",
+          "time": "22.551"
+        },
+        {
+          "name": "com.mptaptap.server.ConversationCheckTest",
+          "tests": "1",
+          "skipped": "0",
+          "failures": "0",
+          "errors": "0",
+          "timestamp": "2026-10-13T12:52:29.004Z",
+          "time": "0.191"
+        },
+        {
+          "name": "com.mptaptap.server.ApiCheckTest",
+          "tests": "3",
+          "skipped": "0",
+          "failures": "0",
+          "errors": "0",
+          "timestamp": "2026-10-13T12:52:26.600Z",
+          "time": "2.404"
+        },
+        {
+          "name": "com.mptaptap.server.AccountCommunityCheckTest",
+          "tests": "1",
+          "skipped": "0",
+          "failures": "0",
+          "errors": "0",
+          "timestamp": "2026-10-13T12:52:23.641Z",
+          "time": "2.959"
+        },
+        {
+          "name": "com.mptaptap.server.DynamicCatalogueCheckTest",
+          "tests": "3",
+          "skipped": "0",
+          "failures": "0",
+          "errors": "0",
+          "timestamp": "2026-10-13T12:52:29.195Z",
+          "time": "4.688"
+        },
+        {
+          "name": "com.mptaptap.server.KakaoCheckTest",
+          "tests": "7",
+          "skipped": "0",
+          "failures": "0",
+          "errors": "0",
+          "timestamp": "2026-10-13T12:52:33.883Z",
+          "time": "1.281"
+        }
+      ],
+      "tests": 24,
+      "failures": 0,
+      "skipped": 0,
+      "actualPostgresKakaoPersistenceChecked": true,
+      "H2SpecificFixturesRemainH2": true,
+      "lostExchangeRecoveryChecked": true
+    },
+    "backendH2Run": {
+      "suites": [
+        {
+          "name": "com.mptaptap.server.PlatformCheckTest",
+          "tests": "9",
+          "skipped": "0",
+          "failures": "0",
+          "errors": "0",
+          "timestamp": "2026-10-13T12:51:08.250Z",
+          "time": "16.242"
+        },
+        {
+          "name": "com.mptaptap.server.ConversationCheckTest",
+          "tests": "1",
+          "skipped": "0",
+          "failures": "0",
+          "errors": "0",
+          "timestamp": "2026-10-13T12:51:02.891Z",
+          "time": "0.195"
+        },
+        {
+          "name": "com.mptaptap.server.ApiCheckTest",
+          "tests": "3",
+          "skipped": "0",
+          "failures": "0",
+          "errors": "0",
+          "timestamp": "2026-10-13T12:51:01.821Z",
+          "time": "1.07"
+        },
+        {
+          "name": "com.mptaptap.server.AccountCommunityCheckTest",
+          "tests": "1",
+          "skipped": "0",
+          "failures": "0",
+          "errors": "0",
+          "timestamp": "2026-10-13T12:50:59.533Z",
+          "time": "2.287"
+        },
+        {
+          "name": "com.mptaptap.server.DynamicCatalogueCheckTest",
+          "tests": "3",
+          "skipped": "0",
+          "failures": "0",
+          "errors": "0",
+          "timestamp": "2026-10-13T12:51:03.087Z",
+          "time": "4.498"
+        },
+        {
+          "name": "com.mptaptap.server.KakaoCheckTest",
+          "tests": "7",
+          "skipped": "1",
+          "failures": "0",
+          "errors": "0",
+          "timestamp": "2026-10-13T12:51:07.585Z",
+          "time": "0.665"
+        }
+      ],
+      "tests": 24,
+      "passed": 23,
+      "skipped": 1,
+      "failed": 0,
+      "kakaoPassed": 6,
+      "lostExchangeRecoveryChecked": true,
+      "pgOnlyTestSkipped": true
+    },
+    "android": {
+      "emulator-5554": {
+        "recordedAt": "2026-10-13T12:28:45.540811+00:00",
+        "device": "emulator-5554",
+        "sdk": 37,
+        "fixtureOnly": true,
+        "realKakaoLoginTested": false,
+        "passed": 15,
+        "failed": 0,
+        "skipped": 0,
+        "success": true,
+        "screenshots": [
+          "hub-account-login.png",
+          "hub-account.png",
+          "hub-batch.png",
+          "hub-community.png",
+          "hub-create-bottom.png",
+          "hub-create.png",
+          "hub-history-bottom.png",
+          "hub-history.png",
+          "hub-library.png",
+          "hub-preview-bottom.png",
+          "hub-preview.png",
+          "hub-publicDetail.png",
+          "hub-publication.png",
+          "hub-review.png",
+          "hub-sync.png",
+          "hub-transfer.png",
+          "local-library.png",
+          "local-playlist-detail.png",
+          "main-request.png",
+          "navigation-account.png",
+          "navigation-community-restored.png",
+          "navigation-library.png",
+          "popup-candidates.png",
+          "popup-copy.png",
+          "popup-input-large-font.png",
+          "popup-input-validation-keyboard.png",
+          "popup-list.png",
+          "popup-message.png",
+          "popup-platform-picker.png",
+          "popup-settings-actions.png",
+          "popup-settings.png",
+          "popup-source.png",
+          "popup-three-actions.png",
+          "provider-dropdown.png"
+        ],
+        "privateDataRestored": true,
+        "apkSha256": "e0ae3b3ed104d427c55fa1629aa1f4b0b9b6ff9ef0ba31f52aeab1c3bd3e4c40"
+      },
+      "emulator-5556": {
+        "recordedAt": "2026-10-13T12:33:16.929950+00:00",
+        "device": "emulator-5556",
+        "sdk": 24,
+        "fixtureOnly": true,
+        "realKakaoLoginTested": false,
+        "passed": 15,
+        "failed": 0,
+        "skipped": 0,
+        "success": true,
+        "screenshots": [
+          "hub-account-bottom.png",
+          "hub-account-login.png",
+          "hub-account.png",
+          "hub-batch.png",
+          "hub-community-bottom.png",
+          "hub-community.png",
+          "hub-create-bottom.png",
+          "hub-create.png",
+          "hub-history-bottom.png",
+          "hub-history.png",
+          "hub-library-bottom.png",
+          "hub-library.png",
+          "hub-preview-bottom.png",
+          "hub-preview.png",
+          "hub-publicDetail.png",
+          "hub-publication.png",
+          "hub-review-bottom.png",
+          "hub-review.png",
+          "hub-sync.png",
+          "hub-transfer.png",
+          "local-library.png",
+          "local-playlist-detail.png",
+          "main-request.png",
+          "navigation-account.png",
+          "navigation-community-restored.png",
+          "navigation-library.png",
+          "popup-candidates.png",
+          "popup-copy.png",
+          "popup-input-large-font.png",
+          "popup-input-validation-keyboard.png",
+          "popup-list.png",
+          "popup-message.png",
+          "popup-platform-picker.png",
+          "popup-settings-actions.png",
+          "popup-settings.png",
+          "popup-source.png",
+          "popup-three-actions.png",
+          "provider-dropdown.png"
+        ],
+        "restorationMismatches": [],
+        "privateDataRestored": true,
+        "apkSha256": "e0ae3b3ed104d427c55fa1629aa1f4b0b9b6ff9ef0ba31f52aeab1c3bd3e4c40",
+        "restorationMethod": "ADB shell -T binary stdin; older API24 exec-in restore was incomplete"
+      }
+    },
+    "androidBuild": {
+      "debug": true,
+      "testApk": true,
+      "release": true,
+      "lintErrors": 0
+    },
+    "packagedJarRestartPassed": true,
+    "realKakaoLoginTested": false,
+    "realSpotifyAndGoogleApprovalTested": false,
+    "artifacts": {
+      "output/apk/TapTap-debug.apk": "e0ae3b3ed104d427c55fa1629aa1f4b0b9b6ff9ef0ba31f52aeab1c3bd3e4c40",
+      "output/server/taptap-backend.jar": "47afc969d8de665895edab218aa89ce939a1c866f5bf6efcc15f2f019ffafc02"
+    },
+    "limits": [
+      "실제 카카오 앱 키·콘솔 설정·실계정 인증 미검증",
+      "실제 Spotify/Google 승인과 공개 배포·실제 휴대폰 미검증",
+      "HTML/Canvas 상호작용은 로컬 DOM/렌더 트리로 검사; 브라우저/호스트 미리보기는 권한·URL 정책에 따라 생략",
+      "Android7 첫 파일 복원 확인 실패 뒤 보존 백업의 shell -T 복원과 원본 파일 해시 일치 확인; 첫 시도의 원본 데이터 전체 일치 증거는 없음"
+    ],
+    "publicAccountPrivacyCheckedAfterTextUpdate": true,
+    "lostFirstLoginReplyRecoveryTested": true
+  },
+  "documentationChecks": {
+    "inventoryIntegrity": {
+      "passed": true,
+      "source": "output/checks/release-quality/documentation-inventory.json"
+    },
+    "canvasSdkTypeCheck": {
+      "passed": true,
+      "source": "output/checks/release-quality/canvas-sdk-typecheck.json",
+      "typescript": "6.0.3",
+      "scope": "Installed Canvas SDK and provided React authoring stubs; strict noEmit, skipLibCheck declaration internals"
+    },
+    "nativeCanvasHostPreviewPerformed": false,
+    "nativeBrowserVisualReviewPerformed": false,
+    "sourceAndArchiveSecretScanAfterSync": {
+      "passed": true,
+      "source": "output/checks/release-quality/final-secret-scan-after-doc-sync.json",
+      "scope": "Selected configured secret fields compared in memory against the final source/docs and exact same four APK/JAR/AAB artifacts; no private value printed."
+    }
+  }
+}
