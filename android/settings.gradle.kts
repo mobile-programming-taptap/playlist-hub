@@ -24,3 +24,5 @@ dependencyResolutionManagement {
 
 rootProject.name = "TapTap"
 include(":app")
+include(":core")
+project(":core").projectDir = file("../core")

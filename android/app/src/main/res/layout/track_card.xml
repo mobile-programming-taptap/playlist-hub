@@ -1,0 +1,25 @@
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto" android:layout_width="match_parent" android:layout_height="match_parent" android:padding="2dp" android:paddingBottom="18dp">
+    <View android:layout_width="match_parent" android:layout_height="30dp" android:layout_gravity="bottom" android:layout_marginStart="12dp" android:layout_marginEnd="12dp" android:background="@drawable/card_stack" android:importantForAccessibility="no" />
+    <com.google.android.material.card.MaterialCardView android:layout_width="match_parent" android:layout_height="match_parent" android:layout_marginBottom="10dp" app:cardBackgroundColor="@color/deck_surface" app:cardCornerRadius="8dp" app:cardElevation="6dp" app:strokeWidth="0dp">
+        <ScrollView android:layout_width="match_parent" android:layout_height="match_parent" android:fillViewport="true" android:nestedScrollingEnabled="true" android:scrollbars="none">
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical">
+                <FrameLayout android:id="@+id/artwork" android:layout_width="match_parent" android:layout_height="300dp" android:background="@color/deck_surface">
+                    <ImageView android:id="@+id/track_artwork" android:layout_width="match_parent" android:layout_height="match_parent" android:scaleType="centerCrop" android:src="@drawable/ic_artwork_placeholder" android:importantForAccessibility="no" />
+                </FrameLayout>
+                <LinearLayout android:id="@+id/track_details" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:paddingStart="12dp" android:paddingEnd="12dp" android:paddingBottom="10dp">
+                    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center_vertical">
+                        <TextView android:id="@+id/track_title" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:minHeight="48dp" android:gravity="center_vertical" android:maxLines="2" android:ellipsize="end" android:clickable="true" android:focusable="true" android:textSize="17sp" android:textColor="@color/card_ink" android:fontFamily="@font/pretendard_semibold" app:fontFamily="@font/pretendard_semibold" />
+                        <com.google.android.material.button.MaterialButton android:id="@+id/edit_result" style="@style/TapTap.EditCard" android:layout_width="48dp" android:layout_height="48dp" android:contentDescription="곡 수정" app:icon="@drawable/ic_edit" />
+                    </LinearLayout>
+                    <TextView android:id="@+id/track_artist" android:layout_width="match_parent" android:layout_height="wrap_content" android:textSize="12sp" android:textColor="@color/deck_muted" />
+                    <TextView android:id="@+id/track_tags" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:textSize="10sp" android:textColor="@color/deck_muted" />
+                    <TextView android:id="@+id/reason" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="6dp" android:layout_marginBottom="8dp" android:textSize="11sp" android:textColor="@color/card_muted" android:lineSpacingExtra="2dp" android:breakStrategy="balanced" />
+                    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content">
+                        <com.google.android.material.button.MaterialButton android:id="@+id/external" style="@style/TapTap.CardAction" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:layout_marginEnd="8dp" android:text="다른 앱" app:icon="@drawable/ic_external" />
+                        <com.google.android.material.button.MaterialButton android:id="@+id/save" style="@style/TapTap.CardAction" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="목록에 저장" app:icon="@drawable/ic_save" />
+                    </LinearLayout>
+                </LinearLayout>
+            </LinearLayout>
+        </ScrollView>
+    </com.google.android.material.card.MaterialCardView>
+</FrameLayout>

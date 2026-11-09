@@ -1,9 +1,132 @@
-<resources xmlns:tools="http://schemas.android.com/tools">
-    <!-- Base application theme. -->
-    <style name="Base.Theme.TapTap" parent="Theme.Material3.DayNight.NoActionBar">
-        <!-- Customize your light theme here. -->
-        <!-- <item name="colorPrimary">@color/my_light_primary</item> -->
+<resources>
+    <style name="Theme.TapTap" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/accent</item><item name="colorOnPrimary">@color/on_accent</item>
+        <item name="colorPrimaryContainer">@color/soft_accent</item><item name="colorOnPrimaryContainer">@color/accent</item>
+        <item name="colorSecondary">@color/teal</item><item name="colorOnSecondary">@color/on_teal</item>
+        <item name="colorSecondaryContainer">@color/soft_teal</item><item name="colorOnSecondaryContainer">@color/teal</item>
+        <item name="colorSurface">@color/surface</item>
+        <item name="colorOnSurface">@color/ink</item><item name="android:colorBackground">@color/background</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:textAppearanceSmall">@style/TextAppearance.TapTap.Default</item>
+        <item name="android:textAppearanceMediumInverse">@style/TextAppearance.TapTap.Input</item>
+        <item name="textAppearanceBodyLarge">@style/TextAppearance.TapTap.BodyLarge</item>
+        <item name="textAppearanceBodyMedium">@style/TextAppearance.TapTap.BodyMedium</item>
+        <item name="textAppearanceBodySmall">@style/TextAppearance.TapTap.BodySmall</item>
+        <item name="textAppearanceLabelLarge">@style/TextAppearance.TapTap.LabelLarge</item>
+        <item name="textAppearanceLabelMedium">@style/TextAppearance.TapTap.LabelMedium</item>
+        <item name="textAppearanceLabelSmall">@style/TextAppearance.TapTap.LabelSmall</item>
+        <item name="textAppearanceTitleLarge">@style/TextAppearance.TapTap.TitleLarge</item>
+        <item name="textAppearanceTitleMedium">@style/TextAppearance.TapTap.TitleMedium</item>
+        <item name="textAppearanceTitleSmall">@style/TextAppearance.TapTap.TitleSmall</item>
+        <item name="textAppearanceHeadlineSmall">@style/TextAppearance.TapTap.HeadlineSmall</item>
+        <item name="android:navigationBarColor">@color/background</item>
+        <item name="materialAlertDialogTheme">@style/ThemeOverlay.TapTap.Dialog</item>
+        <item name="bottomNavigationStyle">@style/TapTap.BottomNavigation</item>
+        <item name="elevationOverlayEnabled">false</item>
     </style>
-
-    <style name="Theme.TapTap" parent="Base.Theme.TapTap" />
+    <style name="ThemeOverlay.TapTap.Dialog" parent="ThemeOverlay.Material3.MaterialAlertDialog">
+        <item name="colorSurfaceContainerHigh">@color/surface</item>
+    </style>
+    <style name="TextAppearance.TapTap.Default" parent="TextAppearance.AppCompat.Small">
+        <item name="fontFamily">@font/pretendard</item><item name="android:fontFamily">@font/pretendard</item>
+    </style>
+    <style name="TextAppearance.TapTap.Input" parent="TextAppearance.AppCompat.Medium.Inverse">
+        <item name="fontFamily">@font/pretendard</item><item name="android:fontFamily">@font/pretendard</item>
+    </style>
+    <style name="TextAppearance.TapTap.BodyLarge" parent="TextAppearance.Material3.BodyLarge">
+        <item name="fontFamily">@font/pretendard</item><item name="android:fontFamily">@font/pretendard</item>
+    </style>
+    <style name="TextAppearance.TapTap.BodyMedium" parent="TextAppearance.Material3.BodyMedium">
+        <item name="fontFamily">@font/pretendard</item><item name="android:fontFamily">@font/pretendard</item>
+    </style>
+    <style name="TextAppearance.TapTap.BodySmall" parent="TextAppearance.Material3.BodySmall">
+        <item name="fontFamily">@font/pretendard</item><item name="android:fontFamily">@font/pretendard</item>
+    </style>
+    <style name="TextAppearance.TapTap.LabelLarge" parent="TextAppearance.Material3.LabelLarge">
+        <item name="fontFamily">@font/pretendard_semibold</item><item name="android:fontFamily">@font/pretendard_semibold</item>
+    </style>
+    <style name="TextAppearance.TapTap.LabelMedium" parent="TextAppearance.Material3.LabelMedium">
+        <item name="fontFamily">@font/pretendard_semibold</item><item name="android:fontFamily">@font/pretendard_semibold</item>
+    </style>
+    <style name="TextAppearance.TapTap.LabelSmall" parent="TextAppearance.Material3.LabelSmall">
+        <item name="fontFamily">@font/pretendard_semibold</item><item name="android:fontFamily">@font/pretendard_semibold</item>
+    </style>
+    <style name="TextAppearance.TapTap.TitleLarge" parent="TextAppearance.Material3.TitleLarge">
+        <item name="fontFamily">@font/pretendard_semibold</item><item name="android:fontFamily">@font/pretendard_semibold</item>
+    </style>
+    <style name="TextAppearance.TapTap.TitleMedium" parent="TextAppearance.Material3.TitleMedium">
+        <item name="fontFamily">@font/pretendard_semibold</item><item name="android:fontFamily">@font/pretendard_semibold</item>
+    </style>
+    <style name="TextAppearance.TapTap.TitleSmall" parent="TextAppearance.Material3.TitleSmall">
+        <item name="fontFamily">@font/pretendard_semibold</item><item name="android:fontFamily">@font/pretendard_semibold</item>
+    </style>
+    <style name="TextAppearance.TapTap.HeadlineSmall" parent="TextAppearance.Material3.HeadlineSmall">
+        <item name="fontFamily">@font/pretendard_semibold</item><item name="android:fontFamily">@font/pretendard_semibold</item>
+    </style>
+    <style name="TapTap.CardAction" parent="Widget.Material3.Button.OutlinedButton">
+        <item name="android:minHeight">48dp</item><item name="android:minWidth">0dp</item>
+        <item name="android:textSize">12sp</item><item name="android:textColor">@color/card_ink</item>
+        <item name="android:paddingStart">10dp</item><item name="android:paddingEnd">10dp</item>
+        <item name="android:paddingTop">4dp</item><item name="android:paddingBottom">4dp</item>
+        <item name="android:insetTop">8dp</item><item name="android:insetBottom">8dp</item>
+        <item name="backgroundTint">#14FFFFFF</item><item name="rippleColor">#33FFFFFF</item>
+        <item name="iconSize">16dp</item><item name="iconPadding">6dp</item><item name="iconTint">@color/card_ink</item>
+        <item name="strokeColor">@color/card_line</item><item name="strokeWidth">1dp</item><item name="cornerRadius">18dp</item>
+    </style>
+    <style name="TapTap.Control" parent="Widget.Material3.Button.IconButton">
+        <item name="android:minWidth">48dp</item><item name="android:minHeight">48dp</item>
+        <item name="android:insetTop">0dp</item><item name="android:insetBottom">0dp</item>
+        <item name="android:insetLeft">0dp</item><item name="android:insetRight">0dp</item>
+        <item name="android:paddingStart">0dp</item><item name="android:paddingEnd">0dp</item>
+        <item name="android:paddingTop">0dp</item><item name="android:paddingBottom">0dp</item>
+        <item name="backgroundTint">@color/control_play</item><item name="cornerRadius">40dp</item>
+        <item name="strokeWidth">0dp</item><item name="rippleColor">#33FFFFFF</item>
+        <item name="iconGravity">textStart</item><item name="iconPadding">0dp</item>
+        <item name="iconSize">24dp</item><item name="iconTint">@null</item>
+    </style>
+    <style name="TapTap.EditCard" parent="TapTap.Control">
+        <item name="cornerRadius">24dp</item><item name="iconSize">18dp</item>
+        <item name="iconTint">@color/card_ink</item>
+    </style>
+    <style name="TapTap.DeckTextButton" parent="Widget.Material3.Button.TextButton">
+        <item name="android:minHeight">48dp</item><item name="android:minWidth">0dp</item>
+        <item name="android:textSize">12sp</item><item name="android:textColor">@color/card_ink</item>
+        <item name="android:paddingStart">8dp</item><item name="android:paddingEnd">8dp</item>
+        <item name="android:insetTop">0dp</item><item name="android:insetBottom">0dp</item>
+        <item name="backgroundTint">@android:color/transparent</item><item name="iconTint">@color/card_ink</item>
+        <item name="rippleColor">#33FFFFFF</item><item name="cornerRadius">8dp</item>
+    </style>
+    <style name="TapTap.BottomNavigation" parent="Widget.Material3.BottomNavigationView">
+        <item name="android:background">@color/navigation_surface</item>
+        <item name="android:minHeight">80dp</item><item name="elevation">0dp</item>
+        <item name="itemIconTint">@color/deck_navigation</item><item name="itemTextColor">@color/deck_navigation</item>
+        <item name="itemIconSize">24dp</item><item name="itemHorizontalTranslationEnabled">false</item>
+        <item name="itemPaddingTop">10dp</item><item name="itemPaddingBottom">10dp</item>
+        <item name="activeIndicatorLabelPadding">6dp</item>
+        <item name="itemTextAppearanceActive">@style/TextAppearance.TapTap.Navigation</item>
+        <item name="itemTextAppearanceInactive">@style/TextAppearance.TapTap.Navigation</item>
+        <item name="itemTextAppearanceActiveBoldEnabled">false</item>
+        <item name="labelFontScalingEnabled">true</item><item name="labelMaxLines">2</item>
+        <item name="itemActiveIndicatorStyle">@style/TapTap.NavigationIndicator</item>
+        <item name="itemRippleColor">#26D9FF00</item>
+    </style>
+    <style name="TextAppearance.TapTap.Navigation" parent="TextAppearance.TapTap.LabelMedium">
+        <item name="android:textSize">13sp</item><item name="android:textStyle">normal</item>
+        <item name="android:letterSpacing">0</item>
+    </style>
+    <style name="TapTap.NavigationIndicator" parent="Widget.Material3.BottomNavigationView.ActiveIndicator">
+        <item name="android:width">52dp</item><item name="android:height">32dp</item>
+        <item name="android:color">@color/navigation_indicator</item>
+    </style>
+    <style name="TapTap.Outlined" parent="Widget.Material3.Button.OutlinedButton">
+        <item name="android:minHeight">48dp</item><item name="cornerRadius">16dp</item>
+    </style>
+    <style name="TapTap.Compact" parent="TapTap.Outlined">
+        <item name="android:minWidth">0dp</item><item name="android:textSize">12sp</item>
+        <item name="android:paddingStart">2dp</item><item name="android:paddingEnd">2dp</item>
+        <item name="android:paddingTop">8dp</item><item name="android:paddingBottom">8dp</item>
+        <item name="android:insetTop">0dp</item><item name="android:insetBottom">0dp</item>
+        <item name="cornerRadius">12dp</item><item name="android:maxLines">2</item>
+        <item name="strokeColor">@color/line</item><item name="android:textColor">@color/ink</item>
+    </style>
 </resources>
