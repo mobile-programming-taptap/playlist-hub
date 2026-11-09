@@ -12,6 +12,7 @@ public class Track {
     public String language = "";
     public List<String> tags = new ArrayList<>();
     public String youtubeVideoId = "";
+    public String artworkUrl = "";
     public String source = "";
     public String sourceUrl = "";
     public String license = "";
@@ -31,6 +32,7 @@ public class Track {
         return id.matches("[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}") && !title.trim().isEmpty() && !artist.trim().isEmpty()
                 && "MusicBrainz".equals(source) && "CC0-1.0".equals(license) && aiUseAllowed
                 && sourceUrl.equals("https://musicbrainz.org/recording/" + id)
-                && (youtubeVideoId.isEmpty() || youtubeVideoId.matches("[A-Za-z0-9_-]{11}"));
+                && (youtubeVideoId.isEmpty() || youtubeVideoId.matches("[A-Za-z0-9_-]{11}"))
+                && artworkUrl != null && (artworkUrl.isEmpty() || artworkUrl.matches("https://coverartarchive\\.org/release/[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}/front-500"));
     }
 }
