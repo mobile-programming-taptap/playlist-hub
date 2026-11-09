@@ -1,6 +1,7 @@
 package com.mptaptap.server;
 
 import com.mptaptap.core.ImportMatch.PlatformTrack;
+import com.mptaptap.core.Track;
 import jakarta.annotation.PreDestroy;
 import java.io.IOException;
 import java.net.URI;
@@ -32,6 +33,10 @@ public class PlatformClient {
         RemotePlaylist(String id,String title,String url,List<PlatformTrack> tracks,boolean truncated){this(id,title,url,tracks,truncated,java.util.stream.IntStream.range(0,tracks.size()).boxed().toList(),List.of());}
     }
     public record Video(String videoId,String title,String description,int durationSeconds,String sourceUrl) {}
+    public record Playback(String videoId,boolean madeForKids,boolean embeddable,boolean playbackAllowed,String checkedAt,boolean requiresConfirmation,String candidateTitle,String candidateChannel,List<Playback> alternatives) {
+        Playback(String videoId,boolean madeForKids,boolean embeddable,boolean playbackAllowed,String checkedAt){this(videoId,madeForKids,embeddable,playbackAllowed,checkedAt,false,"","",List.of());}
+        Playback(String videoId,boolean madeForKids,boolean embeddable,boolean playbackAllowed,String checkedAt,boolean requiresConfirmation,String candidateTitle,String candidateChannel){this(videoId,madeForKids,embeddable,playbackAllowed,checkedAt,requiresConfirmation,candidateTitle,candidateChannel,List.of());}
+    }
     public record PlaylistSummary(String id,String title,int itemCount,String privacyStatus,String sourceUrl) {}
     public record PlaylistPage(String provider,List<PlaylistSummary> items,String nextCursor) {}
     static final class Failure extends RuntimeException {
@@ -58,9 +63,15 @@ public class PlatformClient {
     static String provider(String provider) { if(provider==null||!PROVIDERS.contains(provider))throw new IllegalArgumentException("지원하는 플랫폼을 선택해 주세요.");return provider; }
     String setting(String key) { return config.getOrDefault(key,""); }
     boolean configured(String provider) {
-        provider(provider);
-        String prefix=provider.equals("spotify")?"SPOTIFY":"GOOGLE";
-        return !setting(prefix+"_CLIENT_ID").isBlank()&&(provider.equals("spotify")||!setting(prefix+"_CLIENT_SECRET").isBlank())&&validRedirect(provider);
+        return configurationIssues(provider).isEmpty();
+    }
+    List<String> configurationIssues(String provider) {
+        provider(provider);String prefix=provider.equals("spotify")?"SPOTIFY":"GOOGLE";
+        List<String> issues=new ArrayList<>();
+        if(setting(prefix+"_CLIENT_ID").isBlank())issues.add(prefix+"_CLIENT_ID");
+        if(provider.equals("youtube")&&setting("GOOGLE_CLIENT_SECRET").isBlank())issues.add("GOOGLE_CLIENT_SECRET");
+        if(!validRedirect(provider)){issues.add("PUBLIC_BASE_URL");issues.add(prefix+"_REDIRECT_URI");}
+        return issues;
     }
     private boolean validRedirect(String provider) {
         try {
@@ -115,6 +126,105 @@ public class PlatformClient {
         try { duration=Math.toIntExact(Duration.parse(row.path("contentDetails").path("duration").asString()).getSeconds()); }
         catch(RuntimeException error){throw new Failure(502);}
         return new Video(id,row.path("snippet").path("title").asString(""),row.path("snippet").path("description").asString(""),duration,trackUrl("youtube",id));
+    }
+    List<String> videoComments(String id,String token) {
+        validId("youtube",id);
+        JsonNode rows=youtubeLookup("/commentThreads?part=snippet&videoId="+id+"&maxResults=100&order=relevance&textFormat=plainText",token).path("items");
+        if(!rows.isArray()||rows.size()>100)throw new Failure(502);
+        List<String> comments=new ArrayList<>();
+        for(JsonNode row:rows) {
+            String comment=row.path("snippet").path("topLevelComment").path("snippet").path("textDisplay").asString("");
+            if(!comment.isBlank()&&comment.length()<=com.mptaptap.core.VideoTimeline.MAX_DESCRIPTION_CHARS)comments.add(comment);
+        }
+        return comments;
+    }
+    Playback playback(String id,String token) {
+        validId("youtube",id);
+        if((token==null||token.isEmpty())&&setting("YOUTUBE_API_KEY").isEmpty())throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,"영상 재생 정보를 확인하려면 서버의 YouTube API 연결이 필요해요. YouTube에서 직접 열 수 있어요.");
+        String path="/videos?part=status&id="+id;
+        if(token==null||token.isEmpty())path+="&key="+encode(setting("YOUTUBE_API_KEY"));
+        JsonNode rows=api("youtube","GET",path,token,null).path("items");
+        if(!rows.isArray()||rows.size()>1)throw new Failure(502);
+        if(rows.isEmpty())throw new Failure(404);
+        JsonNode row=rows.get(0),status=row.path("status");
+        if(!id.equals(row.path("id").asString()))throw new Failure(502);
+        boolean kids=status.path("madeForKids").asBoolean(),embedded=status.path("embeddable").asBoolean();
+        return new Playback(id,kids,embedded,status.path("madeForKids").isBoolean()&&!kids&&status.path("embeddable").isBoolean()&&embedded,Instant.now().toString());
+    }
+    Playback findPlayback(Track track,String token) {return findPlayback(track,token,true);}
+    Playback findPlayback(Track track,String token,boolean includeCandidates) {
+        String query=track.title+" "+track.artist;
+        if(query.length()>1000)throw new IllegalArgumentException("곡 정보가 너무 길어요.");
+        JsonNode matches=youtubeLookup("/search?part=snippet&type=video&maxResults=50&q="+encode(query),token).path("items");
+        if(!matches.isArray())throw new Failure(502);
+        List<String> ids=new ArrayList<>();
+        for(JsonNode match:matches){String id=match.path("id").path("videoId").asString();if(id.matches("[A-Za-z0-9_-]{11}")&&!ids.contains(id))ids.add(id);}
+        if(ids.isEmpty())return null;
+        JsonNode videos=youtubeLookup("/videos?part=snippet,status&id="+String.join(",",ids),token).path("items");
+        if(!videos.isArray())throw new Failure(502);
+        Playback selected=null,candidate=null;List<Playback> alternatives=new ArrayList<>();
+        for(JsonNode video:videos) {
+            String id=video.path("id").asString();JsonNode snippet=video.path("snippet"),status=video.path("status");
+            if(!ids.contains(id)||!"public".equals(status.path("privacyStatus").asString()))continue;
+            boolean verified=matchesRecording(track,snippet);
+            String title=videoWords(snippet.path("title").asString()),artist=videoWords(track.artist),song=videoWords(track.title);
+            String padded=" "+title+" ";
+            boolean possible=!artist.isEmpty()&&!song.isEmpty()&&(title.startsWith(artist+" ")||title.endsWith(" "+artist))&&matchesVideoTitle(song,artist,title);
+            boolean approximate=!artist.isEmpty()&&!song.isEmpty()&&padded.contains(" "+artist+" ")&&padded.contains(" "+song+" ")
+                    &&title.matches(".*(?:\\b(?:official|music video|music clip|mv)\\b|m v|뮤직비디오).*" )
+                    &&!title.matches(".*(?:\\b(?:cover|live|remix|karaoke|demo|instrumental|short|teaser)\\b|ライブ|カバー|リミックス|커버|라이브|리믹스).*");
+            if(!verified&&!possible&&!approximate)continue;
+            boolean kids=status.path("madeForKids").asBoolean(),embedded=status.path("embeddable").asBoolean();
+            Playback result=new Playback(id,kids,embedded,status.path("madeForKids").isBoolean()&&!kids
+                    &&status.path("embeddable").isBoolean()&&embedded,Instant.now().toString());
+            if(verified){if(selected==null||!selected.playbackAllowed()&&result.playbackAllowed())selected=result;}
+            else {
+                Playback option=new Playback(id,kids,embedded,result.playbackAllowed(),result.checkedAt(),true,
+                    snippet.path("title").asString().substring(0,Math.min(200,snippet.path("title").asString().length())),
+                    snippet.path("channelTitle").asString().substring(0,Math.min(100,snippet.path("channelTitle").asString().length())));
+                if(candidate==null||!candidate.playbackAllowed()&&option.playbackAllowed())candidate=option;
+                if(option.playbackAllowed()&&alternatives.size()<5)alternatives.add(option);
+            }
+        }
+        if(selected!=null&&selected.playbackAllowed())return selected;
+        if(includeCandidates&&candidate!=null&&candidate.playbackAllowed()){
+            Playback chosen=candidate;alternatives.removeIf(option->option.videoId().equals(chosen.videoId()));
+            return new Playback(chosen.videoId(),chosen.madeForKids(),chosen.embeddable(),chosen.playbackAllowed(),chosen.checkedAt(),true,chosen.candidateTitle(),chosen.candidateChannel(),List.copyOf(alternatives));
+        }
+        return selected!=null?selected:includeCandidates?candidate:null;
+    }
+    private JsonNode youtubeLookup(String path,String token) {
+        if((token==null||token.isEmpty())&&setting("YOUTUBE_API_KEY").isBlank())throw new org.springframework.web.server.ResponseStatusException(
+                org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,"영상을 찾으려면 서버의 YouTube API 키 또는 YouTube 계정 연결이 필요해요.");
+        return api("youtube","GET",path+((token==null||token.isEmpty())?"&key="+encode(setting("YOUTUBE_API_KEY")):""),token,null);
+    }
+    private static boolean matchesRecording(Track track,JsonNode snippet) {
+        String song=videoWords(track.title),artist=videoWords(track.artist),title=videoWords(snippet.path("title").asString());
+        if(song.isEmpty()||artist.isEmpty())return false;
+        String description=org.springframework.web.util.HtmlUtils.htmlUnescape(snippet.path("description").asString());
+        boolean trustedChannel=false;
+        for(String part:snippet.path("channelTitle").asString().split("[/|｜]")) {
+            String channel=videoWords(part).replace(" ",""),name=artist.replace(" ","");
+            if(List.of(name,name+"vevo",name+"topic",name+"official","official"+name).contains(channel))trustedChannel=true;
+        }
+        boolean generated=description.startsWith("Provided to YouTube by ")&&description.contains("Auto-generated by YouTube.")
+                &&(" "+videoWords(description)+" ").contains(" "+artist+" ");
+        if(!trustedChannel&&!generated)return false;
+        if(matchesVideoTitle(song,artist,title))return true;
+        // Official channels sometimes put the original title in the first description line and translate the video title.
+        if(!trustedChannel||!title.matches(".*\\b(?:official|mv|music video)\\b.*")
+                ||title.matches(".*(?:\\b(?:cover|live|remix|karaoke|demo|instrumental|short)\\b|ライブ|カバー|リミックス|커버|라이브|리믹스).*"))return false;
+        return matchesVideoTitle(song,artist,videoWords(description.split("\\R",2)[0]));
+    }
+    private static boolean matchesVideoTitle(String song,String artist,String title) {
+        if(title.startsWith(artist+" "))title=title.substring(artist.length()+1);
+        else if(title.endsWith(" "+artist))title=title.substring(0,title.length()-artist.length()-1);
+        String format="(?:official(?: music)?(?: video| audio| lyrics?| lyric video)?|music video|audio|lyrics?|lyric video|mv|m v|visuali[sz]er|hd|hq|4k|8k|officialmusicvideo|officialvideo|officialaudio|뮤직비디오|공식 영상|공식 뮤직비디오)";
+        return title.matches("(?:"+format+" )*"+java.util.regex.Pattern.quote(song)+"(?: "+format+")*");
+    }
+    private static String videoWords(String value) {
+        return java.text.Normalizer.normalize(org.springframework.web.util.HtmlUtils.htmlUnescape(value),java.text.Normalizer.Form.NFKC)
+                .toLowerCase(java.util.Locale.ROOT).replaceAll("[^\\p{L}\\p{N}]+"," ").trim().replaceAll(" +"," ");
     }
     static String playlistCursor(String provider,String cursor) {
         provider(provider);if(cursor==null)return "";
@@ -176,17 +286,23 @@ public class PlatformClient {
         return new RemotePlaylist(id,title,"https://open.spotify.com/playlist/"+id,tracks,more,sourceIndices,skipped);
     }
     private RemotePlaylist youtubePlaylist(String id,String title,String token) {
-        List<PlatformTrack> tracks=new ArrayList<>();String pageToken="";
+        List<PlatformTrack> tracks=new ArrayList<>();List<Integer> sourceIndices=new ArrayList<>();List<SkippedItem> skipped=new ArrayList<>();String pageToken="";int sourceIndex=0;
+        var positions=new java.util.HashSet<Integer>();
         for(int page=0;page<10;page++) {
             JsonNode result=api("youtube","GET","/playlistItems?part=snippet,contentDetails&maxResults=50&playlistId="+id+(pageToken.isEmpty()?"":"&pageToken="+encode(pageToken)),token,null);
-            for(JsonNode row:result.path("items")) {
+            JsonNode items=result.path("items");if(!items.isArray()||items.size()>50)throw new Failure(502);
+            for(JsonNode row:items) {
+                JsonNode snippet=row.path("snippet"),position=snippet.path("position");int index=sourceIndex++;
+                if(!position.isMissingNode()){if(!position.isIntegralNumber()||position.asLong()<0||position.asLong()>1_000_000)throw new Failure(502);index=position.asInt();}
+                if(!positions.add(index))throw new Failure(502);
                 String video=row.path("contentDetails").path("videoId").asString(row.path("snippet").path("resourceId").path("videoId").asString(""));
-                if(!video.matches("[A-Za-z0-9_-]{11}"))continue;
-                tracks.add(track("youtube",video,row.path("snippet").path("title").asString(""),row.path("snippet").path("videoOwnerChannelTitle").asString(""),0,"",""));
+                String song=snippet.path("title").asString(""),artist=snippet.path("videoOwnerChannelTitle").asString("");
+                String reason=!video.matches("[A-Za-z0-9_-]{11}")?"플랫폼에서 유효한 영상 정보를 제공하지 않았어요.":song.isBlank()?"플랫폼에서 곡 정보를 제공하지 않았어요.":artist.isBlank()&&("Deleted video".equalsIgnoreCase(song)||"Private video".equalsIgnoreCase(song))?"삭제되었거나 비공개인 영상은 이전하지 않아요.":"";
+                if(reason.isEmpty()){tracks.add(track("youtube",video,song,artist,0,"",""));sourceIndices.add(index);}else skipped.add(new SkippedItem(index,reason));
             }
-            pageToken=result.path("nextPageToken").asString("");if(pageToken.isEmpty())break;
+            String next=result.path("nextPageToken").asString("");if(!next.isEmpty()&&next.equals(pageToken))throw new Failure(502);pageToken=next;if(pageToken.isEmpty())break;
         }
-        return new RemotePlaylist(id,title,"https://www.youtube.com/playlist?list="+id,tracks,!pageToken.isEmpty());
+        return new RemotePlaylist(id,title,"https://www.youtube.com/playlist?list="+id,tracks,!pageToken.isEmpty(),sourceIndices,skipped);
     }
     List<PlatformTrack> search(String provider,PlatformTrack source,Tokens tokens) {
         provider(provider);
@@ -196,8 +312,8 @@ public class PlatformClient {
             if(source.isrc!=null&&!source.isrc.isEmpty())query="isrc:"+source.isrc;
             for(JsonNode row:api(provider,"GET","/search?type=track&limit=10&q="+encode(query),tokens.accessToken(),null).path("tracks").path("items"))result.add(spotifyTrack(row));
         }else {
-            for(JsonNode row:api(provider,"GET","/search?part=snippet&type=video&maxResults=5&q="+encode(query),tokens.accessToken(),null).path("items")) {
-                String id=row.path("id").path("videoId").asString("");if(id.matches("[A-Za-z0-9_-]{11}"))result.add(track(provider,id,row.path("snippet").path("title").asString(""),row.path("snippet").path("channelTitle").asString(""),0,"",""));
+            for(JsonNode row:youtubeLookup("/search?part=snippet&type=video&maxResults=5&q="+encode(query),tokens==null?null:tokens.accessToken()).path("items")) {
+                String id=row.path("id").path("videoId").asString("");if(id.matches("[A-Za-z0-9_-]{11}"))result.add(track(provider,id,org.springframework.web.util.HtmlUtils.htmlUnescape(row.path("snippet").path("title").asString("")),org.springframework.web.util.HtmlUtils.htmlUnescape(row.path("snippet").path("channelTitle").asString("")),0,"",""));
             }
         }
         return result;
@@ -228,7 +344,8 @@ public class PlatformClient {
     List<String> existingIds(String provider,String id,Tokens tokens) {
         validPlaylistId(provider,id);
         RemotePlaylist p=provider.equals("spotify")?spotifyPlaylist(id,"",tokens.accessToken()):youtubePlaylist(id,"",tokens.accessToken());
-        if(p.truncated())throw new Failure(409);
+        if(p.truncated()||!p.skippedItems().isEmpty())throw new Failure(409);
+        for(int i=0;i<p.sourceIndices().size();i++)if(p.sourceIndices().get(i)!=i)throw new Failure(409);
         return p.tracks().stream().map(t->t.externalId).toList();
     }
     void add(String provider,String playlist,String externalId,Tokens tokens) {
@@ -294,5 +411,5 @@ public class PlatformClient {
     private static PlatformTrack track(String platform,String id,String title,String artist,long duration,String isrc,String album) {
         PlatformTrack t=new PlatformTrack();t.platform=platform;t.externalId=id;t.title=title;t.artist=artist;t.durationMs=duration;t.isrc=isrc;t.album=album;t.version="";t.sourceUrl=trackUrl(platform,id);return t;
     }
-    private static String trackUrl(String provider,String id) { provider(provider);return provider.equals("spotify")?"https://open.spotify.com/track/"+id:"https://www.youtube.com/watch?v="+id; }
+    static String trackUrl(String provider,String id) { provider(provider);return provider.equals("spotify")?"https://open.spotify.com/track/"+id:"https://www.youtube.com/watch?v="+id; }
 }
