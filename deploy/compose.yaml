@@ -1,0 +1,77 @@
+name: taptap
+services:
+  database:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: taptap
+      POSTGRES_USER: ${DATABASE_USER:-taptap}
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:?DATABASE_PASSWORD must be set in the private env file}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - storage
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  app:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ${TAPTAP_ENV_FILE:-../backend/.env}
+    environment:
+      SERVER_ADDRESS: 0.0.0.0
+      SERVER_FORWARD_HEADERS_STRATEGY: native
+      PORT: "8080"
+      DATABASE_URL: jdbc:postgresql://database:5432/taptap
+      DATABASE_USER: ${DATABASE_USER:-taptap}
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD:?DATABASE_PASSWORD must be set in the private env file}
+      PUBLIC_BASE_URL: https://${DOMAIN:?DOMAIN must be a real public hostname}
+    depends_on:
+      database:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      edge:
+        gw_priority: 1
+      storage: {}
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:?DOMAIN must be a real public hostname}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+    networks:
+      - edge
+
+networks:
+  edge:
+  storage:
+    internal: true
+
+volumes:
+  postgres_data:
+  caddy_data:
+  caddy_config:

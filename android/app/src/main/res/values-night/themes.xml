@@ -1,7 +1,27 @@
-<resources xmlns:tools="http://schemas.android.com/tools">
-    <!-- Base application theme. -->
-    <style name="Base.Theme.TapTap" parent="Theme.Material3.DayNight.NoActionBar">
-        <!-- Customize your dark theme here. -->
-        <!-- <item name="colorPrimary">@color/my_dark_primary</item> -->
+<resources>
+    <style name="Theme.TapTap" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/accent</item><item name="colorOnPrimary">@color/on_accent</item>
+        <item name="colorPrimaryContainer">@color/soft_accent</item><item name="colorOnPrimaryContainer">@color/accent</item>
+        <item name="colorSecondary">@color/teal</item><item name="colorOnSecondary">@color/on_teal</item>
+        <item name="colorSecondaryContainer">@color/soft_teal</item><item name="colorOnSecondaryContainer">@color/teal</item>
+        <item name="colorSurface">@color/surface</item>
+        <item name="colorOnSurface">@color/ink</item><item name="android:colorBackground">@color/background</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:textAppearanceSmall">@style/TextAppearance.TapTap.Default</item>
+        <item name="android:textAppearanceMediumInverse">@style/TextAppearance.TapTap.Input</item>
+        <item name="textAppearanceBodyLarge">@style/TextAppearance.TapTap.BodyLarge</item>
+        <item name="textAppearanceBodyMedium">@style/TextAppearance.TapTap.BodyMedium</item>
+        <item name="textAppearanceBodySmall">@style/TextAppearance.TapTap.BodySmall</item>
+        <item name="textAppearanceLabelLarge">@style/TextAppearance.TapTap.LabelLarge</item>
+        <item name="textAppearanceLabelMedium">@style/TextAppearance.TapTap.LabelMedium</item>
+        <item name="textAppearanceLabelSmall">@style/TextAppearance.TapTap.LabelSmall</item>
+        <item name="textAppearanceTitleLarge">@style/TextAppearance.TapTap.TitleLarge</item>
+        <item name="textAppearanceTitleMedium">@style/TextAppearance.TapTap.TitleMedium</item>
+        <item name="textAppearanceTitleSmall">@style/TextAppearance.TapTap.TitleSmall</item>
+        <item name="textAppearanceHeadlineSmall">@style/TextAppearance.TapTap.HeadlineSmall</item>
+        <item name="android:navigationBarColor">@color/background</item>
+        <item name="materialAlertDialogTheme">@style/ThemeOverlay.TapTap.Dialog</item>
+        <item name="bottomNavigationStyle">@style/TapTap.BottomNavigation</item>
+        <item name="elevationOverlayEnabled">false</item>
     </style>
 </resources>

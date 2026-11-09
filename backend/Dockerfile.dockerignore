@@ -1,0 +1,18 @@
+# Allow only build inputs; private .env, databases, APKs and Git never leave the host.
+**
+!android/
+!android/gradlew
+!android/gradle/
+!android/gradle/wrapper/
+!android/gradle/wrapper/**
+!backend/
+!backend/build.gradle.kts
+!backend/settings.gradle.kts
+!backend/src/
+!backend/src/**
+!core/
+!core/build.gradle.kts
+!core/src/
+!core/src/**
+!catalog/
+!catalog/**
