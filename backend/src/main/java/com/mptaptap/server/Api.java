@@ -70,7 +70,7 @@ public class Api {
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"AI 연결이 원활하지 않아요. 같은 요청으로 다시 시도해 주세요.");
         }
         List<Track> verified;
-        try {verified=catalogue.resolve(plan.candidates());}
+        try {verified=catalogue.resolve(plan.candidates(),java.time.Duration.ofNanos(Math.max(1,deadline-System.nanoTime())));}
         catch(InterruptedException error){Thread.currentThread().interrupt();throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"곡 확인 요청이 중단됐어요. 같은 요청으로 다시 시도해 주세요.");}
         catch(Exception error){
             String reason=error.getMessage();
@@ -85,7 +85,8 @@ public class Api {
         Recommender.Result result=Conversation.recommend(new ArrayList<>(candidates.values()),plan.conditions(),feedback,"openai",body.keptTrackIds(),body.excludedTrackIds());
         var verifiedIds=verified.stream().map(track->track.id).collect(java.util.stream.Collectors.toSet());
         int proposed=plan.candidates().size();
-        long remaining=deadline-System.nanoTime()-java.time.Duration.ofSeconds(12).toNanos();
+        // Reserve one recording lookup; its retries must fit the same overall deadline.
+        long remaining=deadline-System.nanoTime()-java.time.Duration.ofSeconds(6).toNanos();
         if(result.tracks.size()<7&&verified.size()<proposed&&proposed>=7&&remaining>java.time.Duration.ofSeconds(2).toNanos()&&store.reserveAi(user)) {
             try {
                 OpenAi.Plan extra=ai.supplement(body.prompt(),body.history(),plan.conditions(),likedTags,plan.candidates(),
@@ -93,7 +94,7 @@ public class Api {
                 var previous=plan.candidates().stream().map(song->song.title()+"|"+song.artist()).collect(java.util.stream.Collectors.toSet());
                 var fresh=extra.candidates().stream().filter(song->!previous.contains(song.title()+"|"+song.artist())).toList();
                 proposed+=fresh.size();
-                for(Track track:catalogue.resolve(fresh)){candidates.putIfAbsent(track.id,track);verifiedIds.add(track.id);}
+                for(Track track:catalogue.resolve(fresh,java.time.Duration.ofNanos(Math.max(1,deadline-System.nanoTime())))){candidates.putIfAbsent(track.id,track);verifiedIds.add(track.id);}
                 result=Conversation.recommend(new ArrayList<>(candidates.values()),plan.conditions(),feedback,"openai",body.keptTrackIds(),body.excludedTrackIds());
             } catch(InterruptedException interrupted){Thread.currentThread().interrupt();throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"AI 요청이 중단됐어요. 같은 요청으로 다시 시도해 주세요.");}
             catch(Exception error){org.slf4j.LoggerFactory.getLogger(Api.class).warn("Supplementary recommendation failed: {}",error.getClass().getSimpleName());}

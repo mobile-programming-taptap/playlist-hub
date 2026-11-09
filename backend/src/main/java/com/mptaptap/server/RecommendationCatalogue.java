@@ -74,6 +74,11 @@ final class RecommendationCatalogue {
     }
 
     List<Track> resolve(List<OpenAi.Suggestion> candidates) throws Exception {
+        return resolve(candidates,Duration.ofSeconds(12));
+    }
+
+    List<Track> resolve(List<OpenAi.Suggestion> candidates,Duration timeout) throws Exception {
+        long deadline=System.nanoTime()+Math.min(Duration.ofSeconds(12).toNanos(),timeout.toNanos());
         if(candidates.isEmpty())return List.of();
         if(candidates.size()>12)throw new IllegalArgumentException("Too many song candidates");
         List<Track> known=all();List<OpenAi.Suggestion> missing=new ArrayList<>();
@@ -93,7 +98,7 @@ final class RecommendationCatalogue {
         if(missing.isEmpty()){List<Track> result=new ArrayList<>(verified.values());remember(result);return result;}
         String query=missing.stream().map(song->"(recording:"+literal(song.title())+" AND artist:"+literal(song.artist())+")")
                 .collect(Collectors.joining(" OR "));
-        JsonNode rows=search(query).path("recordings");
+        JsonNode rows=search(query,deadline).path("recordings");
         for(OpenAi.Suggestion song:missing) {
             for(JsonNode row:rows) {
                 String id=row.path("id").asString(),title=row.path("title").asString();
@@ -133,9 +138,9 @@ final class RecommendationCatalogue {
     }
 
     // ponytail: one application instance shares the official one-request/second gate; coordinate instances if deployed as a cluster.
-    private JsonNode search(String query) throws Exception {
-        long deadline=System.nanoTime()+Duration.ofSeconds(12).toNanos();
-        if(!searchLock.tryLock(2,java.util.concurrent.TimeUnit.SECONDS))throw new IllegalStateException("CATALOGUE_BUSY");
+    private JsonNode search(String query,long deadline) throws Exception {
+        long budget=deadline-System.nanoTime();
+        if(budget<=0||!searchLock.tryLock(Math.min(Duration.ofSeconds(2).toNanos(),budget),java.util.concurrent.TimeUnit.NANOSECONDS))throw new IllegalStateException("CATALOGUE_BUSY");
         try {
             for(int attempt=0;attempt<2;attempt++) {
                 long remaining=nextRequest-System.nanoTime();if(remaining>0){if(remaining>=deadline-System.nanoTime())throw new IllegalStateException("CATALOGUE_BUSY");Thread.sleep(Duration.ofNanos(remaining));}
