@@ -32,6 +32,11 @@ import tools.jackson.databind.ObjectMapper;
 
 @Component
 public class Store {
+    static final java.time.Duration ACCOUNT_SESSION_LIFETIME=java.time.Duration.ofDays(30);
+    static final class SessionExpired extends ResponseStatusException {
+        SessionExpired(){super(HttpStatus.UNAUTHORIZED,"로그인이 만료됐어요. 다시 로그인해 주세요.");}
+    }
+    static String errorCode(ResponseStatusException error,String fallback){return error instanceof SessionExpired?"SESSION_EXPIRED":fallback;}
     private final JdbcTemplate db;
     private final ObjectMapper json;
     private final TransactionTemplate tx;
@@ -39,8 +44,11 @@ public class Store {
     private final int dailyLimit;
     private final int hourlyLimit;
     private final Map<String, AuthFailures> authFailures = new LinkedHashMap<>();
+    private final Object[] ownerLocks=java.util.stream.IntStream.range(0,64).mapToObj(i->new Object()).toArray();
     private final String dummyPasswordHash = passwordHash("not-an-account-password");
     private record AuthFailures(int count, Instant since) {}
+    // shortcut: bounded lock stripes can collide, use keyed locks if independent-owner contention becomes material.
+    Object ownerLock(String user){return ownerLocks[(user.hashCode()&Integer.MAX_VALUE)%ownerLocks.length];}
 
     Store(JdbcTemplate db, PlatformTransactionManager manager, ObjectMapper json,
           @Value("${taptap.ai.daily-limit}") int dailyLimit,
@@ -58,8 +66,22 @@ public class Store {
     }
 
     public String user(String authorization) {
+        return user(authorization,Instant.now());
+    }
+
+    String user(String authorization,Instant now) {
         String tokenHash = tokenHash(authorization);
-        List<String> ids = db.query("SELECT user_id FROM account_sessions WHERE token_hash=?", (rs, row) -> rs.getString(1), tokenHash);
+        record Session(String user,Instant created){}
+        List<Session> sessions=db.query("SELECT user_id,created_at FROM account_sessions WHERE token_hash=?",(rs,row)->new Session(rs.getString(1),Instant.parse(rs.getString(2))),tokenHash);
+        if(!sessions.isEmpty()){
+            Session session=sessions.get(0);
+            if(!session.created().plus(ACCOUNT_SESSION_LIFETIME).isAfter(now)){
+                db.update("DELETE FROM account_sessions WHERE token_hash=?",tokenHash);
+                throw new SessionExpired();
+            }
+            return session.user();
+        }
+        List<String> ids = List.of();
         if (ids.isEmpty()) ids = db.query("SELECT u.id FROM users u WHERE u.token_hash=? AND NOT EXISTS (SELECT 1 FROM accounts a WHERE a.user_id=u.id)", (rs, row) -> rs.getString(1), tokenHash);
         if (ids.isEmpty()) throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "앱을 다시 연결해 주세요.");
         return ids.get(0);
@@ -99,7 +121,7 @@ public class Store {
         email = email(email);
         if (password == null || password.length() > 128) throw new IllegalArgumentException("이메일과 비밀번호를 확인해 주세요.");
         checkAuthLimit(email,address);
-        List<Map<String,String>> rows = db.query("SELECT user_id,password_hash FROM accounts WHERE email=?",(rs,row)->Map.of("id",rs.getString(1),"hash",rs.getString(2)),email);
+        List<Map<String,String>> rows = db.query("SELECT user_id,password_hash FROM accounts WHERE email=? AND password_hash IS NOT NULL",(rs,row)->Map.of("id",rs.getString(1),"hash",rs.getString(2)),email);
         boolean matches = passwordMatches(password,rows.isEmpty() ? dummyPasswordHash : rows.get(0).get("hash"));
         if (rows.isEmpty() || !matches) {
             failedAuth(email,address);
@@ -109,8 +131,36 @@ public class Store {
         return accountSession(rows.get(0).get("id"));
     }
 
+    public synchronized void beginKakaoAttempt(String token,String address) {
+        KakaoClient.validateToken(token);
+        String identity="kakao:"+hash(token);
+        checkAuthLimit(identity,address);failedAuth(identity,address);
+    }
+
+    public synchronized Map<String,String> kakaoLogin(String authorization,KakaoClient.Identity identity,String accessToken) {
+        List<String> existing=db.query("SELECT user_id FROM social_accounts WHERE provider='kakao' AND subject=?",(rs,row)->rs.getString(1),identity.subject());
+        Map<String,String> result=tx.execute(status->{
+            String id;
+            if(!existing.isEmpty()) {
+                id=existing.get(0);
+                db.update("UPDATE accounts SET name=? WHERE user_id=?",identity.name(),id);
+                db.update("UPDATE social_accounts SET profile_email=? WHERE provider='kakao' AND subject=?",identity.email().isEmpty()?null:identity.email(),identity.subject());
+            } else {
+                String owner=authorization==null||authorization.isBlank()?null:user(authorization);
+                if(owner!=null&&db.queryForObject("SELECT COUNT(*) FROM accounts WHERE user_id=?",Integer.class,owner)>0)
+                    throw new ResponseStatusException(HttpStatus.CONFLICT,"로그아웃한 뒤 카카오 계정으로 로그인해 주세요.");
+                id=owner==null?register().get("userId"):owner;
+                db.update("INSERT INTO accounts (user_id,email,name,password_hash,created_at) VALUES (?,NULL,?,NULL,?)",id,identity.name(),Instant.now().toString());
+                db.update("INSERT INTO social_accounts (provider,subject,user_id,profile_email) VALUES ('kakao',?,?,?)",identity.subject(),id,identity.email().isEmpty()?null:identity.email());
+            }
+            return accountSession(id);
+        });
+        authFailures.remove("email:"+hash("kakao:"+hash(accessToken)));
+        return result;
+    }
+
     public Map<String,String> account(String user) {
-        List<Map<String,String>> rows = db.query("SELECT user_id,email,name FROM accounts WHERE user_id=?",(rs,row)->Map.of("userId",rs.getString(1),"email",rs.getString(2),"name",rs.getString(3)),user);
+        List<Map<String,String>> rows = db.query("SELECT a.user_id,COALESCE(a.email,s.profile_email,''),a.name,CASE WHEN a.password_hash IS NULL AND s.provider='kakao' THEN 'kakao' ELSE 'email' END FROM accounts a LEFT JOIN social_accounts s ON s.user_id=a.user_id AND s.provider='kakao' WHERE a.user_id=?",(rs,row)->Map.of("userId",rs.getString(1),"email",rs.getString(2),"name",rs.getString(3),"authProvider",rs.getString(4)),user);
         if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND,"아직 가입한 계정이 없어요.");
         return rows.get(0);
     }
@@ -130,6 +180,7 @@ public class Store {
 
     public synchronized void deleteAccount(String authorization, String password, String address) {
         String owner = user(authorization); Map<String,String> profile = account(owner);
+        if(profile.get("authProvider").equals("kakao"))throw new ResponseStatusException(HttpStatus.UNAUTHORIZED,"카카오 계정을 다시 확인한 뒤 탈퇴해 주세요.");
         checkAuthLimit(profile.get("email"),address);
         String encoded = db.queryForObject("SELECT password_hash FROM accounts WHERE user_id=?",String.class,owner);
         if (password == null || password.length() > 128 || !passwordMatches(password,encoded)) {
@@ -137,6 +188,20 @@ public class Store {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED,"비밀번호가 맞지 않아요.");
         }
         tx.executeWithoutResult(status -> db.update("DELETE FROM users WHERE id=?",owner));
+    }
+
+    public synchronized void deleteAnonymous(String authorization) {
+        String owner=user(authorization);
+        if(db.queryForObject("SELECT COUNT(*) FROM accounts WHERE user_id=?",Integer.class,owner)!=0)
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,"가입한 계정은 본인 확인 후 삭제해 주세요.");
+        tx.executeWithoutResult(status->db.update("DELETE FROM users WHERE id=?",owner));
+    }
+
+    public synchronized void deleteKakaoAccount(String authorization,KakaoClient.Identity identity) {
+        String owner=user(authorization);account(owner);
+        if(db.queryForObject("SELECT COUNT(*) FROM social_accounts s JOIN accounts a ON a.user_id=s.user_id WHERE s.provider='kakao' AND s.subject=? AND s.user_id=? AND a.password_hash IS NULL",Integer.class,identity.subject(),owner)!=1)
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,"로그인한 카카오 계정과 확인한 계정이 달라요. 같은 계정으로 다시 확인해 주세요.");
+        tx.executeWithoutResult(status->db.update("DELETE FROM users WHERE id=?",owner));
     }
 
     private static String email(String value) {
@@ -164,6 +229,7 @@ public class Store {
     }
 
     private static boolean passwordMatches(String password, String encoded) {
+        if(password==null||encoded==null)return false;
         try {
             String[] parts = encoded.split("\\$");
             if (parts.length!=4 || !parts[0].equals("pbkdf2-sha256") || !parts[1].equals("600000")) return false;
@@ -500,14 +566,81 @@ public class Store {
         return result;
     }
 
+    static final String COMMUNITY_RULES_VERSION="community-v1";
+    static final Map<String,String> COMMUNITY_REPORT_REASONS=Map.of("spam","스팸·광고","harassment","괴롭힘·개인정보 침해","hate","혐오·차별","sexual","성적·아동 유해 콘텐츠","violence","폭력·위협","copyright","저작권 침해","other","기타");
+    public synchronized boolean rulesAccepted(String user){return db.queryForObject("SELECT COUNT(*) FROM community_rules_acceptance WHERE user_id=? AND rules_version=?",Integer.class,user,COMMUNITY_RULES_VERSION)>0;}
+    public synchronized Map<String,Object> communityAcceptance(String user){return Map.of("version",COMMUNITY_RULES_VERSION,"accepted",rulesAccepted(user));}
+    public synchronized Map<String,Object> acceptCommunityRules(String user,String version,Boolean accepted){
+        if(!COMMUNITY_RULES_VERSION.equals(version)||accepted==null)throw new IllegalArgumentException("현재 공개 목록 이용 규칙과 동의 여부를 확인해 주세요.");
+        tx.executeWithoutResult(status->{db.update("DELETE FROM community_rules_acceptance WHERE user_id=?",user);if(accepted)db.update("INSERT INTO community_rules_acceptance VALUES (?,?,?)",user,version,Instant.now().toString());});
+        return communityAcceptance(user);
+    }
+    private record PublicTarget(String playlist,String owner,String author){}
+    private PublicTarget publicTarget(String shareId){
+        if(shareId==null||!shareId.matches("[0-9a-f]{32}"))throw new ResponseStatusException(HttpStatus.NOT_FOUND,"공개 목록을 찾을 수 없어요.");
+        var rows=db.query("SELECT l.id,l.user_id,p.snapshot_json FROM public_playlists p JOIN playlists l ON l.id=p.playlist_id WHERE p.share_id=? AND NOT EXISTS(SELECT 1 FROM community_hidden_playlists h WHERE h.playlist_id=p.playlist_id)",(rs,n)->new PublicTarget(rs.getString(1),rs.getString(2),(String)readMap(rs.getString(3)).get("author")),shareId);
+        if(rows.isEmpty())throw new ResponseStatusException(HttpStatus.NOT_FOUND,"공개 목록을 찾을 수 없어요.");return rows.get(0);
+    }
+    public synchronized Map<String,Object> reportPublic(String user,String shareId,String target,String reason,String details){
+        return reportPublic(user,shareId,target,reason,details,Instant.now());
+    }
+    synchronized Map<String,Object> reportPublic(String user,String shareId,String target,String reason,String details,Instant now){
+        if(!List.of("playlist","author").contains(target==null?"":target)||!COMMUNITY_REPORT_REASONS.containsKey(reason==null?"":reason))throw new IllegalArgumentException("신고 대상과 사유를 선택해 주세요.");
+        String note=details==null?"":details.strip();if(note.length()>500)throw new IllegalArgumentException("신고 내용은 500자 이내로 입력해 주세요.");
+        var replay=db.query("SELECT id,status FROM community_reports WHERE reporter_user_id=? AND target_kind=? AND share_id=?",(rs,n)->Map.<String,Object>of("reportId",rs.getString(1),"status",rs.getString(2),"duplicate",true),user,target,shareId);
+        if(!replay.isEmpty())return replay.get(0);
+        PublicTarget source=publicTarget(shareId);if(source.owner().equals(user))throw new IllegalArgumentException("본인의 공개 목록이나 계정은 신고할 수 없어요.");
+        String key=target.equals("author")?source.owner():source.playlist();
+        var existing=db.query("SELECT id,status FROM community_reports WHERE reporter_user_id=? AND target_kind=? AND target_key=?",(rs,n)->Map.<String,Object>of("reportId",rs.getString(1),"status",rs.getString(2),"duplicate",true),user,target,key);
+        if(!existing.isEmpty())return existing.get(0);
+        Instant cutoff=now.minus(1,ChronoUnit.DAYS);
+        long daily=db.query("SELECT created_at FROM community_reports WHERE reporter_user_id=? AND created_at>=?",(rs,n)->Instant.parse(rs.getString(1)),user,cutoff.toString().substring(0,10)).stream().filter(at->!at.isBefore(cutoff)).count();
+        if(daily>=10)throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS,"하루에 새 신고는 최대 10건 접수할 수 있어요.");
+        String id=UUID.randomUUID().toString();db.update("INSERT INTO community_reports (id,reporter_user_id,reported_user_id,share_id,playlist_id,target_kind,target_key,reason,details,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,'OPEN',?)",id,user,source.owner(),shareId,source.playlist(),target,key,reason,note,now.toString());
+        return Map.of("reportId",id,"status","OPEN","duplicate",false);
+    }
+    public synchronized Map<String,Object> blockPublicAuthor(String user,String shareId){
+        PublicTarget source=publicTarget(shareId);if(source.owner().equals(user))throw new IllegalArgumentException("본인의 계정은 차단할 수 없어요.");
+        var existing=db.query("SELECT id,author_label FROM community_author_blocks WHERE user_id=? AND blocked_user_id=?",(rs,n)->Map.<String,Object>of("blockId",rs.getString(1),"author",rs.getString(2)),user,source.owner());
+        if(!existing.isEmpty())return existing.get(0);
+        if(db.queryForObject("SELECT COUNT(*) FROM community_author_blocks WHERE user_id=?",Integer.class,user)>=200)throw new ResponseStatusException(HttpStatus.CONFLICT,"차단한 계정이 많아요. 차단 관리에서 기존 항목을 정리해 주세요.");
+        String id=UUID.randomUUID().toString();db.update("INSERT INTO community_author_blocks VALUES (?,?,?,?,?)",id,user,source.owner(),source.author(),Instant.now().toString());return Map.of("blockId",id,"author",source.author());
+    }
+    public synchronized List<Map<String,Object>> communityBlocks(String user){return db.query("SELECT id,author_label FROM community_author_blocks WHERE user_id=? ORDER BY created_at DESC,id",(rs,n)->Map.<String,Object>of("blockId",rs.getString(1),"author",rs.getString(2)),user);}
+    public synchronized void unblockCommunityAuthor(String user,String id){if(db.update("DELETE FROM community_author_blocks WHERE user_id=? AND id=?",user,id)!=1)throw new ResponseStatusException(HttpStatus.NOT_FOUND,"차단 항목을 찾을 수 없어요.");}
+    public synchronized List<Map<String,Object>> moderationReports(String status){
+        if(!List.of("OPEN","DISMISSED","HIDDEN").contains(status))throw new IllegalArgumentException("신고 상태를 확인해 주세요.");
+        return db.query("SELECT id,share_id,target_kind,reason,details,status,created_at FROM community_reports WHERE status=? ORDER BY created_at,id LIMIT 100",(rs,n)->Map.<String,Object>of("reportId",rs.getString(1),"shareId",rs.getString(2),"target",rs.getString(3),"reason",rs.getString(4),"details",rs.getString(5),"status",rs.getString(6),"createdAt",rs.getString(7)),status);
+    }
+    public synchronized Map<String,Object> moderateReport(String id,String action){
+        if(!List.of("dismiss","hide").contains(action==null?"":action))throw new IllegalArgumentException("신고 처리 방식을 확인해 주세요.");
+        var rows=db.query("SELECT reported_user_id,playlist_id,target_kind,status FROM community_reports WHERE id=?",(rs,n)->Map.of("owner",rs.getString(1),"playlist",rs.getString(2),"target",rs.getString(3),"status",rs.getString(4)),id);
+        if(rows.isEmpty())throw new ResponseStatusException(HttpStatus.NOT_FOUND,"신고를 찾을 수 없어요.");
+        var report=rows.get(0);String outcome=action.equals("hide")?"HIDDEN":"DISMISSED";
+        if(!"OPEN".equals(report.get("status"))){if(!outcome.equals(report.get("status")))throw new ResponseStatusException(HttpStatus.CONFLICT,"이미 처리한 신고예요.");return Map.of("reportId",id,"status",outcome,"hiddenPublications",0);}
+        return tx.execute(ignored->{
+            int hidden=0;
+            if(action.equals("hide")){
+                List<String> targets=report.get("target").equals("author")?db.query("SELECT p.playlist_id FROM public_playlists p JOIN playlists l ON l.id=p.playlist_id WHERE l.user_id=?",(rs,n)->rs.getString(1),report.get("owner")):db.query("SELECT id FROM playlists WHERE id=? AND user_id=?",(rs,n)->rs.getString(1),report.get("playlist"),report.get("owner"));
+                for(String playlist:targets)if(db.queryForObject("SELECT COUNT(*) FROM community_hidden_playlists WHERE playlist_id=?",Integer.class,playlist)==0){hidden+=db.queryForObject("SELECT COUNT(*) FROM public_playlists WHERE playlist_id=?",Integer.class,playlist);db.update("INSERT INTO community_hidden_playlists VALUES (?,?)",playlist,Instant.now().toString());}
+            }
+            db.update("UPDATE community_reports SET status=?,reviewed_at=? WHERE id=?",outcome,Instant.now().toString(),id);
+            return Map.of("reportId",id,"status",outcome,"hiddenPublications",hidden);
+        });
+    }
+
     public synchronized Map<String,Object> publication(String user, String playlist) {
         ownedPlaylist(user,playlist);
         List<String> ids = db.query("SELECT share_id FROM public_playlists WHERE playlist_id=?",(rs,row)->rs.getString(1),playlist);
-        return ids.isEmpty()?Map.of("public",false,"shareId","","sharePath",""):Map.of("public",true,"shareId",ids.get(0),"sharePath","/share/"+ids.get(0));
+        boolean hidden=db.queryForObject("SELECT COUNT(*) FROM community_hidden_playlists WHERE playlist_id=?",Integer.class,playlist)>0;
+        boolean visible=!ids.isEmpty()&&!hidden;
+        return Map.of("public",visible,"shareId",visible?ids.get(0):"","sharePath",visible?"/share/"+ids.get(0):"","rulesVersion",COMMUNITY_RULES_VERSION,"rulesAccepted",rulesAccepted(user),"moderationHidden",hidden);
     }
 
     public synchronized Map<String,Object> publish(String user, String playlist, boolean visible) {
         ownedPlaylist(user,playlist);
+        if(visible&&!rulesAccepted(user))throw new ResponseStatusException(HttpStatus.CONFLICT,"공개 목록 이용 규칙을 확인하고 동의한 뒤 공개해 주세요.");
+        if(visible&&db.queryForObject("SELECT COUNT(*) FROM community_hidden_playlists WHERE playlist_id=?",Integer.class,playlist)>0)throw new ResponseStatusException(HttpStatus.FORBIDDEN,"운영 검토로 숨겨진 목록은 다시 공개할 수 없어요.");
         return tx.execute(status -> {
             if (!visible) db.update("DELETE FROM public_playlists WHERE playlist_id=?",playlist);
             else {
@@ -534,12 +667,15 @@ public class Store {
 
     public synchronized Map<String,Object> publicPlaylist(String shareId, String user) {
         if (shareId==null || !shareId.matches("[0-9a-f]{32}")) throw new ResponseStatusException(HttpStatus.NOT_FOUND,"공개 목록을 찾을 수 없어요.");
-        List<Map<String,Object>> rows = db.query("SELECT snapshot_json,published_at FROM public_playlists WHERE share_id=?",(rs,row)->Map.of("snapshot",rs.getString(1),"at",rs.getString(2)),shareId);
+        List<Map<String,Object>> rows = db.query("SELECT p.snapshot_json,p.published_at,l.user_id FROM public_playlists p JOIN playlists l ON l.id=p.playlist_id WHERE p.share_id=? AND NOT EXISTS(SELECT 1 FROM community_hidden_playlists h WHERE h.playlist_id=p.playlist_id)",(rs,row)->Map.of("snapshot",rs.getString(1),"at",rs.getString(2),"owner",rs.getString(3)),shareId);
         if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND,"공개 목록을 찾을 수 없어요.");
+        String author=(String)rows.get(0).get("owner");
+        if(user!=null&&db.queryForObject("SELECT COUNT(*) FROM community_author_blocks WHERE user_id=? AND blocked_user_id=?",Integer.class,user,author)>0)throw new ResponseStatusException(HttpStatus.NOT_FOUND,"공개 목록을 찾을 수 없어요.");
         Map<String,Object> result = readMap((String)rows.get(0).get("snapshot")); expirePublic(result);
         result.put("shareId",shareId); result.put("sharePath","/share/"+shareId); result.put("publishedAt",rows.get(0).get("at"));
         result.put("favourites",favouriteCount(shareId));
         result.put("favourited",user!=null && db.queryForObject("SELECT COUNT(*) FROM playlist_favourites WHERE user_id=? AND share_id=?",Integer.class,user,shareId)>0);
+        result.put("isOwner",author.equals(user));
         return result;
     }
 
@@ -548,7 +684,9 @@ public class Store {
         if (query==null || query.length()>100 || !List.of("popular","recent").contains(sort)) throw new IllegalArgumentException("검색어나 정렬 방식을 확인해 주세요.");
         if (onlyFavourites && user==null) throw new ResponseStatusException(HttpStatus.UNAUTHORIZED,"앱을 다시 연결해 주세요.");
         List<Map<String,Object>> result = new ArrayList<>();
-        for (String id : db.query("SELECT share_id FROM public_playlists",(rs,row)->rs.getString(1))) {
+        String visible="SELECT p.share_id FROM public_playlists p JOIN playlists l ON l.id=p.playlist_id WHERE NOT EXISTS(SELECT 1 FROM community_hidden_playlists h WHERE h.playlist_id=p.playlist_id)";
+        List<String> shares=user==null?db.query(visible,(rs,row)->rs.getString(1)):db.query(visible+" AND NOT EXISTS(SELECT 1 FROM community_author_blocks b WHERE b.user_id=? AND b.blocked_user_id=l.user_id)",(rs,row)->rs.getString(1),user);
+        for (String id : shares) {
             Map<String,Object> detail = publicPlaylist(id,user);
             if ((!onlyFavourites || Boolean.TRUE.equals(detail.get("favourited"))) && Track.matches(detail.get("title")+" "+detail.get("author"),query)) {
                 detail.remove("items"); result.add(detail);
@@ -593,6 +731,8 @@ public class Store {
     }
 
     private Track catalogueSnapshot(String id) {
+        List<Track> verified=db.query("SELECT track_json FROM recommendation_tracks WHERE id=?",(rs,row)->json.readValue(rs.getString(1),Track.class),id);
+        if(!verified.isEmpty())return verified.get(0);
         try (var input = new org.springframework.core.io.ClassPathResource("tracks.json").getInputStream()) {
             Track[] catalogue = json.readerFor(Track[].class).without(tools.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES).readValue(input);
             return Arrays.stream(catalogue).filter(track->track.id.equals(id)).findFirst().orElseThrow(()->new ResponseStatusException(HttpStatus.NOT_FOUND,"곡 정보를 찾을 수 없어요."));

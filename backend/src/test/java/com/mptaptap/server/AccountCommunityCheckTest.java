@@ -48,6 +48,72 @@ class AccountCommunityCheckTest {
         base="http://127.0.0.1:"+((WebServerApplicationContext)context).getWebServer().getPort(); return context;
     }
 
+    @Test void registeredSessionExpiresWithoutDeletingAccountOrOtherDevices() throws Exception {
+        try(var context=start("jdbc:h2:mem:lifetime"+UUID.randomUUID()+";MODE=PostgreSQL")) {
+            Store store=context.getBean(Store.class);JdbcTemplate db=context.getBean(JdbcTemplate.class);
+            var platforms=new PlatformStore(db,context.getBean(org.springframework.transaction.PlatformTransactionManager.class),json,java.util.Base64.getEncoder().encodeToString(new byte[32]));
+            String email="expiry-"+UUID.randomUUID()+"@example.test",password="Session-lifetime-check!";
+            JsonNode anon=value("POST","/sessions",null,null,201);
+            String owner=anon.path("userId").asString(),anonymous=anon.path("token").asString();
+            db.update("UPDATE users SET created_at=? WHERE id=?",Instant.now().minus(Duration.ofDays(365)).toString(),owner);
+            assertEquals(owner,store.user("Bearer "+anonymous),"Anonymous data must not be erased or made inaccessible by account-session expiry.");
+            String playlist=value("POST","/playlists",anonymous,Map.of("title","Preserved after expiry"),201).path("id").asString();
+            String first=value("POST","/accounts/register",anonymous,Map.of("email",email,"password",password,"name","Expiry check"),201).path("token").asString();
+            String second=value("POST","/accounts/login",null,Map.of("email",email,"password",password),200).path("token").asString();
+            String state=platforms.start(owner,"youtube","Bearer "+first).get("state");
+            Instant created=Instant.parse("2026-10-01T00:00:00.123456Z"),boundary=created.plus(Store.ACCOUNT_SESSION_LIFETIME);
+            db.update("UPDATE account_sessions SET created_at=? WHERE token_hash=?",created.toString(),PlatformStore.hash(first));
+            assertEquals(owner,store.user("Bearer "+first,boundary.minusNanos(1)));
+            assertThrows(Store.SessionExpired.class,()->store.user("Bearer "+first,boundary));
+            assertEquals(1,db.queryForObject("SELECT COUNT(*) FROM account_sessions WHERE user_id=?",Integer.class,owner));
+            assertEquals(owner,value("GET","/accounts/me",second,null,200).path("userId").asString());
+            assertThrows(IllegalArgumentException.class,()->platforms.pending(state,"youtube",true));
+            String third=value("POST","/accounts/login",null,Map.of("email",email,"password",password),200).path("token").asString();
+            String expiredState=platforms.start(owner,"youtube","Bearer "+third).get("state");
+            db.update("UPDATE account_sessions SET created_at=? WHERE token_hash=?",Instant.now().minus(Duration.ofDays(31)).toString(),PlatformStore.hash(third));
+            assertThrows(IllegalArgumentException.class,()->platforms.pending(expiredState,"youtube",true),"The callback must reject an expired session even before that token has made an API request.");
+            assertEquals("SESSION_EXPIRED",value("GET","/playlists",third,null,401).path("code").asString());
+            assertEquals("Preserved after expiry",value("GET","/playlists/"+playlist,second,null,200).path("title").asString());
+            value("DELETE","/accounts/me",second,null,400);
+            assertEquals(403,assertThrows(ResponseStatusException.class,()->store.deleteAnonymous("Bearer "+second)).getStatusCode().value());
+            value("GET","/accounts/me",second,null,200);
+            value("DELETE","/accounts/me",second,Map.of("password",password),204);
+        }
+    }
+
+    @Test void anonymousCanDeleteOwnServerDataWithoutRegistering() throws Exception {
+        try(var context=start("jdbc:h2:mem:anonymousDeletion"+UUID.randomUUID()+";MODE=PostgreSQL")) {
+            Store store=context.getBean(Store.class);JdbcTemplate db=context.getBean(JdbcTemplate.class);
+            var platforms=new PlatformStore(db,context.getBean(org.springframework.transaction.PlatformTransactionManager.class),json,java.util.Base64.getEncoder().encodeToString(new byte[32]));
+            JsonNode anon=value("POST","/sessions",null,null,201),other=value("POST","/sessions",null,null,201);
+            String owner=anon.path("userId").asString(),token=anon.path("token").asString(),otherToken=other.path("token").asString();
+            String playlist=value("POST","/playlists",token,Map.of("title","Erase own data"),201).path("id").asString();
+            String track=value("GET","/catalogue",token,null,200).get(0).path("id").asString();
+            value("POST","/playlists/"+playlist+"/items",token,Map.of("trackId",track),200);
+            value("PUT","/me/feedback/"+track,token,Map.of("reaction",1),200);
+            store.reserveAi(owner);
+            platforms.connection(owner,"youtube",new PlatformClient.Tokens("fixture-access","fixture-refresh","fixture-channel","",Instant.now().plusSeconds(3600)));
+            platforms.start(owner,"youtube","Bearer "+token);
+            platforms.create(owner,UUID.randomUUID().toString(),"import","youtube",Map.of("items",List.of()));
+            value("PUT","/community/rules/acceptance",token,Map.of("version",Store.COMMUNITY_RULES_VERSION,"accepted",true),200);
+            String share=value("PUT","/playlists/"+playlist+"/publication",token,Map.of("public",true),200).path("shareId").asString();
+            value("PUT","/public/playlists/"+share+"/favourite",otherToken,Map.of("favourite",true),200);
+            String otherPlaylist=value("POST","/playlists",otherToken,Map.of("title","Other owner's data"),201).path("id").asString();
+            value("DELETE","/accounts/me",null,null,401);
+            value("DELETE","/accounts/me",token,null,204);
+            for(String table:List.of("recommendation_feedback","ai_usage","playlists","platform_connections","platform_oauth_states","platform_documents"))
+                assertEquals(0,db.queryForObject("SELECT COUNT(*) FROM "+table+" WHERE user_id=?",Integer.class,owner),table);
+            assertEquals(0,db.queryForObject("SELECT COUNT(*) FROM users WHERE id=?",Integer.class,owner));
+            assertEquals(0,db.queryForObject("SELECT COUNT(*) FROM playlist_items WHERE playlist_id=?",Integer.class,playlist));
+            value("GET","/public/playlists/"+share,null,null,404);
+            assertEquals(0,value("GET","/public/playlists?favourites=true",otherToken,null,200).size());
+            String fresh=value("POST","/sessions",null,null,201).path("token").asString();
+            value("DELETE","/accounts/me",token,null,401);
+            assertEquals(0,value("GET","/playlists",fresh,null,200).size(),"A replay must not touch a replacement anonymous session.");
+            assertEquals("Other owner's data",value("GET","/playlists/"+otherPlaylist,otherToken,null,200).path("title").asString());
+        }
+    }
+
     @Test void accountMigrationDeviceSessionsPublicOwnershipAndExternalSnapshots() throws Exception {
         String database=System.getenv().getOrDefault("TAPTAP_TEST_DATABASE_URL","jdbc:h2:mem:community"+UUID.randomUUID()+";MODE=PostgreSQL;DB_CLOSE_DELAY=-1");
         String email="check-"+UUID.randomUUID()+"@example.test", password="Only-for-checks!2026";
@@ -124,6 +190,7 @@ class AccountCommunityCheckTest {
             value("PUT",path+"/items/"+detail.path("items").get(0).path("id").asString(),second,Map.of("title","Catalogue change","artist","Artist"),409);
             assertFalse(value("GET",path+"/publication",first,null,200).path("public").asBoolean());
             value("PUT",path+"/publication",reader,Map.of("public",true),404);
+            value("PUT","/community/rules/acceptance",first,Map.of("version",Store.COMMUNITY_RULES_VERSION,"accepted",true),200);
             String share=value("PUT",path+"/publication",first,Map.of("public",true),200).path("shareId").asString();
             assertTrue(share.matches("[0-9a-f]{32}"));
             JsonNode shared=value("GET","/public/playlists/"+share,null,null,200);
