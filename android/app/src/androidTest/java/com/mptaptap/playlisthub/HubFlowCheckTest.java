@@ -51,6 +51,137 @@ import static org.junit.Assume.assumeTrue;
 /** Uses only disposable runner/loopback fixtures; no real provider requests. */
 @RunWith(AndroidJUnit4.class)
 public class HubFlowCheckTest {
+    @Test public void repeatedConnectionFailuresKeepOneRetryAndSuccessfulOAuthReturnsToLibrary() throws Exception {
+        var instrumentation=InstrumentationRegistry.getInstrumentation();Context context=instrumentation.getTargetContext();
+        if(android.os.Build.VERSION.SDK_INT>=37)instrumentation.getUiAutomation().grantRuntimePermission(context.getPackageName(),android.Manifest.permission.ACCESS_LOCAL_NETWORK);
+        SharedPreferences settings=context.getSharedPreferences("settings",Context.MODE_PRIVATE),credentials=context.getSharedPreferences("server_credentials",Context.MODE_PRIVATE);
+        Map<String,?> oldSettings=settings.getAll(),oldCredentials=credentials.getAll();
+        AtomicBoolean running=new AtomicBoolean(true),connected=new AtomicBoolean();AtomicInteger starts=new AtomicInteger(),libraryReads=new AtomicInteger();AtomicReference<Throwable> serverFailure=new AtomicReference<>();
+        String failureMessage="Google 계정 연결 설정을 확인해 주세요.",authorizationUrl="https://accounts.google.com/o/oauth2/v2/auth?state=native-check";
+        AtomicReference<Intent> launched=new AtomicReference<>();IntentFilter filter=new IntentFilter(Intent.ACTION_VIEW);filter.addDataScheme("https");filter.addCategory(Intent.CATEGORY_BROWSABLE);
+        var monitor=instrumentation.addMonitor(filter,new android.app.Instrumentation.ActivityResult(android.app.Activity.RESULT_CANCELED,null),true);
+        androidx.test.runner.intent.IntentCallback capture=intent->{if(Intent.ACTION_VIEW.equals(intent.getAction()))launched.set(new Intent(intent));};
+        var intents=androidx.test.runner.intent.IntentMonitorRegistry.getInstance();intents.addIntentCallback(capture);var worker=Executors.newSingleThreadExecutor();
+        try(ServerSocket server=new ServerSocket(0,5,InetAddress.getByName("127.0.0.1"))) {
+            server.setSoTimeout(500);String base="http://127.0.0.1:"+server.getLocalPort(),token=String.join("",java.util.Collections.nCopies(43,"O"));
+            var replies=worker.submit(()->{
+                while(running.get())try(Socket socket=server.accept()) {
+                    socket.setSoTimeout(5000);DataInputStream input=new DataInputStream(socket.getInputStream());String[] request=httpLine(input).split(" ");String header;boolean authenticated=false;int length=0;
+                    while(!(header=httpLine(input)).isEmpty()){
+                        String lower=header.toLowerCase(java.util.Locale.ROOT);if(lower.startsWith("authorization:")&&header.endsWith("Bearer "+token))authenticated=true;
+                        if(lower.startsWith("content-length:"))length=Integer.parseInt(header.substring(header.indexOf(':')+1).trim());
+                    }
+                    assertTrue(authenticated);assertTrue(length>=0&&length<=100000);input.readFully(new byte[length]);int code=200;String response;
+                    switch(request[1]) {
+                        case "/health":response="{\"status\":\"ok\"}";break;
+                        case "/connections/youtube/start":
+                            assertEquals("POST",request[0]);int attempt=starts.incrementAndGet();
+                            if(attempt<=3){code=503;response=new JSONObject().put("message",failureMessage).toString();}
+                            else response=new JSONObject().put("authorizationUrl",attempt==4?"javascript:invalid":authorizationUrl).toString();break;
+                        case "/accounts/me":response="{}";break;
+                        case "/connections/config":response="{\"providers\":[{\"provider\":\"youtube\",\"configured\":true}]}";break;
+                        case "/connections":response=connected.get()?"[{\"provider\":\"youtube\",\"connected\":true}]":"[]";break;
+                        case "/connections/youtube/playlists":
+                            libraryReads.incrementAndGet();
+                            if(!connected.get()){code=409;response="{\"message\":\"먼저 계정을 연결해 주세요.\"}";}
+                            else response="{\"provider\":\"youtube\",\"items\":[{\"id\":\"PLCHECK\",\"title\":\"연결 후 내 음악\",\"itemCount\":2,\"privacyStatus\":\"private\",\"sourceUrl\":\"https://www.youtube.com/playlist?list=PLCHECK\"}],\"nextCursor\":\"\"}";break;
+                        default:throw new AssertionError("Unexpected OAuth fixture request: "+request[1]);
+                    }
+                    byte[] bytes=response.getBytes(StandardCharsets.UTF_8);socket.getOutputStream().write(("HTTP/1.1 "+code+" Result\r\nContent-Type: application/json\r\nContent-Length: "+bytes.length+"\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.UTF_8));socket.getOutputStream().write(bytes);socket.getOutputStream().flush();
+                }catch(SocketTimeoutException waiting){}catch(Throwable error){if(running.get())serverFailure.compareAndSet(null,error);return;}
+            });
+            try {
+                assertTrue(settings.edit().putString("server",base).putString("serviceConsent:"+base,ApiClient.CONSENT_VERSION).commit());assertTrue(credentials.edit().putString(base,token).commit());
+                try(ActivityScenario<HubActivity> app=launch(context,"create")) {
+                    ready(app);focused(app);onView(withText("내 플레이리스트 선택")).perform(scrollTo(),click());ready(app);
+                    onView(withText("YouTube Music 계정 연결")).perform(scrollTo(),click());ready(app);
+                    for(int attempt=1;attempt<=3;attempt++){
+                        assertEquals(attempt,starts.get());assertNull(serverFailure.get());
+                        onView(withText(failureMessage)).check(matches(isDisplayed()));
+                        // Espresso rejects multiple matching buttons, reproducing the reported accumulation.
+                        onView(withText("같은 요청 다시 시도")).perform(scrollTo()).check(matches(isEnabled()));
+                        assertNull("Unavailable configuration must not launch a browser",launched.get());
+                        onView(withText("같은 요청 다시 시도")).perform(click());ready(app);
+                    }
+                    assertEquals(4,starts.get());onView(withText("연결 주소를 확인할 수 없어요.")).perform(scrollTo()).check(matches(isDisplayed()));
+                    app.onActivity(a->{try{var f=HubActivity.class.getDeclaredField("requests");f.setAccessible(true);assertFalse(((HubRequest)f.get(a)).data.optBoolean("authorizationPending"));}catch(Exception e){throw new AssertionError(e);}});
+                    assertNull(launched.get());onView(withText("같은 요청 다시 시도")).perform(scrollTo(),click());ready(app);
+                    assertEquals(5,starts.get());assertNotNull(launched.get());assertEquals(authorizationUrl,launched.get().getDataString());assertEquals(1,monitor.getHits());
+                    onView(withText("같은 요청 다시 시도")).check(doesNotExist());
+                    connected.set(true);app.moveToState(Lifecycle.State.CREATED);app.moveToState(Lifecycle.State.RESUMED);ready(app);
+                    onView(withText("내 플레이리스트")).perform(scrollTo()).check(matches(isDisplayed()));onView(withText("연결 후 내 음악")).perform(scrollTo()).check(matches(isDisplayed()));
+                    assertEquals(2,libraryReads.get());assertEquals(token,credentials.getString(base,""));assertNull(serverFailure.get());
+                }
+            } finally {running.set(false);server.close();replies.get(2,TimeUnit.SECONDS);}
+        } finally {running.set(false);worker.shutdownNow();intents.removeIntentCallback(capture);instrumentation.removeMonitor(monitor);restore(settings,oldSettings);restore(credentials,oldCredentials);}
+    }
+
+    @Test public void defaultServiceConnectsAfterConsentAndRetainsItsSessionAcrossRecreation() throws Exception {
+        var instrumentation=InstrumentationRegistry.getInstrumentation();Context context=instrumentation.getTargetContext();
+        if(android.os.Build.VERSION.SDK_INT>=37)instrumentation.getUiAutomation().grantRuntimePermission(context.getPackageName(),android.Manifest.permission.ACCESS_LOCAL_NETWORK);
+        SharedPreferences settings=context.getSharedPreferences("settings",Context.MODE_PRIVATE),credentials=context.getSharedPreferences("server_credentials",Context.MODE_PRIVATE);
+        Map<String,?> oldSettings=settings.getAll(),oldCredentials=credentials.getAll();
+        String catalogue=ApiClient.read(context.getAssets().open("tracks.json"));
+        AtomicBoolean running=new AtomicBoolean(true),failMetadata=new AtomicBoolean();AtomicReference<Throwable> serverFailure=new AtomicReference<>();
+        AtomicInteger requests=new AtomicInteger(),writes=new AtomicInteger(),catalogueReads=new AtomicInteger(),feedbackReads=new AtomicInteger(),savedReads=new AtomicInteger(),accountReads=new AtomicInteger();
+        var worker=Executors.newSingleThreadExecutor();
+        try(ServerSocket server=new ServerSocket(0,5,InetAddress.getByName("127.0.0.1"))) {
+            server.setSoTimeout(500);String base="http://127.0.0.1:"+server.getLocalPort(),token=String.join("",java.util.Collections.nCopies(43,"N"));
+            var replies=worker.submit(()->{
+                while(running.get())try(Socket socket=server.accept()) {
+                    socket.setSoTimeout(5000);DataInputStream input=new DataInputStream(socket.getInputStream());String[] request=httpLine(input).split(" ");
+                    requests.incrementAndGet();if(!request[0].equals("GET"))writes.incrementAndGet();
+                    String header;int length=0;boolean authenticated=false;
+                    while(!(header=httpLine(input)).isEmpty()) {
+                        String lower=header.toLowerCase(java.util.Locale.ROOT);if(lower.startsWith("content-length:"))length=Integer.parseInt(header.substring(header.indexOf(':')+1).trim());
+                        if(lower.startsWith("authorization:")&&header.endsWith("Bearer "+token))authenticated=true;
+                    }
+                    assertTrue("Keep the disposable session",authenticated);assertEquals("Connecting must only read the seeded account", "GET",request[0]);
+                    assertTrue("Bound the fixture body",length>=0&&length<=100000);input.readFully(new byte[length]);String response;
+                    switch(request[1]) {
+                        case "/health":response="{\"status\":\"ok\"}";break;
+                        case "/catalogue":catalogueReads.incrementAndGet();response=catalogue;break;
+                        case "/me/feedback":feedbackReads.incrementAndGet();response="{}";break;
+                        case "/me/saved-tracks":savedReads.incrementAndGet();response="[]";break;
+                        case "/accounts/me":accountReads.incrementAndGet();response="{\"name\":\"연결 후 복귀한 계정\",\"email\":\"connection@example.invalid\"}";break;
+                        case "/connections/config":response="{\"providers\":[{\"provider\":\"spotify\",\"configured\":false},{\"provider\":\"youtube\",\"configured\":false}]}";break;
+                        case "/connections":response="[]";break;
+                        default:throw new AssertionError("Unexpected test request: "+request[0]+" "+request[1]);
+                    }
+                    byte[] bytes=response.getBytes(StandardCharsets.UTF_8);socket.getOutputStream().write(("HTTP/1.1 "+(request[1].equals("/catalogue")&&failMetadata.get()?"503 Unavailable":"200 OK")+"\r\nContent-Type: application/json\r\nContent-Length: "+bytes.length+"\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.UTF_8));socket.getOutputStream().write(bytes);socket.getOutputStream().flush();
+                }catch(SocketTimeoutException timeout){
+                    // No network request is expected until the user connects.
+                }catch(Throwable error){if(running.get())serverFailure.compareAndSet(null,error);return;}
+            });
+            try {
+                assertTrue(settings.edit().clear().putString("server",base).commit());assertTrue(credentials.edit().putString(base,token).commit());
+                try(ActivityScenario<MainActivity> app=ActivityScenario.launch(MainActivity.class)) {
+                    onView(withText("서비스 이용 안내")).inRoot(isDialog()).check(matches(isDisplayed()));
+                    assertEquals("No API calls before consent",0,requests.get());
+                    onView(withText("동의하고 계속")).inRoot(isDialog()).perform(click());readyMain(app);
+                    assertTrue(catalogueReads.get()>0);assertTrue(feedbackReads.get()>0);assertTrue(savedReads.get()>0);
+                    onView(withHint("https://서버주소")).check(doesNotExist());
+                    app.recreate();readyMain(app);
+                    onView(withText("서비스 이용 안내")).check(doesNotExist());
+                    failMetadata.set(true);app.recreate();readyMain(app);
+                    onView(withId(R.id.recommend)).check(matches(org.hamcrest.Matchers.not(isEnabled())));
+                    onView(withId(R.id.connect_ai)).check(matches(isDisplayed()));
+                    failMetadata.set(false);onView(withId(R.id.connect_ai)).perform(scrollTo(),click());readyMain(app);
+                    onView(withId(R.id.recommend)).check(matches(isEnabled()));
+                    onView(withId(R.id.settings)).perform(click());
+                    onView(withText("음악 서비스")).inRoot(isDialog()).check(matches(isDisplayed()));
+                    onView(withHint("https://서버주소")).check(matches(withEffectiveVisibility(Visibility.GONE)));
+                    onView(withText("연결 다시 시도")).inRoot(isDialog()).perform(scrollTo(),click());readyMain(app);
+                    assertEquals(base,settings.getString("server",""));assertEquals(token,credentials.getString(base,""));
+                    onView(withId(R.id.nav_account)).perform(click());readyHub();
+                    onView(withText("연결 후 복귀한 계정")).perform(scrollTo()).check(matches(isDisplayed()));
+                    assertEquals(1,accountReads.get());assertEquals("Automatic reconnect only reads existing data",0,writes.get());
+                    assertNull("Test server failure",serverFailure.get());
+                }
+            } finally {running.set(false);server.close();replies.get(2,TimeUnit.SECONDS);}
+        } finally {running.set(false);worker.shutdownNow();restore(settings,oldSettings);restore(credentials,oldCredentials);}
+    }
+
     @Test public void importedPlaylistReviewExclusionAndTransferRetryUseConfirmedRows() throws Exception {
         var instrumentation=InstrumentationRegistry.getInstrumentation();Context context=instrumentation.getTargetContext();
         if(android.os.Build.VERSION.SDK_INT>=37)instrumentation.getUiAutomation().grantRuntimePermission(context.getPackageName(),android.Manifest.permission.ACCESS_LOCAL_NETWORK);
@@ -120,7 +251,7 @@ public class HubFlowCheckTest {
                 }catch(Throwable error){if(running.get())serverFailure.compareAndSet(null,error);return;}
             });
             try {
-                assertTrue(settings.edit().putString("server",base).commit());assertTrue(credentials.edit().putString(base,token).commit());
+                assertTrue(settings.edit().putString("server",base).putString("serviceConsent:"+base,ApiClient.CONSENT_VERSION).commit());assertTrue(credentials.edit().putString(base,token).commit());
                 try(ActivityScenario<HubActivity> app=launch(context,"create")) {
                     ready(app);focused(app);app.onActivity(a->assertFalse("Cold creation must wait for an explicit field tap",a.getCurrentFocus() instanceof android.widget.EditText));
                     onView(isAssignableFrom(android.widget.Spinner.class)).check((view,error)->{if(error!=null)throw error;var choices=((android.widget.Spinner)view).getAdapter();assertEquals(2,choices.getCount());assertEquals("Spotify",choices.getItem(0));assertEquals("YouTube Music",choices.getItem(1));});
@@ -148,7 +279,7 @@ public class HubFlowCheckTest {
                     onView(withText("일치 후보 있음 · 선택해 주세요")).perform(scrollTo()).check(matches(isDisplayed()));
                     onView(withText("후보 조회 전 · 다음 곡의 후보를 찾아 주세요")).perform(scrollTo()).check(matches(isDisplayed()));
                     onView(allOf(withText("후보 선택 또는 제외"),hasSibling(withText("1. 수정한 곡 A · 검사 가수")))).perform(scrollTo(),click());onView(withText("대상 곡 A · 대상 가수 · 검사 앨범")).inRoot(isDialog()).check(matches(isDisplayed()));onView(withText("취소")).inRoot(isDialog()).perform(click());
-                    onView(withText("다음 20곡의 후보 찾기")).perform(scrollTo(),click());ready(app);assertEquals(2,matches.get());assertNull("Test server failure",serverFailure.get());
+                    onView(withText("다음 곡의 후보 찾기")).perform(scrollTo(),click());ready(app);assertEquals(2,matches.get());assertNull("Test server failure",serverFailure.get());
                     onView(withText("찾지 못함 · 이 곡을 제외할 수 있어요")).perform(scrollTo()).check(matches(isDisplayed()));onView(withText("후보 조회 전 · 다음 곡의 후보를 찾아 주세요")).check(doesNotExist());
                     onView(allOf(withText("후보 선택 또는 제외"),hasSibling(withText("3. 원본 곡 B · 검사 가수")))).perform(scrollTo(),click());onView(withText("대상 곡 B · 대상 가수 · 검사 앨범")).inRoot(isDialog()).perform(click());
                     onView(allOf(withText("후보 선택 또는 제외"),hasSibling(withText("5. 원본 곡 C · 검사 가수")))).perform(scrollTo(),click());onView(withText("이 곡은 전송에서 제외")).inRoot(isDialog()).perform(click());
@@ -219,7 +350,7 @@ public class HubFlowCheckTest {
                 }catch(Throwable error){if(running.get())serverFailure.compareAndSet(null,error);return;}
             });
             try {
-                assertTrue(settings.edit().putString("server",base).commit());assertTrue(credentials.edit().putString(base,token).commit());
+                assertTrue(settings.edit().putString("server",base).putString("serviceConsent:"+base,ApiClient.CONSENT_VERSION).commit());assertTrue(credentials.edit().putString(base,token).commit());
                 try(ActivityScenario<HubActivity> app=launch(context,"create")) {
                     ready(app);focused(app);
                     onView(withHint("영상 설명의 시간표 붙여넣기")).check(matches(withEffectiveVisibility(Visibility.GONE)));
@@ -289,8 +420,9 @@ public class HubFlowCheckTest {
                 }catch(Throwable error){if(running.get())serverFailure.compareAndSet(null,error);return;}
             });
             try {
-                assertTrue(settings.edit().putString("server",base).commit());assertTrue(credentials.edit().putString(base,token).commit());
+                assertTrue(settings.edit().putString("server",base).putString("serviceConsent:"+base,ApiClient.CONSENT_VERSION).commit());assertTrue(credentials.edit().putString(base,token).commit());
                 Uri callback=Uri.parse("taptap://connected?provider=spotify&status=connected");
+                HubRequest pendingAuthorization=new HubRequest();pendingAuthorization.rememberAuthorization(context,base,"spotify",false);pendingAuthorization.onCleared();
                 Intent callbackIntent=new Intent(Intent.ACTION_VIEW,callback).addCategory(Intent.CATEGORY_BROWSABLE).setPackage(context.getPackageName());
                 try(ActivityScenario<HubActivity> app=ActivityScenario.launch(callbackIntent)) {
                     assertTrue("Hold an account read before delivering the OAuth return",received.await(5,TimeUnit.SECONDS));
@@ -307,6 +439,7 @@ public class HubFlowCheckTest {
                     onView(withText("Spotify")).perform(scrollTo()).check(matches(isDisplayed()));onView(withText("YouTube Music")).perform(scrollTo()).check(matches(isDisplayed()));onView(withText("Apple Music")).check(doesNotExist());
                     onView(withText("연결 해제")).check(matches(isEnabled()));assertEquals(token,credentials.getString(base,""));
                 }
+                pendingAuthorization=new HubRequest();pendingAuthorization.rememberAuthorization(context,base,"spotify",false);pendingAuthorization.onCleared();
                 try(ActivityScenario<HubActivity> cold=ActivityScenario.launch(new Intent(context,HubActivity.class).setData(Uri.parse("taptap://connected?provider=spotify&status=connected")))) {
                     ready(cold);assertEquals("A cold callback must read connections only once",3,connectionReads.get());
                     onView(withText("연결됨")).perform(scrollTo()).check(matches(isDisplayed()));assertEquals(token,credentials.getString(base,""));
@@ -334,22 +467,24 @@ public class HubFlowCheckTest {
         SharedPreferences settings=context.getSharedPreferences("settings",Context.MODE_PRIVATE),credentials=context.getSharedPreferences("server_credentials",Context.MODE_PRIVATE);
         Map<String,?> oldSettings=settings.getAll(),oldCredentials=credentials.getAll();
         String suffix=UUID.randomUUID().toString(),email="check-"+suffix+"@example.invalid",password="native-check-only-"+suffix,title="영상 검사 "+suffix.substring(0,8);
-        settings.edit().putString("server",base).commit();credentials.edit().remove(base).commit();ApiClient client=new ApiClient(context,base);client.connect();
+        settings.edit().putString("server",base).putString("serviceConsent:"+base,ApiClient.CONSENT_VERSION).commit();credentials.edit().remove(base).commit();ApiClient client=new ApiClient(context,base);client.connect();
         String anonymous=client.identity();String list=client.object("POST","/playlists",new JSONObject().put("title","익명 목록 "+suffix).put("id",UUID.randomUUID().toString())).getString("id");
         String track=client.array("/catalogue").getJSONObject(0).getString("id");client.object("POST","/playlists/"+list+"/items",new JSONObject().put("trackId",track));
         boolean registered=false;
         try {
             try(ActivityScenario<HubActivity> app=launch(context,"account")) {
                 ready(app);assertEquals("Reading an anonymous account screen must preserve its owner",anonymous,client.identity());
-                onView(withHint("이메일")).perform(scrollTo(),replaceText(email),closeSoftKeyboard());
+                onView(withText("이메일로 로그인")).perform(scrollTo(),click());
+                onView(withHint("이메일 주소")).perform(scrollTo(),replaceText(email),closeSoftKeyboard());
                 onView(withHint("비밀번호 (15자 이상)")).perform(scrollTo(),replaceText(password),closeSoftKeyboard());
-                onView(withHint("이름 (회원가입)")).perform(scrollTo(),replaceText("기기 검사"),closeSoftKeyboard());
+                onView(withHint("이름")).perform(scrollTo(),replaceText("기기 검사"),closeSoftKeyboard());
                 onView(withText("회원가입")).perform(scrollTo(),click());ready(app);
                 registered=true;assertNotEquals(anonymous,client.identity());client.connect();
                 assertEquals(1,client.object("GET","/playlists/"+list,null).getJSONArray("items").length());
                 onView(withText("로그아웃")).perform(scrollTo(),click());ready(app);client.connect();
                 try{client.object("GET","/playlists/"+list,null);fail("A logged-out owner cannot read the account's lists");}catch(ApiClient.ApiError expected){assertEquals(404,expected.statusCode);}
-                onView(withHint("이메일")).perform(scrollTo(),replaceText(email),closeSoftKeyboard());
+                onView(withText("이메일로 로그인")).perform(scrollTo(),click());
+                onView(withHint("이메일 주소")).perform(scrollTo(),replaceText(email),closeSoftKeyboard());
                 onView(withHint("비밀번호 (15자 이상)")).perform(scrollTo(),replaceText(password),closeSoftKeyboard());
                 onView(withText("로그인")).perform(scrollTo(),click());ready(app);client.connect();
                 assertEquals(email,client.object("GET","/accounts/me",null).getString("email"));
@@ -426,7 +561,7 @@ public class HubFlowCheckTest {
             }
             String shareId;
             try(ActivityScenario<HubActivity> app=ActivityScenario.launch(new Intent(context,HubActivity.class).putExtra("mode","community").putExtra("playlistId",converted))) {
-                ready(app);onView(withText("커뮤니티에 공개")).perform(scrollTo(),click());onView(withText("공개")).inRoot(isDialog()).perform(click());ready(app);
+                ready(app);onView(withText("커뮤니티에 공개")).perform(scrollTo(),click());ready(app);captureCommunity("native-publication-rules");onView(withText("동의하고 공개")).perform(scrollTo());captureCommunity("native-publication-rules-bottom");onView(withText("동의하고 공개")).perform(click());ready(app);
                 JSONObject publication=client.object("GET","/playlists/"+converted+"/publication",null);assertTrue(publication.getBoolean("public"));shareId=publication.getString("shareId");
                 onView(withText("공개 링크 공유")).perform(scrollTo()).check(matches(isDisplayed()));
             }
@@ -437,6 +572,7 @@ public class HubFlowCheckTest {
                 assertTrue(client.object("GET","/public/playlists/"+shareId,null).getBoolean("favourited"));
                 onView(withText("즐겨찾기 해제")).check(matches(isDisplayed()));
             }
+            verifySecondAccountCommunity(context,base,title,shareId);client.connect();
             String zeroId=UUID.randomUUID().toString(),zeroTitle="길이 미확인 "+suffix.substring(0,8);
             JSONObject zero=client.object("POST","/conversions/youtube",new JSONObject().put("id",zeroId)
                 .put("url","https://www.youtube.com/watch?v=dQw4w9WgXcQ").put("durationSeconds",0)
@@ -543,6 +679,7 @@ public class HubFlowCheckTest {
             try(ActivityScenario<MainActivity> main=ActivityScenario.launch(MainActivity.class)) {
                 readyMain(main);credentials.edit().remove(base).commit();
                 onView(withId(R.id.settings)).perform(click());
+                onView(withText("개발자 연결 설정")).inRoot(isDialog()).perform(scrollTo(),click());
                 onView(withText("서버에 연결")).inRoot(isDialog()).perform(closeSoftKeyboard(),scrollTo(),click());readyMain(main);
                 onView(withHint("https://서버주소")).check(doesNotExist());
                 assertFalse(client.identity().isEmpty());assertNotEquals(accountOwner,client.identity());
@@ -560,6 +697,34 @@ public class HubFlowCheckTest {
         } finally {
             try{if(registered)client.request("DELETE","/accounts/me",new JSONObject().put("password",password));else client.request("DELETE","/playlists/"+list,null);}catch(Exception ignored){}
             restore(settings,oldSettings);restore(credentials,oldCredentials);
+        }
+    }
+    private static void captureCommunity(String name)throws Exception{
+        var instrumentation=InstrumentationRegistry.getInstrumentation();instrumentation.waitForIdleSync();Context context=instrumentation.getTargetContext();java.io.File folder=new java.io.File(context.getExternalFilesDir(null),"native-community-check");assertTrue(folder.isDirectory()||folder.mkdirs());
+        android.graphics.Bitmap image=instrumentation.getUiAutomation().takeScreenshot();assertNotNull(image);try(var output=new java.io.FileOutputStream(new java.io.File(folder,name+".png"))){assertTrue(image.compress(android.graphics.Bitmap.CompressFormat.PNG,100,output));}finally{image.recycle();}
+    }
+    private static void verifySecondAccountCommunity(Context context,String base,String title,String shareId)throws Exception{
+        SharedPreferences credentials=context.getSharedPreferences("server_credentials",Context.MODE_PRIVATE);String originalOwner=credentials.getString(base,"");
+        String suffix=UUID.randomUUID().toString(),password="community-native-only-"+suffix;boolean registered=false;
+        assertTrue(credentials.edit().remove(base).commit());ApiClient viewer=new ApiClient(context,base);
+        try{
+            viewer.connect();JSONObject registration=viewer.object("POST","/accounts/register",new JSONObject().put("email","community-"+suffix+"@example.invalid").put("password",password).put("name","커뮤니티 검사"));viewer.replaceSession(registration.getString("token"));registered=true;
+            try(ActivityScenario<HubActivity> app=launch(context,"community")){
+                ready(app);onView(withHint("공개 목록 검색")).perform(scrollTo(),replaceText(title),closeSoftKeyboard());onView(withText("검색")).perform(scrollTo(),click());ready(app);
+                onView(withText("목록 열기")).perform(scrollTo(),click());ready(app);assertFalse(viewer.object("GET","/public/playlists/"+shareId,null).getBoolean("isOwner"));
+                onView(withText("신고 · 작성자 차단")).perform(scrollTo(),click());captureCommunity("native-community-safety-menu");onView(withText("이 목록 신고")).inRoot(isDialog()).perform(click());
+                onView(withText("신고 사유 선택")).perform(scrollTo(),click());onView(withText("스팸·광고")).inRoot(isDialog()).perform(click());captureCommunity("native-report-draft");
+                onView(withText("신고 내용 확인")).perform(scrollTo(),click());onView(withText("신고 저장")).inRoot(isDialog()).perform(click());ready(app);onView(withText("신고를 저장했어요.")).perform(scrollTo()).check(matches(isDisplayed()));
+                onView(withText("신고 · 작성자 차단")).perform(scrollTo(),click());onView(withText("작성자 차단")).inRoot(isDialog()).perform(click());onView(withText("작성자 차단")).inRoot(isDialog()).perform(click());ready(app);
+                assertEquals(1,viewer.array("/community/blocks").length());onView(withText("조건에 맞는 공개 목록이 없어요.")).perform(scrollTo()).check(matches(isDisplayed()));
+                try{viewer.object("GET","/public/playlists/"+shareId,null);fail("A blocked author's detail must not remain accessible");}catch(ApiClient.ApiError expected){assertEquals(404,expected.statusCode);}
+                onView(withText("커뮤니티 관리")).perform(scrollTo(),click());onView(withText("차단한 작성자")).inRoot(isDialog()).perform(click());ready(app);captureCommunity("native-blocked-authors");
+                onView(withText("차단 해제")).perform(scrollTo(),click());onView(withText("차단 해제")).inRoot(isDialog()).perform(click());ready(app);assertEquals(0,viewer.array("/community/blocks").length());
+                assertEquals(shareId,viewer.object("GET","/public/playlists/"+shareId,null).getString("shareId"));
+            }
+        }finally{
+            try{if(!viewer.identity().isEmpty()){viewer.request("DELETE","/accounts/me",registered?new JSONObject().put("password",password):null);viewer.clearSession();}}
+            finally{assertTrue(credentials.edit().putString(base,originalOwner).commit());}
         }
     }
     private static void timelineOpen(String expectedUrl) {

@@ -183,7 +183,7 @@ public class ErrorRecoveryCheckTest {
             });
             try {
                 assertTrue(credentials.edit().putString(base,token).commit());
-                assertTrue(settings.edit().putString("server",base).remove("prompt").commit());
+                assertTrue(settings.edit().putString("server",base).putString("serviceConsent:"+base,ApiClient.CONSENT_VERSION).remove("prompt").commit());
                 try(ActivityScenario<MainActivity> app=ActivityScenario.launch(MainActivity.class)) {
                     try {
                         ready(app);onView(withId(R.id.example_study)).perform(closeSoftKeyboard(),scrollTo(),click());
@@ -255,7 +255,7 @@ public class ErrorRecoveryCheckTest {
                     data.clearFeedback();for(Map.Entry<String,Integer> reaction:previousFeedback.entrySet())data.react(reaction.getKey(),reaction.getValue());
                 }
                 SharedPreferences.Editor restore=settings.edit();
-                for(String key:new String[]{"server","prompt"}) {
+                for(String key:new String[]{"server","prompt","serviceConsent:"+base}) {
                     if(previousSettings.containsKey(key))restore.putString(key,(String)previousSettings.get(key));else restore.remove(key);
                 }
                 assertTrue(restore.commit());
@@ -340,7 +340,7 @@ public class ErrorRecoveryCheckTest {
                 } catch(Throwable error) {if(running.get())serverFailure.compareAndSet(null,error);return;}
             });
             try {
-                assertTrue(credentials.edit().putString(base,token).commit());assertTrue(settings.edit().putString("server",base).remove("prompt").commit());
+                assertTrue(credentials.edit().putString(base,token).commit());assertTrue(settings.edit().putString("server",base).putString("serviceConsent:"+base,ApiClient.CONSENT_VERSION).remove("prompt").commit());
                 try(ActivityScenario<MainActivity> app=ActivityScenario.launch(MainActivity.class)) {
                     ready(app);onView(withId(R.id.example_study)).perform(closeSoftKeyboard(),scrollTo(),click());
                     onView(withId(R.id.recommend)).perform(scrollTo(),click());ready(app);
@@ -370,7 +370,7 @@ public class ErrorRecoveryCheckTest {
                     data.clearFeedback();for(Map.Entry<String,Integer> reaction:previousFeedback.entrySet())data.react(reaction.getKey(),reaction.getValue());
                 }
                 SharedPreferences.Editor restore=settings.edit();
-                for(String key:new String[]{"server","prompt"}) {
+                for(String key:new String[]{"server","prompt","serviceConsent:"+base}) {
                     if(previousSettings.containsKey(key))restore.putString(key,(String)previousSettings.get(key));else restore.remove(key);
                 }
                 assertTrue(restore.commit());SharedPreferences.Editor restoreCredential=credentials.edit();
@@ -430,11 +430,11 @@ public class ErrorRecoveryCheckTest {
             });
             try {
                 data.clearFeedback();data.react(track.id,1);localId[0]=data.create(title).getString("id");data.save(localId[0],track);
-                assertTrue(credentials.edit().putString(base,token).commit());assertTrue(settings.edit().remove("server").remove("prompt").commit());
+                assertTrue(credentials.edit().putString(base,token).commit());assertTrue(settings.edit().remove("server").remove("prompt").putString("serviceConsent:"+base,ApiClient.CONSENT_VERSION).commit());
                 try(ActivityScenario<MainActivity> app=ActivityScenario.launch(MainActivity.class)) {
                     ready(app);onView(withId(R.id.nav_library)).perform(closeSoftKeyboard(),click());ready(app);
                     onView(withText(title+"\n1곡")).perform(scrollTo()).check(matches(isDisplayed()));
-                    onView(withId(R.id.settings)).perform(click());
+                    onView(withId(R.id.settings)).perform(click());onView(withText("개발자 연결 설정")).inRoot(isDialog()).perform(scrollTo(),click());
                     onView(withHint("https://서버주소")).inRoot(isDialog()).perform(scrollTo(),replaceText(base),closeSoftKeyboard());
                     onView(withText("서버에 연결")).inRoot(isDialog()).perform(scrollTo(),click());ready(app);
                     assertNull("Test server failure",serverFailure.get());assertEquals(1,savedReads.get());
@@ -444,7 +444,7 @@ public class ErrorRecoveryCheckTest {
                     onView(withText("서버에 연결하지 못했어요. 주소와 서버 실행 상태를 확인해 주세요.")).inRoot(isDialog()).check(matches(isDisplayed()));
                     onView(withHint("https://서버주소")).inRoot(isDialog()).check(matches(withText(base)));
                     onView(withText("곡 데이터와 이용 안내")).inRoot(isDialog()).perform(scrollTo(),click());
-                    onView(withText(containsString("검증한 40곡"))).inRoot(isDialog()).check(matches(isDisplayed()));
+                    onView(withText(containsString("고정 곡 목록"))).inRoot(isDialog()).check(matches(isDisplayed()));
                     onView(isRoot()).inRoot(isDialog()).perform(pressKey(android.view.KeyEvent.KEYCODE_BACK));
                     onView(withText("좋아요·싫어요 관리 (1)")).inRoot(isDialog()).perform(scrollTo(),click());
                     onView(withText("좋아요 · "+track.title+" — "+track.artist)).inRoot(isDialog()).check(matches(isDisplayed()));
@@ -454,24 +454,26 @@ public class ErrorRecoveryCheckTest {
                     assertNull("Test server failure",serverFailure.get());assertTrue(savedReads.get()>=2);assertEquals(base,settings.getString("server",""));
                     onView(withId(R.id.mode_label)).check(matches(withText(startsWith("온라인 추천"))));
                     assertEquals(Collections.singletonMap(track.id,1),data.feedback());assertEquals(1,data.playlist(localId[0]).getJSONArray("items").length());
-                    onView(withId(R.id.settings)).perform(click());
-                    onView(withText("이 기기의 기본 추천 사용")).inRoot(isDialog()).perform(scrollTo(),click());ready(app);
+                    onView(withId(R.id.settings)).perform(click());onView(withText("개발자 연결 설정")).inRoot(isDialog()).perform(scrollTo(),click());
+                    onView(withText("AI 연결 해제 · 이 기기의 목록 사용")).inRoot(isDialog()).perform(scrollTo(),click());ready(app);
                     assertEquals("",settings.getString("server",""));
                     onView(withText(title+"\n1곡")).perform(scrollTo()).check(matches(isDisplayed()));
-                    onView(withId(R.id.settings)).perform(click());
+                    onView(withId(R.id.settings)).perform(click());onView(withText("개발자 연결 설정")).inRoot(isDialog()).perform(scrollTo(),click());
                     onView(withText("곡 데이터와 이용 안내")).inRoot(isDialog()).perform(scrollTo(),click());
-                    onView(withText(containsString("검증한 40곡"))).inRoot(isDialog()).check(matches(isDisplayed()));
+                    onView(withText(containsString("고정 곡 목록"))).inRoot(isDialog()).check(matches(isDisplayed()));
                     onView(isRoot()).inRoot(isDialog()).perform(pressKey(android.view.KeyEvent.KEYCODE_BACK));onView(isRoot()).inRoot(isDialog()).perform(pressKey(android.view.KeyEvent.KEYCODE_BACK));
                     onView(withId(R.id.nav_recommend)).perform(click());ready(app);
                     onView(withId(R.id.example_study)).perform(closeSoftKeyboard(),scrollTo(),click());
-                    onView(withId(R.id.recommend)).perform(scrollTo(),click());ready(app);
-                    onView(withId(R.id.counter)).check(matches(withText("1 / 8")));
-                    onView(withId(R.id.mode_label)).check(matches(withText(startsWith("기본 추천"))));
+                    onView(withId(R.id.settings)).perform(click());onView(withText("개발자 연결 설정")).inRoot(isDialog()).perform(scrollTo(),click());
+                    onView(withText(containsString("AI 추천은 아직 연결되지 않았어요"))).inRoot(isDialog()).perform(scrollTo()).check(matches(isDisplayed()));
+                    onView(withText("닫기")).inRoot(isDialog()).perform(click());
+                    onView(withId(R.id.results)).check(matches(withEffectiveVisibility(Visibility.GONE)));
+                    onView(withId(R.id.mode_label)).check(matches(withText(startsWith("시작하기"))));
                     Application application=(Application)context.getApplicationContext();AtomicBoolean changedStore=new AtomicBoolean();
                     Application.ActivityLifecycleCallbacks switchAfterSave=new Application.ActivityLifecycleCallbacks(){
                         @Override public void onActivitySaveInstanceState(Activity activity,Bundle state){
                             if(activity instanceof MainActivity&&changedStore.compareAndSet(false,true))
-                                assertTrue(settings.edit().putString("server",base).commit());
+                                assertTrue(settings.edit().putString("server",base).putString("serviceConsent:"+base,ApiClient.CONSENT_VERSION).commit());
                         }
                         @Override public void onActivityCreated(Activity activity,Bundle state){}
                         @Override public void onActivityStarted(Activity activity){}
@@ -492,13 +494,13 @@ public class ErrorRecoveryCheckTest {
                     onView(withId(R.id.request_panel)).check(matches(withEffectiveVisibility(Visibility.VISIBLE)));
                     app.onActivity(activity->assertEquals(0,((androidx.viewpager2.widget.ViewPager2)activity.findViewById(R.id.pager)).getAdapter().getItemCount()));
                     onView(withId(R.id.recommend)).check(matches(not(isEnabled())));onView(withId(R.id.settings)).check(matches(isEnabled()));
-                    failMetadata.set(false);onView(withId(R.id.settings)).perform(click());
+                    failMetadata.set(false);onView(withId(R.id.settings)).perform(click());onView(withText("개발자 연결 설정")).inRoot(isDialog()).perform(scrollTo(),click());
                     onView(withHint("https://서버주소")).inRoot(isDialog()).check(matches(withText(base)));
                     onView(withText("서버에 연결")).inRoot(isDialog()).perform(scrollTo(),click());ready(app);
                     onView(withId(R.id.mode_label)).check(matches(withText(startsWith("온라인 추천"))));
                     onView(withId(R.id.recommend)).check(matches(isEnabled()));
-                    onView(withId(R.id.settings)).perform(click());onView(withText("곡 데이터와 이용 안내")).inRoot(isDialog()).perform(scrollTo(),click());
-                    onView(withText(containsString("검증한 1곡"))).inRoot(isDialog()).check(matches(isDisplayed()));
+                    onView(withId(R.id.settings)).perform(click());onView(withText("개발자 연결 설정")).inRoot(isDialog()).perform(scrollTo(),click());onView(withText("곡 데이터와 이용 안내")).inRoot(isDialog()).perform(scrollTo(),click());
+                    onView(withText(containsString("고정 곡 목록"))).inRoot(isDialog()).check(matches(isDisplayed()));
                     onView(isRoot()).inRoot(isDialog()).perform(pressKey(android.view.KeyEvent.KEYCODE_BACK));onView(isRoot()).inRoot(isDialog()).perform(pressKey(android.view.KeyEvent.KEYCODE_BACK));
                     assertEquals(0,serverWrites.get());assertNull("Test server failure",serverFailure.get());
                     assertEquals(Collections.singletonMap(track.id,1),data.feedback());assertEquals(1,data.playlist(localId[0]).getJSONArray("items").length());
@@ -508,7 +510,7 @@ public class ErrorRecoveryCheckTest {
                 if(localId[0]!=null)try{data.delete(localId[0]);}catch(IllegalArgumentException alreadyRemoved){}
                 data.clearFeedback();for(Map.Entry<String,Integer> reaction:previousFeedback.entrySet())data.react(reaction.getKey(),reaction.getValue());
                 SharedPreferences.Editor restore=settings.edit();
-                for(String key:new String[]{"server","prompt"}) {
+                for(String key:new String[]{"server","prompt","serviceConsent:"+base}) {
                     if(previousSettings.containsKey(key))restore.putString(key,(String)previousSettings.get(key));else restore.remove(key);
                 }
                 assertTrue(restore.commit());SharedPreferences.Editor restoreCredential=credentials.edit();
@@ -566,7 +568,7 @@ public class ErrorRecoveryCheckTest {
             });
             try {
                 data.clearFeedback();data.react(track.id,1);
-                assertTrue(credentials.edit().putString(base,token).commit());assertTrue(settings.edit().putString("server",base).remove("prompt").commit());
+                assertTrue(credentials.edit().putString(base,token).commit());assertTrue(settings.edit().putString("server",base).putString("serviceConsent:"+base,ApiClient.CONSENT_VERSION).remove("prompt").commit());
                 try(ActivityScenario<MainActivity> app=ActivityScenario.launch(MainActivity.class)) {
                     ready(app);assertEquals(1,savedReads.get());AtomicReference<Bundle> historical=new AtomicReference<>();
                     app.onActivity(activity->{
@@ -612,8 +614,8 @@ public class ErrorRecoveryCheckTest {
                         metadataRelease.countDown();ready(app);
                         assertEquals(base,settings.getString("server",""));onView(withId(R.id.mode_label)).check(matches(withText(startsWith("온라인 추천"))));
                         onView(withId(R.id.recommend)).check(matches(isEnabled()));onView(withText("서버에 연결하지 않았어요")).check(doesNotExist());
-                        onView(withId(R.id.settings)).perform(click());onView(withText("곡 데이터와 이용 안내")).inRoot(isDialog()).perform(scrollTo(),click());
-                        onView(withText(containsString("검증한 1곡"))).inRoot(isDialog()).check(matches(isDisplayed()));
+                        onView(withId(R.id.settings)).perform(click());onView(withText("개발자 연결 설정")).inRoot(isDialog()).perform(scrollTo(),click());onView(withText("곡 데이터와 이용 안내")).inRoot(isDialog()).perform(scrollTo(),click());
+                        onView(withText(containsString("고정 곡 목록"))).inRoot(isDialog()).check(matches(isDisplayed()));
                         onView(isRoot()).inRoot(isDialog()).perform(pressKey(android.view.KeyEvent.KEYCODE_BACK));onView(isRoot()).inRoot(isDialog()).perform(pressKey(android.view.KeyEvent.KEYCODE_BACK));
                         assertEquals(Collections.singletonMap(track.id,1),data.feedback());assertEquals(0,serverWrites.get());assertEquals(2,savedReads.get());assertNull("Test server failure",serverFailure.get());
                     } finally {
@@ -625,7 +627,7 @@ public class ErrorRecoveryCheckTest {
                 running.set(false);metadataRelease.countDown();server.close();
                 data.clearFeedback();for(Map.Entry<String,Integer> reaction:previousFeedback.entrySet())data.react(reaction.getKey(),reaction.getValue());
                 SharedPreferences.Editor restore=settings.edit();
-                for(String key:new String[]{"server","prompt"}) {
+                for(String key:new String[]{"server","prompt","serviceConsent:"+base}) {
                     if(previousSettings.containsKey(key))restore.putString(key,(String)previousSettings.get(key));else restore.remove(key);
                 }
                 assertTrue(restore.commit());SharedPreferences.Editor restoreCredential=credentials.edit();
@@ -699,7 +701,7 @@ public class ErrorRecoveryCheckTest {
             });
             try {
                 assertTrue(credentials.edit().putString(base,token).commit());
-                assertTrue(settings.edit().putString("server",base).remove("prompt").commit());
+                assertTrue(settings.edit().putString("server",base).putString("serviceConsent:"+base,ApiClient.CONSENT_VERSION).remove("prompt").commit());
                 try(ActivityScenario<MainActivity> app=ActivityScenario.launch(MainActivity.class)) {
                     ready(app);onView(withId(R.id.nav_library)).perform(closeSoftKeyboard(),click());ready(app);
                     onView(withText("+ 새 플레이리스트")).perform(scrollTo(),click());
@@ -735,7 +737,7 @@ public class ErrorRecoveryCheckTest {
                     data.clearFeedback();for(Map.Entry<String,Integer> reaction:previousFeedback.entrySet())data.react(reaction.getKey(),reaction.getValue());
                 }
                 SharedPreferences.Editor restore=settings.edit();
-                for(String key:new String[]{"server","prompt"}) {
+                for(String key:new String[]{"server","prompt","serviceConsent:"+base}) {
                     if(previousSettings.containsKey(key))restore.putString(key,(String)previousSettings.get(key));else restore.remove(key);
                 }
                 assertTrue(restore.commit());
@@ -822,7 +824,7 @@ public class ErrorRecoveryCheckTest {
             });
             try {
                 assertTrue(credentials.edit().putString(base,token).commit());
-                assertTrue(settings.edit().putString("server",base).remove("prompt").commit());
+                assertTrue(settings.edit().putString("server",base).putString("serviceConsent:"+base,ApiClient.CONSENT_VERSION).remove("prompt").commit());
                 try(ActivityScenario<MainActivity> app=ActivityScenario.launch(MainActivity.class)) {
                     try {
                         ready(app);
@@ -912,7 +914,7 @@ public class ErrorRecoveryCheckTest {
                     data.clearFeedback();for(Map.Entry<String,Integer> reaction:previousFeedback.entrySet())data.react(reaction.getKey(),reaction.getValue());
                 }
                 SharedPreferences.Editor restore=settings.edit();
-                for(String key:new String[]{"server","prompt"}) {
+                for(String key:new String[]{"server","prompt","serviceConsent:"+base}) {
                     if(previousSettings.containsKey(key))restore.putString(key,(String)previousSettings.get(key));else restore.remove(key);
                 }
                 assertTrue(restore.commit());
@@ -949,7 +951,7 @@ public class ErrorRecoveryCheckTest {
             String token="CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC";
             AtomicInteger feedbackWrites=new AtomicInteger(),recommendationPosts=new AtomicInteger();
             try {
-                assertTrue(credentials.edit().putString(base,token).commit());assertTrue(settings.edit().putString("server",base).remove("prompt").commit());data.clearFeedback();
+                assertTrue(credentials.edit().putString(base,token).commit());assertTrue(settings.edit().putString("server",base).putString("serviceConsent:"+base,ApiClient.CONSENT_VERSION).remove("prompt").commit());data.clearFeedback();
                 Future<?> replies=serverWorker.submit(()->{
                     try {
                         String[] methods={"GET","GET","GET","GET","POST","PUT"};
@@ -981,10 +983,10 @@ public class ErrorRecoveryCheckTest {
                     onView(withId(R.id.counter)).check(matches(withText("1 / 8")));
                     onView(withId(R.id.notice)).check(matches(withText(startsWith("AI 추천"))));
                     onView(allOf(withId(R.id.like),isDisplayed())).perform(click());ready(app);
-                    onView(withText("재시도 검사 오류")).check(matches(isDisplayed()));replies.get(10,TimeUnit.SECONDS);
-                    onView(withId(R.id.settings)).perform(click());
-                    onView(withText("이 기기의 기본 추천 사용")).inRoot(isDialog()).perform(scrollTo(),click());ready(app);
-                    assertFalse(settings.contains("server"));onView(withText("재시도")).perform(click());ready(app);
+                    onView(withText("재시도 검사 오류")).check(matches(isDisplayed()));replies.get(10,TimeUnit.SECONDS);onView(withText("재시도")).check(matches(isDisplayed()));AtomicReference<View> retainedRetry=new AtomicReference<>();onView(withText("재시도")).check((view,error)->{if(error!=null)throw error;retainedRetry.set(view);});captureRetryEvidence(app,"before-settings");
+                    onView(withId(R.id.settings)).perform(click());onView(withText("개발자 연결 설정")).inRoot(isDialog()).perform(scrollTo(),click());
+                    onView(withText("AI 연결 해제 · 이 기기의 목록 사용")).inRoot(isDialog()).perform(scrollTo(),click());ready(app);
+                    captureRetryEvidence(app,"after-disconnect");assertFalse(settings.contains("server"));onView(withText("재시도")).check(doesNotExist());InstrumentationRegistry.getInstrumentation().runOnMainSync(()->retainedRetry.get().performClick());ready(app);
                     assertTrue("A failed server reaction must not be retried into local storage",data.feedback().isEmpty());
                     assertEquals("The stale action must not repeat its server request",1,feedbackWrites.get());assertEquals(1,recommendationPosts.get());
                 }
@@ -992,7 +994,7 @@ public class ErrorRecoveryCheckTest {
                 server.close();
                 data.clearFeedback();for(Map.Entry<String,Integer> reaction:previousFeedback.entrySet())data.react(reaction.getKey(),reaction.getValue());
                 SharedPreferences.Editor restore=settings.edit();
-                for(String key:new String[]{"server","prompt"}) {
+                for(String key:new String[]{"server","prompt","serviceConsent:"+base}) {
                     if(previousSettings.containsKey(key))restore.putString(key,(String)previousSettings.get(key));else restore.remove(key);
                 }
                 assertTrue(restore.commit());
@@ -1003,41 +1005,29 @@ public class ErrorRecoveryCheckTest {
         } finally {serverWorker.shutdownNow();data.close();}
     }
 
-    @Test @SdkSuppress(minSdkVersion=28)
-    public void webViewInitializationFailureOffersExternalPlayback() throws Exception {
-        WebView.disableWebView();
+    private static void focusedRetry(ActivityScenario<MainActivity> app){long end=SystemClock.uptimeMillis()+10000;while(SystemClock.uptimeMillis()<end){AtomicBoolean focused=new AtomicBoolean();app.onActivity(a->focused.set(a.hasWindowFocus()));if(focused.get()){InstrumentationRegistry.getInstrumentation().waitForIdleSync();return;}SystemClock.sleep(20);}fail("Main window did not regain focus after disconnecting");}
+    private static void captureRetryEvidence(ActivityScenario<MainActivity> app,String name)throws Exception{
+        JSONObject evidence=new JSONObject();app.onActivity(a->{try{View action=a.findViewById(com.google.android.material.R.id.snackbar_action);evidence.put("visible",action!=null&&action.isShown()).put("windowFocused",a.hasWindowFocus()).put("elapsedRealtime",SystemClock.elapsedRealtime());}catch(Exception error){throw new AssertionError(error);}});
+        Context context=InstrumentationRegistry.getInstrumentation().getTargetContext();java.io.File folder=new java.io.File(context.getExternalFilesDir(null),"stale-retry-check");assertTrue(folder.isDirectory()||folder.mkdirs());try(var output=new java.io.FileOutputStream(new java.io.File(folder,name+".json"))){output.write(evidence.toString().getBytes(StandardCharsets.UTF_8));}
+        android.graphics.Bitmap screen=InstrumentationRegistry.getInstrumentation().getUiAutomation().takeScreenshot();assertNotNull(screen);try(var output=new java.io.FileOutputStream(new java.io.File(folder,name+".png"))){assertTrue(screen.compress(android.graphics.Bitmap.CompressFormat.PNG,100,output));}finally{screen.recycle();}
+    }
+    @Test public void unverifiedOfflineVideoOffersExternalPlaybackWithoutLoadingWebView() throws Exception {
         Context context=InstrumentationRegistry.getInstrumentation().getTargetContext();
         SharedPreferences settings=context.getSharedPreferences("settings",Context.MODE_PRIVATE);
-        Map<String,?> previousSettings=settings.getAll();
-        LocalStore data=new LocalStore(context);
-        Map<String,Integer> previousFeedback=data.feedback();
+        Map<String,?> previousSettings=settings.getAll();LocalStore data=new LocalStore(context);Map<String,Integer> previousFeedback=data.feedback();
         try {
-            settings.edit().remove("server").remove("prompt").commit();data.clearFeedback();
+            settings.edit().remove("server").remove("prompt").commit();
             try(ActivityScenario<MainActivity> app=ActivityScenario.launch(MainActivity.class)) {
-                ready(app);
-                onView(withId(R.id.example_study)).perform(closeSoftKeyboard(),scrollTo(),click());
-                onView(withId(R.id.recommend)).perform(scrollTo(),click());ready(app);
-                onView(withId(R.id.counter)).check(matches(withText("1 / 8")));
-                app.onActivity(activity->{
-                    // The earlier dialog's deferred dismiss must not close the new dialog.
-                    View listen=activity.findViewById(R.id.listen);
-                    listen.performClick();listen.performClick();
-                });
-                onView(withText("플레이어를 준비하지 못했어요. 외부에서 열어보세요.")).inRoot(isDialog()).check(matches(isDisplayed()));
-                onView(withText("외부에서 열기")).inRoot(isDialog()).perform(click());
-                onView(withText("Spotify")).inRoot(isDialog()).check(matches(isDisplayed()));
-                onView(withText("YouTube Music")).inRoot(isDialog()).check(matches(isDisplayed()));
-                onView(withText("취소")).inRoot(isDialog()).perform(click());ready(app);
-                onView(withId(R.id.counter)).check(matches(withText("1 / 8")));
-                assertTrue("Playback failure must not create recommendation feedback",data.feedback().isEmpty());
+                ready(app);app.onActivity(activity->{try{
+                    var method=MainActivity.class.getDeclaredMethod("listenVideo",String.class,String.class,int.class,Runnable.class);method.setAccessible(true);method.invoke(activity,"외부 재생 검사","abcdefghijk",73,(Runnable)()->{});
+                    var player=MainActivity.class.getDeclaredField("player");player.setAccessible(true);assertNull(player.get(activity));
+                }catch(Exception error){throw new AssertionError(error);}});
+                onView(withText("YouTube에서 이 영상을 재생할 수 있어요.")).inRoot(isDialog()).check(matches(isDisplayed()));
+                onView(withText("YouTube에서 열기")).inRoot(isDialog()).check(matches(isDisplayed()));
+                onView(withText("닫기")).inRoot(isDialog()).perform(click());assertEquals(previousFeedback,data.feedback());
             }
         } finally {
-            data.clearFeedback();for(Map.Entry<String,Integer> reaction:previousFeedback.entrySet())data.react(reaction.getKey(),reaction.getValue());
-            SharedPreferences.Editor restore=settings.edit();
-            for(String key:new String[]{"server","prompt"}) {
-                if(previousSettings.containsKey(key))restore.putString(key,(String)previousSettings.get(key));else restore.remove(key);
-            }
-            restore.commit();data.close();
+            SharedPreferences.Editor restore=settings.edit();for(String key:new String[]{"server","prompt"}){if(previousSettings.containsKey(key))restore.putString(key,(String)previousSettings.get(key));else restore.remove(key);}restore.commit();data.close();
         }
     }
 

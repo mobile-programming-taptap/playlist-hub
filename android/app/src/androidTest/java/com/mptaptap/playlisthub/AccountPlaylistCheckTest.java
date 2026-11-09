@@ -104,7 +104,7 @@ public class AccountPlaylistCheckTest {
                 }catch(Throwable error){if(running.get())serverFailure.compareAndSet(null,error);return;}
             });
             try {
-                assertTrue(settings.edit().putString("server",base).commit());assertTrue(credentials.edit().putString(base,token).commit());
+                assertTrue(settings.edit().putString("server",base).putString("serviceConsent:"+base,ApiClient.CONSENT_VERSION).commit());assertTrue(credentials.edit().putString(base,token).commit());
                 try(ActivityScenario<HubActivity> app=ActivityScenario.launch(new Intent(context,HubActivity.class).putExtra("mode","create"))) {
                     ready(app);onView(withText("내 플레이리스트 선택")).perform(closeSoftKeyboard(),scrollTo(),click());ready(app);
                     onView(withText("내 플레이리스트")).check(matches(isDisplayed()));
@@ -120,9 +120,15 @@ public class AccountPlaylistCheckTest {
                         onView(withText("내 플레이리스트")).perform(closeSoftKeyboard()).check(matches(isDisplayed()));
                         assertNull("Test server failure",serverFailure.get());assertEquals(1,authorizations.get());assertEquals(token,credentials.getString(base,""));
                     } finally {instrumentation.removeMonitor(blocked);}
-                    onView(withContentDescription("선택: "+titleA)).perform(scrollTo(),click());
+                    onView(withContentDescription("선택: "+titleA)).perform(scrollTo(),stableClick());
+                    app.onActivity(a->assertEquals("First choice must enter the retained model",1,requestData(a).optJSONArray("librarySelections").length()));
                     onView(withText("다음 목록 불러오기")).perform(scrollTo(),click());ready(app);
-                    assertTrue(secondPages.get()>0);onView(withContentDescription("선택: "+titleB)).perform(scrollTo(),click());app.recreate();ready(app);focused(app);
+                    assertTrue(secondPages.get()>0);
+                    app.onActivity(a->assertEquals("Paging must preserve the first choice",1,requestData(a).optJSONArray("librarySelections").length()));
+                    onView(withContentDescription("선택: "+titleB)).perform(scrollTo(),stableClick());
+                    app.onActivity(a->assertEquals("Both choices must be retained before rotation",2,requestData(a).optJSONArray("librarySelections").length()));
+                    app.recreate();ready(app);focused(app);
+                    app.onActivity(a->assertEquals("The retained model must keep both choices after rotation",2,requestData(a).optJSONArray("librarySelections").length()));
                     onView(withContentDescription("선택: "+titleA)).check(matches(isChecked()));onView(withContentDescription("선택: "+titleB)).check(matches(isChecked()));onView(withContentDescription("선택: "+titleC)).check(matches(not(isChecked())));
                     onView(withText("선택한 목록 가져오기")).perform(closeSoftKeyboard(),scrollTo(),click());assertTrue(firstReceived.await(5,TimeUnit.SECONDS));
                     app.recreate();focused(app);onView(isAssignableFrom(LinearProgressIndicator.class)).check(matches(withEffectiveVisibility(Visibility.VISIBLE)));
@@ -145,6 +151,8 @@ public class AccountPlaylistCheckTest {
         } finally {running.set(false);releaseFirst.countDown();worker.shutdownNow();restore(settings,oldSettings);restore(credentials,oldCredentials);}
     }
 
+    private static ViewAction stableClick(){return new ViewAction(){public org.hamcrest.Matcher<View> getConstraints(){return allOf(isDisplayed(),isEnabled());}public String getDescription(){return "Wait for a stable touch target, then tap";}public void perform(UiController ui,View view){android.graphics.Rect previous=new android.graphics.Rect();int stable=0;for(int i=0;i<60;i++){ui.loopMainThreadForAtLeast(50);android.graphics.Rect current=new android.graphics.Rect();if(view.hasWindowFocus()&&!view.isLayoutRequested()&&view.getGlobalVisibleRect(current)&&current.equals(previous))stable++;else stable=0;previous.set(current);if(stable>=5){click().perform(ui,view);return;}}throw new AssertionError("The checkbox touch target did not settle");}};}
+    private static JSONObject requestData(HubActivity activity){try{var field=HubActivity.class.getDeclaredField("requests");field.setAccessible(true);return ((HubRequest)field.get(activity)).data;}catch(Exception error){throw new AssertionError(error);}}
     private static String httpLine(DataInputStream input) throws java.io.IOException {
         StringBuilder line=new StringBuilder();int next;
         while((next=input.read())!=-1){if(next=='\n')return line.toString();if(next!='\r')line.append((char)next);if(line.length()>8192)throw new java.io.IOException("Test HTTP header is too long");}
