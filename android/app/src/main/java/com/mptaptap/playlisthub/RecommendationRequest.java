@@ -6,11 +6,8 @@ import androidx.lifecycle.LiveData;
 import androidx.lifecycle.MutableLiveData;
 import androidx.lifecycle.ViewModel;
 import com.mptaptap.core.Recommender;
-import com.mptaptap.core.Conversation;
 import java.util.ArrayList;
-import com.mptaptap.core.Track;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import org.json.JSONObject;
@@ -39,9 +36,9 @@ public final class RecommendationRequest extends ViewModel {
     void consume(State delivered){if(current()==delivered)state.setValue(new State("","",false,null,null));}
     void discard(){lastPrompt=null;lastPrevious=null;lastHistory=List.of();lastKept=List.of();lastExcluded=List.of();lastBase="";lastIdentity="";state.setValue(new State("","",false,null,null));}
     static String identity(ApiClient api){return api==null?"local":api.identity();}
-    boolean retry(ApiClient api,List<Track> catalogue,Map<String,Integer> feedback){
+    boolean retry(ApiClient api){
         if(lastPrompt==null||!lastBase.equals(api==null?"":api.base)||!lastIdentity.equals(identity(api)))return false;
-        start(lastPrompt,api,catalogue,feedback,lastHistory,lastKept,lastExcluded,lastPrevious);return true;
+        start(lastPrompt,api,lastHistory,lastKept,lastExcluded,lastPrevious);return true;
     }
     JSONObject snapshot() {
         if(lastPrompt==null)return null;
@@ -60,14 +57,14 @@ public final class RecommendationRequest extends ViewModel {
     }
     private static List<String> strings(JSONArray values) throws Exception {List<String> rows=new ArrayList<>();for(int i=0;i<values.length();i++)rows.add(values.getString(i));return rows;}
 
-    void start(String prompt, ApiClient api, List<Track> catalogue, Map<String,Integer> feedback) {
-        start(prompt,api,catalogue,feedback,List.of(),List.of(),List.of());
+    void start(String prompt, ApiClient api) {
+        start(prompt,api,List.of(),List.of(),List.of());
     }
-    void start(String prompt, ApiClient api, List<Track> catalogue, Map<String,Integer> feedback,
+    void start(String prompt, ApiClient api,
             List<String> history, List<String> kept, List<String> excluded) {
-        start(prompt,api,catalogue,feedback,history,kept,excluded,null);
+        start(prompt,api,history,kept,excluded,null);
     }
-    void start(String prompt, ApiClient api, List<Track> catalogue, Map<String,Integer> feedback,
+    void start(String prompt, ApiClient api,
             List<String> history, List<String> kept, List<String> excluded, Recommender.Conditions previous) {
         if(current().loading)return;
         lastPrompt=prompt;lastHistory=new ArrayList<>(history);lastKept=new ArrayList<>(kept);lastExcluded=new ArrayList<>(excluded);
@@ -81,15 +78,11 @@ public final class RecommendationRequest extends ViewModel {
             Object[] result=null; Exception error=null;
             try {
                 if(!pending.identity.equals(identity(api)))throw new IllegalStateException("계정이 변경되었어요. 새 계정에서 다시 요청해 주세요.");
-                if(api==null) {
-                    Recommender.Result value=Conversation.recommend(catalogue,Conversation.parse(requestPrevious,requestHistory,prompt),feedback,"basic",requestKept,requestExcluded);
-                    result=new Object[]{value.tracks,value.mode,value.notice,value.conditions};
-                } else {
-                    JSONObject value=api.object("POST","/recommendations",new JSONObject().put("prompt",prompt)
-                        .put("history",new JSONArray(requestHistory)).put("keptTrackIds",new JSONArray(requestKept)).put("excludedTrackIds",new JSONArray(requestExcluded))
-                        .put("previousConditions",requestPrevious==null?JSONObject.NULL:TrackJson.conditions(requestPrevious)));
-                    result=new Object[]{TrackJson.picks(value.getJSONArray("tracks")),value.getString("mode"),value.optString("notice"),TrackJson.conditions(value.getJSONObject("conditions"))};
-                }
+                if(api==null)throw new IllegalStateException("AI 추천을 연결한 뒤 같은 요청으로 다시 시도해 주세요.");
+                JSONObject value=api.object("POST","/recommendations",new JSONObject().put("prompt",prompt)
+                    .put("history",new JSONArray(requestHistory)).put("keptTrackIds",new JSONArray(requestKept)).put("excludedTrackIds",new JSONArray(requestExcluded))
+                    .put("previousConditions",requestPrevious==null?JSONObject.NULL:TrackJson.conditions(requestPrevious)));
+                result=new Object[]{TrackJson.picks(value.getJSONArray("tracks")),value.getString("mode"),value.optString("notice"),TrackJson.conditions(value.getJSONObject("conditions"))};
                 List<String> conversation=new ArrayList<>(requestHistory);conversation.add(prompt);
                 while(conversation.size()>8)conversation.remove(0);
                 result=new Object[]{result[0],result[1],result[2],result[3],conversation};

@@ -5,36 +5,27 @@ import com.mptaptap.core.Conversation;
 import com.mptaptap.core.Track;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
-import java.util.Arrays;
 import java.util.LinkedHashMap;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import org.springframework.core.io.ClassPathResource;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
-import tools.jackson.databind.ObjectMapper;
 
 @RestController
 public class Api {
     private final Store store;
     private final OpenAi ai;
-    private final List<Track> catalogue;
-    private final Map<String, Track> tracks = new LinkedHashMap<>();
+    private final RecommendationCatalogue catalogue;
 
-    Api(Store store, OpenAi ai, ObjectMapper json) throws Exception {
-        this.store = store; this.ai = ai;
-        try (var input = new ClassPathResource("tracks.json").getInputStream()) {
-            catalogue = Arrays.asList(json.readerFor(Track[].class).without(tools.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES).readValue(input));
-        }
-        for (Track track : catalogue) {
-            if (!track.usable() || tracks.put(track.id, track) != null) throw new IllegalStateException("Invalid or duplicate catalogue entry");
-        }
+    Api(Store store, OpenAi ai, RecommendationCatalogue catalogue) {
+        this.store = store; this.ai = ai; this.catalogue=catalogue;
     }
 
     @GetMapping("/health")
-    public Map<String, Object> health() { return Map.of("status", "ok", "catalogueSize", catalogue.size(), "aiConfigured", ai.available()); }
+    public Map<String, Object> health() { return Map.of("status", "ok", "catalogueSize", catalogue.all().size(), "aiConfigured", ai.available()); }
 
     @PostMapping("/sessions") @ResponseStatus(HttpStatus.CREATED)
     public Map<String, String> session() { return store.register(); }
@@ -42,7 +33,7 @@ public class Api {
     @GetMapping("/catalogue")
     public List<Track> catalogue(@RequestHeader(value="Authorization", required=false) String auth, @RequestParam(defaultValue="") String q) {
         store.user(auth); checkQuery(q);
-        return catalogue.stream().filter(t -> Track.matches(t.title + " " + t.artist, q)).toList();
+        return catalogue.all().stream().filter(t -> Track.matches(t.title + " " + t.artist, q)).toList();
     }
 
     public record Prompt(String prompt, List<String> history, List<String> keptTrackIds, List<String> excludedTrackIds,
@@ -59,18 +50,63 @@ public class Api {
     @PostMapping("/recommendations")
     public Recommender.Result recommendations(@RequestHeader(value="Authorization", required=false) String auth, @RequestBody Prompt body) {
         String user = store.user(auth);
-        Recommender.Conditions c = Conversation.parse(body.previousConditions(),body.history(),body.prompt());
-        Conversation.recommend(catalogue,c,store.feedback(user),"basic",body.keptTrackIds(),body.excludedTrackIds());
-        String mode = "basic"; String fallback = "";
-        if (ai.available()) {
-            if (store.reserveAi(user)) {
-                try { c = ai.extract(body.prompt(),body.history(),body.previousConditions()); mode = "openai"; }
-                catch (InterruptedException error) { Thread.currentThread().interrupt(); fallback = "AI 요청이 중단되어 기본 추천으로 이어갔어요."; }
-                catch (Exception error) { fallback = "AI 연결이 원활하지 않아 기본 추천으로 이어갔어요."; }
-            } else fallback = "AI 요청 한도에 도달해 기본 추천으로 이어갔어요.";
-        } else fallback = "현재는 기본 추천이에요. 서버에 OpenAI를 연결하면 자연어 해석을 더 넓게 지원해요.";
-        Recommender.Result result = Conversation.recommend(catalogue,c,store.feedback(user),mode,body.keptTrackIds(),body.excludedTrackIds());
-        return new Recommender.Result(result.tracks, c, mode, String.join(" ", List.of(fallback, result.notice)).trim());
+        List<Track> known=catalogue.all();
+        Map<String,Integer> feedback=store.feedback(user);
+        Conversation.requests(body.history(),body.prompt());
+        if(body.previousConditions()!=null)Conversation.copyConditions(body.previousConditions());
+        Conversation.validateSelection(known,feedback,body.keptTrackIds(),body.excludedTrackIds());
+        if(!ai.available())throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"AI 추천이 연결되지 않았어요. 서버의 AI 연결 상태를 확인한 뒤 다시 시도해 주세요.");
+        if(!store.reserveAi(user))throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS,"AI 추천 요청 한도에 도달했어요. 잠시 후 같은 요청으로 다시 시도해 주세요.");
+        long deadline=System.nanoTime()+java.time.Duration.ofSeconds(30).toNanos();
+        OpenAi.Plan plan;
+        Map<String,Integer> likedTags=new LinkedHashMap<>();
+        try {
+            for(Track track:known)if(feedback.getOrDefault(track.id,0)==1)
+                for(String tag:track.tags)likedTags.merge(tag,1,Integer::sum);
+            plan=ai.plan(body.prompt(),body.history(),body.previousConditions(),likedTags);
+        } catch(InterruptedException error) {
+            Thread.currentThread().interrupt();throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"AI 요청이 중단됐어요. 같은 요청으로 다시 시도해 주세요.");
+        } catch(Exception error) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"AI 연결이 원활하지 않아요. 같은 요청으로 다시 시도해 주세요.");
+        }
+        List<Track> verified;
+        try {verified=catalogue.resolve(plan.candidates(),java.time.Duration.ofNanos(Math.max(1,deadline-System.nanoTime())));}
+        catch(InterruptedException error){Thread.currentThread().interrupt();throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"곡 확인 요청이 중단됐어요. 같은 요청으로 다시 시도해 주세요.");}
+        catch(Exception error){
+            String reason=error.getMessage();
+            if(reason==null||!reason.matches("(?:CATALOGUE_[A-Z0-9_]+|RESPONSE_[A-Z_]+)"))reason=error.getClass().getSimpleName();
+            org.slf4j.LoggerFactory.getLogger(Api.class).warn("Recording verification failed: {}",reason);
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"실제 곡 정보를 확인하는 서비스에 연결하지 못했어요. 같은 요청으로 다시 시도해 주세요.");
+        }
+        Map<String,Track> candidates=new LinkedHashMap<>();
+        for(Track track:verified)candidates.put(track.id,track);
+        for(List<String> ids:List.of(body.keptTrackIds()==null?List.<String>of():body.keptTrackIds(),body.excludedTrackIds()==null?List.<String>of():body.excludedTrackIds()))
+            for(String id:ids)candidates.putIfAbsent(id,catalogue.track(id));
+        Recommender.Result result=Conversation.recommend(new ArrayList<>(candidates.values()),plan.conditions(),feedback,"openai",body.keptTrackIds(),body.excludedTrackIds());
+        var verifiedIds=verified.stream().map(track->track.id).collect(java.util.stream.Collectors.toSet());
+        int proposed=plan.candidates().size();
+        // Reserve one recording lookup; its retries must fit the same overall deadline.
+        long remaining=deadline-System.nanoTime()-java.time.Duration.ofSeconds(6).toNanos();
+        if(result.tracks.size()<7&&verified.size()<proposed&&proposed>=7&&remaining>java.time.Duration.ofSeconds(2).toNanos()&&store.reserveAi(user)) {
+            try {
+                OpenAi.Plan extra=ai.supplement(body.prompt(),body.history(),plan.conditions(),likedTags,plan.candidates(),
+                    java.time.Duration.ofNanos(Math.min(java.time.Duration.ofSeconds(15).toNanos(),remaining)));
+                var previous=plan.candidates().stream().map(song->song.title()+"|"+song.artist()).collect(java.util.stream.Collectors.toSet());
+                var fresh=extra.candidates().stream().filter(song->!previous.contains(song.title()+"|"+song.artist())).toList();
+                proposed+=fresh.size();
+                for(Track track:catalogue.resolve(fresh,java.time.Duration.ofNanos(Math.max(1,deadline-System.nanoTime())))){candidates.putIfAbsent(track.id,track);verifiedIds.add(track.id);}
+                result=Conversation.recommend(new ArrayList<>(candidates.values()),plan.conditions(),feedback,"openai",body.keptTrackIds(),body.excludedTrackIds());
+            } catch(InterruptedException interrupted){Thread.currentThread().interrupt();throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"AI 요청이 중단됐어요. 같은 요청으로 다시 시도해 주세요.");}
+            catch(Exception error){org.slf4j.LoggerFactory.getLogger(Api.class).warn("Supplementary recommendation failed: {}",error.getClass().getSimpleName());}
+        }
+        String notice=result.notice;
+        int shown=result.tracks.size();
+        if(shown<7&&(body.keptTrackIds()==null||body.keptTrackIds().isEmpty())) {
+            if(plan.candidates().isEmpty())notice="AI가 확실한 곡 후보를 제안하지 못했어요. 같은 요청으로 다시 시도해 주세요.";
+            else if(verifiedIds.size()<proposed)notice="AI 후보 "+proposed+"곡 중 실제 곡 정보를 확인한 곡은 "+verifiedIds.size()+"곡이고, 요청과 반응을 반영한 추천은 "+shown+"곡이에요. 같은 요청으로 다른 후보를 찾아볼 수 있어요.";
+        }
+        org.slf4j.LoggerFactory.getLogger(Api.class).info("Recommendation counts: proposed={}, verified={}, shown={}",proposed,verifiedIds.size(),shown);
+        return new Recommender.Result(result.tracks,result.conditions,"openai",notice);
     }
 
     @GetMapping("/me/feedback")
@@ -153,9 +189,7 @@ public class Api {
     public void remove(@RequestHeader(value="Authorization", required=false) String auth, @PathVariable String id, @PathVariable String item) { store.remove(store.user(auth), id, item); }
 
     private Track track(String id) {
-        Track t = tracks.get(id);
-        if (t == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "곡을 찾을 수 없어요.");
-        return t;
+        return catalogue.track(id);
     }
 
     private static String title(String value) {
@@ -175,6 +209,6 @@ public class Api {
 
     @ExceptionHandler(ResponseStatusException.class)
     public org.springframework.http.ResponseEntity<Map<String, String>> failure(ResponseStatusException error) {
-        return org.springframework.http.ResponseEntity.status(error.getStatusCode()).body(Map.of("code", "REQUEST_FAILED", "message", error.getReason() == null ? "다시 시도해 주세요." : error.getReason()));
+        return org.springframework.http.ResponseEntity.status(error.getStatusCode()).body(Map.of("code", Store.errorCode(error,"REQUEST_FAILED"), "message", error.getReason() == null ? "다시 시도해 주세요." : error.getReason()));
     }
 }

@@ -28,6 +28,21 @@ final class ConversationCheck {
         assert piano.tags.contains("piano")&&!piano.tags.contains("jazz")&&jazz.tags.contains("jazz");
         assert Conversation.parse(noJazz,List.of(),"재즈로 바꿔줘").excludedTags.isEmpty();
         Recommender.Conditions unlisted=new Recommender.Conditions();unlisted.tags.add("unsupported_genre");
+        Recommender.Conditions open=new Recommender.Conditions();open.tags.add("genre:chanson");open.excludedTags.add("genre:enka");open.language="fr";
+        Recommender.Conditions warmer=Conversation.parse(open,List.of(),"더 따뜻하게");
+        assert warmer.tags.containsAll(List.of("genre:chanson","warm"))&&warmer.excludedTags.equals(List.of("genre:enka"))&&warmer.language.equals("fr");
+        assert Conversation.parse(warmer,List.of(),"팝으로 바꿔줘").tags.equals(List.of("warm","pop"));
+        assert Conversation.parse(warmer,List.of(),"일본어로 바꿔줘").language.equals("ja");
+        assert Conversation.parse(warmer,List.of(),"처음부터 재즈").tags.equals(List.of("jazz"));
+        assert Recommender.parse("일본어 말고 프랑스어").language.equals("fr");
+        assert Recommender.parse("프랑스어 말고 일본어").language.equals("ja");
+        assert Recommender.parse("영어와 일본어 제외하고 프랑스어").language.equals("fr");
+        assert Recommender.parse("exclude Japanese and English, but French").language.equals("fr");
+        assert Recommender.parse("not French or German, but Japanese").language.equals("ja");
+        assert Recommender.parse("English, French").language.equals("fr")&&Recommender.ambiguousLanguage("English, French");
+        assert Conversation.parse(open,List.of(),"프랑스어는 제외").language.isEmpty();
+        assert Conversation.parse(open,List.of(),"일본어는 제외").language.equals("fr");
+        assert Conversation.parse(open,List.of(),"처음부터 영어 말고 일본어").language.equals("ja");
         assert Conversation.parse(unlisted,List.of(),"더 따뜻하게").tags.contains("unsupported_genre");
         assert Conversation.parse(unlisted,List.of(),"팝으로 바꿔줘").tags.equals(List.of("pop"));
         Recommender.Conditions excludedUnlisted=new Recommender.Conditions();excludedUnlisted.excludedTags.add("unsupported_genre");
@@ -59,8 +74,51 @@ final class ConversationCheck {
         assert Conversation.parse(previous,List.of(),"연주곡 제외").language.isEmpty();assert previous.language.equals("none")&&previous.tags.contains("instrumental");
         Recommender.Conditions invalid=new Recommender.Conditions();invalid.tags.add("external song metadata");
         try {Conversation.parse(invalid,List.of(),"팝");throw new AssertionError("Unsupported snapshot values accepted");}catch(IllegalArgumentException expected) { }
-        invalid.tags.clear();invalid.language="fr";
+        invalid.tags.clear();invalid.language="not_a_language";
         try {Conversation.parse(invalid,List.of(),"팝");throw new AssertionError("Unsupported snapshot language accepted");}catch(IllegalArgumentException expected) { }
+        String[][] newGenres={{"indie","indie"},{"folk","folk"},{"soul","soul"},{"funk","funk"},{"disco","disco"},
+                {"citypop","city pop"},{"lofi","lo-fi"},{"jpop","j-pop"},{"synthpop","synth pop"},{"dreampop","dream pop"},
+                {"ambient","ambient"},{"house","house"},{"techno","techno"},{"trance","trance"},{"punk","punk"},
+                {"reggae","reggae"},{"bossa_nova","bossa nova"},{"latin","latin"},{"country","country"},{"soundtrack","soundtrack"},{"gospel","gospel"},{"trap","trap"}};
+        for(String[] genre:newGenres) {
+            Recommender.Conditions positive=Recommender.parse(genre[1]),negative=Recommender.parse("exclude "+genre[1]);
+            assert positive.tags.equals(List.of(genre[0]))&&positive.excludedTags.isEmpty():genre[1];
+            assert negative.tags.isEmpty()&&negative.excludedTags.equals(List.of(genre[0])):genre[1];
+            assert Recommender.isKnownConditionRequest(genre[1])&&Recommender.isKnownConditionRequest("exclude "+genre[1]):genre[1];
+        }
+        String[][] compounds={{"citypop","city pop","city-pop"},{"jpop","j pop","j-pop"},
+                {"synthpop","synth pop","synth-pop"},{"dreampop","dream pop","dream-pop"},
+                {"punk","punk rock","punk-rock","punkrock","펑크록"},{"lofi","lo-fi hip hop","lofi hiphop","lofi hip-hop"}};
+        for(String[] compound:compounds)for(int i=1;i<compound.length;i++) {
+            String request=compound[i];Recommender.Conditions positive=Recommender.parse(request),negative=Recommender.parse("without "+request);
+            assert positive.tags.equals(List.of(compound[0]))&&positive.excludedTags.isEmpty():request;
+            assert negative.tags.isEmpty()&&negative.excludedTags.equals(List.of(compound[0])):request;
+            assert Recommender.isKnownConditionRequest(request)&&Recommender.isKnownConditionRequest("without "+request):request;
+        }
+        assert Recommender.parse("훵크").tags.equals(List.of("funk"))&&Recommender.parse("펑크").tags.equals(List.of("punk"));
+        assert Recommender.parse("pop").tags.equals(List.of("pop"))&&Recommender.parse("rock").tags.equals(List.of("rock"));
+        assert Recommender.parse("J-pop").language.isEmpty()&&Recommender.parse("without J-pop").language.isEmpty();
+        Recommender.Conditions jpop=Conversation.parse(englishGenre,List.of(),"제이팝으로 바꿔줘");
+        assert jpop.tags.equals(List.of("jpop"))&&jpop.language.equals("en");
+        assert Recommender.parse("일본어 J-pop").language.equals("ja");
+        Recommender.Conditions expanded=Conversation.parse(englishGenre,List.of(),"시티팝으로 바꿔줘");
+        Recommender.Conditions expandedExcluded=Conversation.parse(expanded,List.of(),"without synth pop");
+        assert expandedExcluded.tags.equals(List.of("citypop"))&&expandedExcluded.excludedTags.equals(List.of("synthpop"))&&expandedExcluded.language.equals("en");
+        Recommender.Conditions changed=Conversation.parse(expandedExcluded,List.of(),"신스팝으로 바꿔줘");
+        assert changed.tags.equals(List.of("synthpop"))&&changed.excludedTags.isEmpty()&&changed.language.equals("en");
+        Recommender.Conditions expandedReset=Conversation.parse(expandedExcluded,List.of(),"처음부터 레게");
+        assert expandedReset.tags.equals(List.of("reggae"))&&expandedReset.excludedTags.isEmpty()&&expandedReset.language.isEmpty();
+        List<Track> genreTracks=new ArrayList<>();String[] filterGenres={"citypop","pop","punk","rock"};
+        for(int i=0;i<filterGenres.length;i++) {
+            Track t=new Track();t.id=String.format("00000000-0000-0000-0000-%012d",i);t.title=filterGenres[i];t.artist="Artist";
+            t.tags.add(filterGenres[i]);t.source="MusicBrainz";t.license="CC0-1.0";t.aiUseAllowed=true;t.sourceUrl="https://musicbrainz.org/recording/"+t.id;genreTracks.add(t);
+        }
+        for(String[] filter:new String[][]{{"city pop","citypop"},{"pop","pop"},{"punk rock","punk"},{"rock","rock"}}) {
+            Recommender.Result filtered=Recommender.recommend(genreTracks,Recommender.parse(filter[0]),java.util.Map.of(),"basic");
+            assert filtered.tracks.size()==1&&filtered.tracks.get(0).track.tags.equals(List.of(filter[1])):filter[0];
+        }
+        Recommender.Result excludedCity=Recommender.recommend(genreTracks,Recommender.parse("without city pop"),java.util.Map.of(),"basic");
+        assert excludedCity.tracks.size()==3&&excludedCity.tracks.stream().noneMatch(p->p.track.tags.contains("citypop"));
         try { Conversation.requests(java.util.Collections.nCopies(9,"피아노"),"팝"); throw new AssertionError(); }
         catch(IllegalArgumentException expected) { }
     }

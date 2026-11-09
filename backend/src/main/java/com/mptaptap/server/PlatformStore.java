@@ -72,7 +72,11 @@ public class PlatformStore {
     }
     synchronized Pending pending(String state,String provider,boolean consume) {
         if(state==null||!state.matches("[A-Za-z0-9_-]{43}"))throw new IllegalArgumentException("연결 요청이 만료됐어요. 앱에서 다시 연결해 주세요.");
-        List<Pending> rows=db.query("SELECT s.user_id,s.provider,s.verifier,s.expires_at FROM platform_oauth_states s WHERE s.state_hash=? AND s.provider=? AND (EXISTS (SELECT 1 FROM account_sessions a WHERE a.user_id=s.user_id AND a.token_hash=s.session_hash) OR EXISTS (SELECT 1 FROM users u WHERE u.id=s.user_id AND u.token_hash=s.session_hash AND NOT EXISTS (SELECT 1 FROM accounts ac WHERE ac.user_id=u.id)))",(rs,n)->new Pending(rs.getString(1),rs.getString(2),crypt(rs.getString(3),rs.getString(1),rs.getString(2),false),Instant.parse(rs.getString(4))),hash(state),provider);
+        List<Pending> rows=db.query("SELECT s.user_id,s.provider,s.verifier,s.expires_at,(SELECT a.created_at FROM account_sessions a WHERE a.user_id=s.user_id AND a.token_hash=s.session_hash) FROM platform_oauth_states s WHERE s.state_hash=? AND s.provider=? AND (EXISTS (SELECT 1 FROM account_sessions a WHERE a.user_id=s.user_id AND a.token_hash=s.session_hash) OR EXISTS (SELECT 1 FROM users u WHERE u.id=s.user_id AND u.token_hash=s.session_hash AND NOT EXISTS (SELECT 1 FROM accounts ac WHERE ac.user_id=u.id)))",(rs,n)->{
+            String sessionCreated=rs.getString(5);
+            if(sessionCreated!=null&&!Instant.parse(sessionCreated).plus(Store.ACCOUNT_SESSION_LIFETIME).isAfter(Instant.now()))throw new IllegalArgumentException("연결 요청이 만료됐어요. 앱에서 다시 연결해 주세요.");
+            return new Pending(rs.getString(1),rs.getString(2),crypt(rs.getString(3),rs.getString(1),rs.getString(2),false),Instant.parse(rs.getString(4)));
+        },hash(state),provider);
         if(rows.isEmpty()||!rows.get(0).expiresAt().isAfter(Instant.now()))throw new IllegalArgumentException("연결 요청이 만료됐어요. 앱에서 다시 연결해 주세요.");
         if(consume)db.update("DELETE FROM platform_oauth_states WHERE state_hash=?",hash(state));
         return rows.get(0);

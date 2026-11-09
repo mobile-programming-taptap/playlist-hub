@@ -80,6 +80,10 @@ public class MainActivity extends AppCompatActivity {
     private String storageIdentity="";
     private boolean returningFromHub;
     private Intent pendingHubPlaylist;
+    private String pendingHubMode;
+    private String hubServerAddress;
+    private boolean pendingHubSettings;
+    private AlertDialog settingsDialog;
     private boolean foregroundSeen;
     private boolean foregroundActive;
     private ApiClient foregroundRefreshSource;
@@ -93,6 +97,7 @@ public class MainActivity extends AppCompatActivity {
     private CardAdapter cards;
     private EditText prompt;
     private boolean busy;
+    private Snackbar failureBar;
     private boolean metadataReady;
     private final Object taskOwner=new Object();
     private PendingTask pendingTask;
@@ -103,6 +108,7 @@ public class MainActivity extends AppCompatActivity {
     private String resultMode = "basic";
     private String resultNotice = "";
     private boolean hasResults;
+    private int replacementPosition=-1,replacementKeptCount;
     private int navigationInset;
     private Recommender.Conditions resultConditions = new Recommender.Conditions();
     private Set<String> hiddenTracks = new HashSet<>();
@@ -117,7 +123,17 @@ public class MainActivity extends AppCompatActivity {
     private final ActivityResultLauncher<String> localPermission = registerForActivityResult(new ActivityResultContracts.RequestPermission(), this::completeLocalPermission);
     private final ActivityResultLauncher<Intent> hub = registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result->{
         Intent data=result.getData();
-        if(result.getResultCode()!=RESULT_OK||data==null||!data.getBooleanExtra("openPlaylist",false))return;
+        if(result.getResultCode()!=RESULT_OK||data==null)return;
+        String selectedTab=data.getStringExtra("selectTab");if("library".equals(selectedTab)||"recommend".equals(selectedTab)){((BottomNavigationView)findViewById(R.id.navigation)).setSelectedItemId("library".equals(selectedTab)?R.id.nav_library:R.id.nav_recommend);return;}
+        if(data.getBooleanExtra("connectServer",false)){
+            String mode=data.getStringExtra("mode");
+            if(!"account".equals(mode)&&!"create".equals(mode)&&!"community".equals(mode))return;
+            pendingHubMode=mode;pendingHubSettings=true;returningFromHub=false;
+            if(hubServerAddress==null&&(getApplicationInfo().flags&android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE)!=0
+                    &&("ranchu".equals(android.os.Build.HARDWARE)||"goldfish".equals(android.os.Build.HARDWARE)))hubServerAddress="http://10.0.2.2:8080";
+            findViewById(R.id.main).post(this::continuePendingHub);return;
+        }
+        if(!data.getBooleanExtra("openPlaylist",false))return;
         pendingHubPlaylist=new Intent(data);returningFromHub=true;
         if(foregroundActive&&settings!=null){foregroundRefreshSource=api;foregroundRefreshIdentity=RecommendationRequest.identity(api);findViewById(R.id.main).post(this::refreshForeground);}
     });
@@ -127,10 +143,11 @@ public class MainActivity extends AppCompatActivity {
         Runnable action=pendingConnection;pendingConnection=null;
         pendingPermissionBase=null;pendingServerConnection=false;
         if(granted){if(action!=null)action.run();return;}
+        cancelHubConnection();
         if(api!=null&&ApiClient.localHost(java.net.URI.create(api.base).getHost())){settings.edit().remove("server").apply();api=null;clearStorageResults();}
         refreshData(()->{if(librarySelected)loadLibrary();});
         dialogBuilder().setTitle("서버에 연결하지 않았어요")
-            .setMessage("로컬 서버 연결에는 근처 기기 권한이 필요해요. 기본 추천은 계속 사용할 수 있어요.").setPositiveButton("확인",null).show();
+            .setMessage("로컬 AI 서버 연결에는 근처 기기 권한이 필요해요. 저장한 목록은 계속 사용할 수 있어요.").setPositiveButton("확인",null).show();
     }
 
     @Override protected void onCreate(Bundle state) {
@@ -155,9 +172,11 @@ public class MainActivity extends AppCompatActivity {
             ApiClient.ownerFingerprint(state.getString("storageBase",base),state.getString("storageIdentity",storageIdentity))));
         if(!sameStorage||!settings.getString("conversationOwner","").equals(storageOwner))settings.edit().remove("conversation").apply();
         try {JSONArray history=new JSONArray(settings.getString("conversation","[]"));for(int i=Math.max(0,history.length()-8);i<history.length();i++)conversation.add(history.getString(i));}catch(Exception ignored) { }
-        if(state!=null){returningFromHub=state.getBoolean("returningFromHub");pendingHubPlaylist=state.getParcelable("pendingHubPlaylist");pendingPermissionBase=state.getString("pendingPermissionBase");pendingServerConnection=state.getBoolean("pendingServerConnection");}
+        if(state!=null){returningFromHub=state.getBoolean("returningFromHub");pendingHubPlaylist=state.getParcelable("pendingHubPlaylist");pendingPermissionBase=state.getString("pendingPermissionBase");pendingServerConnection=state.getBoolean("pendingServerConnection");
+            pendingHubMode=state.getString("pendingHubMode");hubServerAddress=state.getString("hubServerAddress");pendingHubSettings=state.getBoolean("pendingHubSettings");}
         prompt = findViewById(R.id.prompt); prompt.setText(settings.getString("prompt", ""));
         if (state != null && sameStorage) {
+            replacementPosition=state.getInt("replacementPosition",-1);replacementKeptCount=state.getInt("replacementKeptCount");
             restoredRefinement=state.getString("refinementDraft");
             try{JSONArray kept=new JSONArray(state.getString("refinementKeeps","[]"));for(int i=0;i<kept.length();i++)restoredKeeps.add(kept.getString(i));}catch(Exception ignored){}
             libraryQuery = state.getString("libraryQuery", "");
@@ -165,6 +184,7 @@ public class MainActivity extends AppCompatActivity {
             restoredLibraryScroll = state.getInt("libraryScroll");
         }
         pager = findViewById(R.id.pager); cards = new CardAdapter(); pager.setAdapter(cards);
+        findViewById(R.id.library_scroll).setBackground(TapTapUi.rounded(this,R.color.background,28,false));findViewById(R.id.library_scroll).setClipToOutline(true);
         findViewById(R.id.recommend_scroll).addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob) -> resizeCard());
         pager.registerOnPageChangeCallback(new ViewPager2.OnPageChangeCallback() {
             @Override public void onPageSelected(int index) { stopPlayer(); updateCounter(); }
@@ -186,6 +206,8 @@ public class MainActivity extends AppCompatActivity {
         });
         findViewById(R.id.refine_request).setOnClickListener(v->refineRequest());
         findViewById(R.id.settings).setOnClickListener(v -> showSettings());
+        findViewById(R.id.connect_ai).setOnClickListener(v -> connectService());
+        findViewById(R.id.connect_ai_results).setOnClickListener(v -> connectService());
         findViewById(R.id.example_rain).setOnClickListener(v -> prompt.setText("비 오는 밤에 듣기 좋은 잔잔한 음악"));
         findViewById(R.id.example_study).setOnClickListener(v -> prompt.setText("공부할 때 집중할 수 있는 가사 없는 피아노 음악"));
         findViewById(R.id.example_workout).setOnClickListener(v -> prompt.setText("운동할 때 듣기 좋은 신나는 음악"));
@@ -244,14 +266,14 @@ public class MainActivity extends AppCompatActivity {
                     clearStorageResults();showError("로그인 또는 서버 연결을 다시 확인해 주세요.",()->openHub("account",null));
                 }return;
             }
-            if(pending.error!=null)showError(errorMessage(pending.error),()->{if(!busy)recommendation.retry(api,new ArrayList<>(catalogue),new HashMap<>(feedback));});
+            if(pending.error!=null)showError(errorMessage(pending.error),()->{if(!busy)recommendation.retry(api);});
             else showRecommendation(pending.result);
         });
         if(state!=null&&sameStorage&&state.getBoolean("requestPending")&&!recommendation.current().loading
                 &&recommendation.current().result==null&&recommendation.current().error==null)
             { try {String snapshot=state.getString("pendingRecommendation");if(snapshot!=null){
                 recommendation.restore(new JSONObject(snapshot),api);
-                findViewById(R.id.main).post(()->{if(!isDestroyed()&&!isFinishing())showError("진행하던 추천 요청이 남아 있어요. 같은 조건과 선택한 곡으로 다시 요청할 수 있어요.",()->{if(!busy&&metadataReady)recommendation.retry(api,new ArrayList<>(catalogue),new HashMap<>(feedback));});});
+                findViewById(R.id.main).post(()->{if(!isDestroyed()&&!isFinishing())showError("진행하던 추천 요청이 남아 있어요. 같은 조건과 선택한 곡으로 다시 요청할 수 있어요.",()->{if(!busy&&metadataReady)recommendation.retry(api);});});
             }}catch(Exception ignored){} }
         pendingTask.states().observe(this, pending->{
             updateBusy();
@@ -275,6 +297,10 @@ public class MainActivity extends AppCompatActivity {
             catch(Exception error){showError("저장된 서버 주소를 확인해 주세요.",null);return;}
         }
         networkPermission(api==null?"":api.base,()->refreshData(()->{
+            if(pendingHubMode!=null){
+                if(interruptedError==null&&reopenPendingHub())return;
+                showPendingHubSettings();
+            }
             if(!openPendingHubPlaylist()&&state!=null&&state.getBoolean("library"))((BottomNavigationView)findViewById(R.id.navigation)).setSelectedItemId(R.id.nav_library);
             if(interruptedError!=null)showError(errorMessage(interruptedError),null);
         }));
@@ -299,6 +325,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void applyMetadata(Object[] data) {
         catalogue=(List<Track>)data[0];feedback=(Map<String,Integer>)data[1];savedTracks=(Set<String>)data[2];
+        mergeRecommendationTracks(false);
         metadataReady=true;updateBusy();
         storageIdentity=api==null?"local":api.identity();
         if(restoredRefinement!=null&&hasResults)findViewById(R.id.main).post(this::refineRequest);
@@ -307,7 +334,7 @@ public class MainActivity extends AppCompatActivity {
     private Object[] storeConnection(ApiClient source) throws Exception {
         Object[] data=readMetadata(source);
         if(source!=null&&!source.ownsCurrentSession())throw new IllegalStateException("계정이 변경되었어요. 새 계정에서 연결을 다시 확인해 주세요.");
-        SharedPreferences.Editor change=settings.edit();
+        SharedPreferences.Editor change=settings.edit().putBoolean("serverSelectionMade",true);
         if(source==null)change.remove("server");else change.putString("server",source.base);
         if(!change.commit())throw new IllegalStateException("음악 설정을 저장하지 못했어요.");
         return data;
@@ -316,7 +343,7 @@ public class MainActivity extends AppCompatActivity {
     private void applyStorage(ApiClient source,Object[] data) {
         if(source!=null&&!source.ownsCurrentSession()){showError("계정이 변경되었어요. 새 계정에서 연결을 다시 확인해 주세요.",null);return;}
         api=source;storageIdentity=api==null?"local":api.identity();conversation.clear();settings.edit().remove("conversation").apply();
-        clearStorageResults();applyMetadata(data);if(librarySelected)loadLibrary();
+        clearStorageResults();applyMetadata(data);if(!reopenPendingHub()&&librarySelected)loadLibrary();
     }
 
     private Set<String> savedIds(ApiClient source) throws Exception {
@@ -338,12 +365,14 @@ public class MainActivity extends AppCompatActivity {
         TextInputLayout field = findViewById(R.id.prompt_layout);
         try { Recommender.parse(request); field.setError(null); }
         catch (IllegalArgumentException e) { field.setError(e.getMessage()); return; }
-        hideKeyboard(); stopPlayer(); settings.edit().putString("prompt", request).apply();
-        recommendation.start(request,api,new ArrayList<>(catalogue),new HashMap<>(feedback));
+        if(api==null){settings.edit().putString("prompt",request).apply();hideKeyboard();connectService();return;}
+        replacementPosition=-1;hideKeyboard(); stopPlayer(); settings.edit().putString("prompt", request).apply();
+        recommendation.start(request,api);
     }
 
     private void refineRequest() {
         if(busy||!hasResults)return;
+        if(api==null){connectService();return;}
         LinearLayout box=column();
         box.addView(text("이전 요청을 기억하며 추천을 바꿔요. 유지할 곡을 선택할 수 있어요.",14,false));
         for(String previous:conversation)box.addView(text("나 · "+previous,13,false));
@@ -362,15 +391,30 @@ public class MainActivity extends AppCompatActivity {
             String request=next.getText().toString().trim();try{com.mptaptap.core.Conversation.parse(resultConditions,conversation,request);next.setError(null);}catch(Exception e){next.setError(e.getMessage());return;}
             List<String> kept=new ArrayList<>();for(int i=0;i<choices.size();i++)if(choices.get(i).isChecked())kept.add(current.get(i).track.id);
             dialog.dismiss();hideKeyboard();stopPlayer();
-            recommendation.start(request,api,new ArrayList<>(catalogue),new HashMap<>(feedback),new ArrayList<>(conversation),kept,new ArrayList<>(hiddenTracks),resultConditions);
+            replacementPosition=-1;recommendation.start(request,api,new ArrayList<>(conversation),kept,new ArrayList<>(hiddenTracks),resultConditions);
         }));dialog.setOnDismissListener(d->{if(refinementPrompt==next){refinementPrompt=null;refinementChoices.clear();}});dialog.show();
     }
 
     private void openHub(String mode,String id) {
+        cancelHubConnection();
         stopPlayer();returningFromHub=true;
         Intent intent=new Intent(this,HubActivity.class).putExtra("mode",mode);
         if(id!=null)intent.putExtra("playlistId",id);
         hub.launch(intent);
+    }
+
+    private void cancelHubConnection(){pendingHubMode=null;hubServerAddress=null;pendingHubSettings=false;}
+    private void continuePendingHub(){if(!reopenPendingHub())showPendingHubSettings();}
+    private void showPendingHubSettings(){
+        if(!pendingHubSettings||pendingHubMode==null||!foregroundActive||busy||isDestroyed()||isFinishing())return;
+        pendingHubSettings=false;connectService();
+    }
+    private boolean reopenPendingHub(){
+        if(pendingHubMode==null||api==null||!metadataReady||!foregroundActive||busy||isDestroyed()||isFinishing()||!api.ownsCurrentSession()
+                ||!api.base.equals(settings.getString("server","")))return false;
+        String mode=pendingHubMode;cancelHubConnection();
+        if(settingsDialog!=null)settingsDialog.dismiss();
+        openHub(mode,null);return true;
     }
 
     private boolean openPendingHubPlaylist() {
@@ -388,6 +432,7 @@ public class MainActivity extends AppCompatActivity {
 
     @Override protected void onResume() {
         super.onResume();foregroundActive=true;boolean initial=!foregroundSeen;foregroundSeen=true;
+        if(pendingHubMode!=null)findViewById(R.id.main).post(this::continuePendingHub);
         if(settings==null||!returningFromHub&&(initial||api==null||!metadataReady))return;returningFromHub=false;
         foregroundRefreshSource=api;foregroundRefreshIdentity=RecommendationRequest.identity(api);
         findViewById(R.id.main).post(this::refreshForeground);
@@ -406,35 +451,53 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void showRecommendation(Object[] result) {
+        dismissFailure();
         if(result.length>4){conversation=new ArrayList<>((List<String>)result[4]);settings.edit().putString("conversation",new JSONArray(conversation).toString())
             .putString("conversationOwner",ApiClient.ownerFingerprint(api==null?"":api.base,storageIdentity)).apply();}
-        picks = (List<Recommender.Pick>)result[0]; resultMode = (String)result[1]; resultNotice = (String)result[2];
+        picks = new ArrayList<>((List<Recommender.Pick>)result[0]);
+        int nextIndex=0;
+        if(replacementPosition>=0&&picks.size()>replacementKeptCount){nextIndex=Math.min(replacementPosition,picks.size()-1);picks.add(nextIndex,picks.remove(replacementKeptCount));}
+        replacementPosition=-1;int selectedIndex=nextIndex;
+        resultMode = (String)result[1]; resultNotice = (String)result[2];
+        boolean newTracks=mergeRecommendationTracks(true);
         resultConditions = (Recommender.Conditions)result[3]; hiddenTracks.clear();
         showResults(); List<Recommender.Pick> shown=picks;
         findViewById(R.id.results).post(() -> {
             if(isDestroyed()||isFinishing()||picks!=shown)return;
-            // View state restoration runs after onStart; a new result always begins with its first track.
-            hideKeyboard();pager.setCurrentItem(0,false);
+            // A replacement stays on the changed card after Activity state restoration.
+            hideKeyboard();pager.setCurrentItem(selectedIndex,false);
             ((androidx.core.widget.NestedScrollView)findViewById(R.id.recommend_scroll)).scrollTo(0,findViewById(R.id.results).getTop());
         });
+        // Newly verified records are registered on the server; refresh the library's searchable tracks.
+        if(api!=null&&newTracks)refreshData(()->{cards.notifyDataSetChanged();updateCounter();});
+    }
+
+    private boolean mergeRecommendationTracks(boolean replace) {
+        Map<String,Track> rows=new java.util.LinkedHashMap<>();for(Track track:catalogue)rows.put(track.id,track);
+        boolean added=false;
+        for(Recommender.Pick pick:picks) {
+            if(!pick.track.usable())continue;
+            if(!rows.containsKey(pick.track.id)){rows.put(pick.track.id,pick.track);added=true;}
+            else if(replace)rows.put(pick.track.id,pick.track);
+        }
+        catalogue=new ArrayList<>(rows.values());return added;
     }
 
     private void showResults() {
         hasResults=true; findViewById(R.id.request_panel).setVisibility(View.GONE);
         findViewById(R.id.results).setVisibility(View.VISIBLE);
         findViewById(R.id.empty).setVisibility(picks.isEmpty() ? View.VISIBLE : View.GONE);
-        ((TextView)findViewById(R.id.empty)).setText(hiddenTracks.isEmpty() ? "조건에 맞는 곡을 찾지 못했어요.\n장르나 언어 조건을 줄여 다시 추천받아 보세요." : "이번 추천에서 모든 곡을 제외했어요.\n요청을 수정해 새로 추천받을 수 있어요.");
-        ((TextView)findViewById(R.id.notice)).setText((resultMode.equals("openai") ? "AI 추천" : "기본 추천") + (resultNotice.isEmpty() ? " · 한 곡씩 들어보세요." : "\n" + resultNotice)
-            + (hiddenTracks.isEmpty() ? "" : "\n이번 결과만 수정했어요. 좋아요·싫어요는 그대로예요."));
+        String emptyNotice=api==null?"AI 추천이 연결되지 않았어요.\nAI 추천을 연결하면 같은 요청으로 새 곡을 찾을 수 있어요."
+            :resultNotice.isEmpty()?"조건에 맞는 곡을 확인하지 못했어요. 같은 요청으로 다시 시도해 보세요.":resultNotice;
+        ((TextView)findViewById(R.id.empty)).setText(hiddenTracks.isEmpty()?emptyNotice:"이번 추천에서 모든 곡을 제외했어요.\n요청을 수정해 새로 추천받을 수 있어요.");
+        ((TextView)findViewById(R.id.notice)).setText(resultMode.equals("openai")?"AI 추천":"이전 기본 추천 결과 · AI 연결 필요");
+        TextView detail=findViewById(R.id.result_detail);
+        detail.setText(resultNotice+(hiddenTracks.isEmpty()?"":"\n이번 결과만 수정했어요. 좋아요·싫어요는 그대로예요."));
+        detail.setVisibility(!picks.isEmpty()&&!detail.getText().toString().isEmpty()?View.VISIBLE:View.GONE);
         List<String> conditions=new ArrayList<>();
-        for (String tag:resultConditions.tags) conditions.add(Recommender.LABELS.get(tag));
-        for (String tag:resultConditions.excludedTags) conditions.add(Recommender.LABELS.get(tag)+" 제외");
-        switch(resultConditions.language) {
-            case "ko": conditions.add("한국어"); break;
-            case "en": conditions.add("영어"); break;
-            case "none": if(!resultConditions.tags.contains("instrumental"))conditions.add("연주곡"); break;
-            case "unsupported": conditions.add("현재 없는 언어"); break;
-        }
+        for (String tag:resultConditions.tags) conditions.add(Recommender.label(tag));
+        for (String tag:resultConditions.excludedTags) conditions.add(Recommender.label(tag)+" 제외");
+        if(!resultConditions.language.isEmpty()&&!(resultConditions.language.equals("none")&&resultConditions.tags.contains("instrumental")))conditions.add(Recommender.languageLabel(resultConditions.language));
         ((TextView)findViewById(R.id.condition_summary)).setText(conditions.isEmpty() ? "다양한 음악" : android.text.TextUtils.join(" · ",conditions));
         findViewById(R.id.condition_summary).setContentDescription("추천 조건: "+((TextView)findViewById(R.id.condition_summary)).getText());
         pager.setVisibility(picks.isEmpty() ? View.GONE : View.VISIBLE);
@@ -457,21 +520,23 @@ public class MainActivity extends AppCompatActivity {
     private void updateDiscoverAppearance() {
         if(pager==null)return;
         boolean showing=hasResults&&findViewById(R.id.results).getVisibility()==View.VISIBLE&&!librarySelected;
+        findViewById(R.id.connect_ai_results).setVisibility(api==null&&showing?View.VISIBLE:View.GONE);
         findViewById(R.id.header_caption).setVisibility(showing?View.GONE:View.VISIBLE);
         findViewById(R.id.notice).setVisibility(showing?View.VISIBLE:View.GONE);
         findViewById(R.id.counter).setVisibility(showing?View.VISIBLE:View.GONE);
         TextView title=findViewById(R.id.header_title),caption=findViewById(R.id.header_caption);
         title.setText(librarySelected?"내 음악":showing?"오늘의 추천":"TapTap");
         caption.setText(librarySelected?"좋아하는 음악을 모아두는 곳":"하루를 닮은 음악");
-        int ink=getColor(librarySelected?R.color.ink:R.color.discover_ink);
-        title.setTextColor(ink);caption.setTextColor(getColor(librarySelected?R.color.muted:R.color.discover_muted));
+        int ink=getColor(R.color.discover_ink);
+        title.setTextColor(ink);caption.setTextColor(getColor(R.color.discover_muted));
         ((MaterialButton)findViewById(R.id.settings)).setIconTint(android.content.res.ColorStateList.valueOf(ink));
         Drawable background;
-        if(librarySelected)background=new ColorDrawable(getColor(R.color.background));
+        if(librarySelected)background=getDrawable(R.drawable.discover_background);
         else {
-            String video=showing&&!picks.isEmpty()?picks.get(Math.min(pager.getCurrentItem(),picks.size()-1)).track.youtubeVideoId:null;
-            Bitmap photo=artwork.peek(video);
-            View visibleArtwork=video==null?null:pager.findViewWithTag(video);
+            Track visible=showing&&!picks.isEmpty()?picks.get(Math.min(pager.getCurrentItem(),picks.size()-1)).track:null;
+            String imageKey=visible==null?null:ArtworkLoader.key(visible.youtubeVideoId,visible.artworkUrl);
+            Bitmap photo=visible==null?null:artwork.peek(visible.youtubeVideoId,visible.artworkUrl);
+            View visibleArtwork=imageKey==null?null:pager.findViewWithTag(imageKey);
             if(photo==null&&visibleArtwork instanceof ImageView&&((ImageView)visibleArtwork).getDrawable() instanceof BitmapDrawable)
                 photo=((BitmapDrawable)((ImageView)visibleArtwork).getDrawable()).getBitmap();
             if(photo==null)background=getDrawable(R.drawable.discover_background);
@@ -499,8 +564,7 @@ public class MainActivity extends AppCompatActivity {
         findViewById(R.id.main).setBackground(layers);
         androidx.core.view.WindowInsetsControllerCompat bars=ViewCompat.getWindowInsetsController(findViewById(R.id.main));
         if(bars!=null){
-            boolean night=(getResources().getConfiguration().uiMode&android.content.res.Configuration.UI_MODE_NIGHT_MASK)==android.content.res.Configuration.UI_MODE_NIGHT_YES;
-            bars.setAppearanceLightStatusBars(!librarySelected||!night);bars.setAppearanceLightNavigationBars(false);
+            bars.setAppearanceLightStatusBars(true);bars.setAppearanceLightNavigationBars(false);
         }
     }
 
@@ -515,22 +579,26 @@ public class MainActivity extends AppCompatActivity {
 
     private void changeResult(Track track, boolean replace) {
         if (busy||!metadataReady) return;
-        int index=-1; Set<String> unavailable=new HashSet<>(hiddenTracks);
+        int index=-1;
         for (int i=0;i<picks.size();i++) {
-            unavailable.add(picks.get(i).track.id);
             if (picks.get(i).track.id.equals(track.id)) index=i;
         }
         if (index<0) return;
+        if(replace) {
+            if(api==null){connectService();return;}
+            List<String> kept=new ArrayList<>();
+            for(Recommender.Pick pick:picks)if(!pick.track.id.equals(track.id)&&feedback.getOrDefault(pick.track.id,0)!=-1)kept.add(pick.track.id);
+            Set<String> excluded=new HashSet<>(hiddenTracks);excluded.add(track.id);
+            replacementPosition=index;replacementKeptCount=kept.size();stopPlayer();
+            recommendation.start(prompt.getText().toString(),api,new ArrayList<>(conversation),kept,new ArrayList<>(excluded),resultConditions);
+            return;
+        }
         List<Recommender.Pick> before=picks, changed=new ArrayList<>(picks);
         Set<String> beforeHidden=new HashSet<>(hiddenTracks); int beforeIndex=pager.getCurrentItem();
-        if (replace) {
-            List<Recommender.Pick> alternatives=Recommender.recommend(catalogue, resultConditions, feedback, resultMode, unavailable).tracks;
-            if (alternatives.isEmpty()) { showError("같은 조건의 다른 곡이 없어요. 요청의 조건을 줄여보세요.", null); return; }
-            changed.set(index, alternatives.get(0));
-        } else changed.remove(index);
+        changed.remove(index);
         stopPlayer(); picks=changed; hiddenTracks.add(track.id); showResults();
         pager.setCurrentItem(Math.max(0, Math.min(beforeIndex, picks.size()-1)), false);
-        snackbar(replace ? "같은 조건의 다른 곡으로 바꿨어요." : "이번 추천에서 제외했어요.", Snackbar.LENGTH_LONG)
+        snackbar("이번 추천에서 제외했어요.", Snackbar.LENGTH_LONG)
             .setAction("되돌리기", v -> {
                 if (busy || picks!=changed) return;
                 stopPlayer(); picks=before; hiddenTracks=beforeHidden; showResults(); pager.setCurrentItem(beforeIndex, false);
@@ -563,9 +631,12 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void updateMode() {
-        String notice=metadataReady?(api==null?"반응과 목록은 이 기기에 저장돼요.":"한 문장으로 음악을 찾아보세요.")
-            :busy?"음악 데이터를 확인 중이에요.":"음악 데이터를 불러오지 못했어요. 설정에서 다시 연결해 주세요.";
-        ((TextView)findViewById(R.id.mode_label)).setText((api==null?"기본 추천 · ":"온라인 추천 · ")+notice);
+        String notice=metadataReady?(api==null?"이용 안내를 확인하면 요청에 맞는 음악을 찾을 수 있어요.":"한 문장으로 음악을 찾아보세요.")
+            :busy?"음악 데이터를 확인 중이에요.":"음악을 불러오지 못했어요. 잠시 후 다시 시도해 주세요.";
+        ((TextView)findViewById(R.id.mode_label)).setText((api==null?"시작하기 · ":"온라인 추천 · ")+notice);
+        findViewById(R.id.connect_ai).setVisibility(api==null||!busy&&!metadataReady?View.VISIBLE:View.GONE);
+        findViewById(R.id.connect_ai).setEnabled(!busy);
+        findViewById(R.id.connect_ai_results).setEnabled(!busy);
     }
 
     private void react(Track track, int reaction) {
@@ -605,7 +676,7 @@ public class MainActivity extends AppCompatActivity {
         EditText name = new AppCompatEditText(this); name.setHint("예: 비 오는 날의 음악"); name.setFilters(new InputFilter[]{new InputFilter.LengthFilter(80)});
         name.setSingleLine(true); name.setText(currentTitle); name.setSelection(name.length());
         LinearLayout box = column(); box.addView(name);
-        TextView failure=text("",14,false);failure.setTextColor(getColor(R.color.accent));failure.setVisibility(View.GONE);failure.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);box.addView(failure);
+        TextView failure=text("",14,false);failure.setTextColor(getColor(R.color.error_ink));failure.setVisibility(View.GONE);failure.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);box.addView(failure);
         AlertDialog dialog = dialogBuilder().setTitle(id == null ? "새 플레이리스트" : "목록 이름 변경").setView(box).setPositiveButton(id == null ? "만들기" : "변경", null).setNegativeButton("취소", null).create();
         JSONObject[] createdPlaylist=new JSONObject[1];
         String creationId=id==null?java.util.UUID.randomUUID().toString():id;
@@ -662,7 +733,7 @@ public class MainActivity extends AppCompatActivity {
             LinearLayout box = findViewById(R.id.library); box.removeAllViews();
             box.addView(text("내 플레이리스트", 27, true));
             box.addView(text(api == null ? "좋아하는 음악을 이 기기에 모아두세요." : "내가 저장한 음악을 다시 들어보세요.", 14, false));
-            box.addView(button("+ 새 플레이리스트", v -> editPlaylist(null, null, "")));
+            MaterialButton create=button("+ 새 플레이리스트", v -> editPlaylist(null, null, ""));TapTapUi.primary(create);box.addView(create);
             MaterialButton searchTracks=button("곡명·아티스트로 찾기", v -> searchCatalogue());searchTracks.setEnabled(metadataReady);box.addView(searchTracks);
             LinearLayout rows = new LinearLayout(this); rows.setOrientation(LinearLayout.VERTICAL);
             EditText search = searchField("내 목록 이름 검색", q -> { libraryQuery=q; renderLists(rows, lists, q); });
@@ -737,13 +808,14 @@ public class MainActivity extends AppCompatActivity {
             JSONObject row=lists.optJSONObject(i);
             if (!Track.matches(row.optString("title"), query)) continue;
             String id=row.optString("id"); count++;
-            rows.addView(button(row.optString("title") + "\n" + row.optInt("size") + "곡", v -> openPlaylist(id)));
+            MaterialButton playlist=button(row.optString("title") + "\n" + row.optInt("size") + "곡", v -> openPlaylist(id));playlist.setIconResource(R.drawable.ic_library);rows.addView(playlist);
         }
         if (count==0) rows.addView(text(query.trim().isEmpty() ? "아직 저장한 목록이 없어요.\n추천 곡에서 ‘목록에 저장’을 눌러보세요." : "검색한 이름의 목록이 없어요.", 16, false));
     }
 
     private EditText searchField(String hint, Consumer<String> change) {
         EditText field=new AppCompatEditText(this); field.setSingleLine(true); field.setHint(hint);
+        TapTapUi.input(field);LinearLayout.LayoutParams size=new LinearLayout.LayoutParams(-1,-2);size.setMargins(0,dp(12),0,dp(12));field.setLayoutParams(size);
         field.setFilters(new InputFilter[]{new InputFilter.LengthFilter(100)});
         field.addTextChangedListener(new TextWatcher() {
             public void beforeTextChanged(CharSequence s,int start,int count,int after) {}
@@ -805,10 +877,10 @@ public class MainActivity extends AppCompatActivity {
                 .setPositiveButton("원본 열기",(a,b)->openUrl(url)).setNegativeButton("닫기",null).show();
             else if(action.equals("곡 정보 수정")){
                 LinearLayout box=column();EditText name=new AppCompatEditText(this),artist=new AppCompatEditText(this),time=new AppCompatEditText(this);
-                name.setHint("곡명");name.setText(title);name.setFilters(new InputFilter[]{new InputFilter.LengthFilter(300)});box.addView(name);
-                artist.setHint("아티스트");artist.setText(track.optString("artist"));artist.setFilters(new InputFilter[]{new InputFilter.LengthFilter(300)});box.addView(artist);
-                time.setHint("영상 시작 위치 · 초");time.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);if(youtube){time.setText(String.valueOf(track.optInt("timestamp",0)));box.addView(time);}
-                TextView failure=text("",14,false);failure.setTextColor(getColor(R.color.accent));failure.setVisibility(View.GONE);failure.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);box.addView(failure);
+                name.setHint("곡명");name.setText(title);name.setFilters(new InputFilter[]{new InputFilter.LengthFilter(300)});box.addView(text("곡명",12,true));box.addView(name);
+                artist.setHint("아티스트");artist.setText(track.optString("artist"));artist.setFilters(new InputFilter[]{new InputFilter.LengthFilter(300)});box.addView(text("아티스트",12,true));box.addView(artist);
+                time.setHint("영상 시작 위치 · 초");time.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);if(youtube){time.setText(String.valueOf(track.optInt("timestamp",0)));box.addView(text("영상 시작 위치 · 초",12,true));box.addView(time);}
+                TextView failure=text("",14,false);failure.setTextColor(getColor(R.color.error_ink));failure.setVisibility(View.GONE);failure.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);box.addView(failure);
                 AlertDialog edit=dialogBuilder().setTitle("가져온 곡 수정").setView(scroll(box)).setPositiveButton("저장",null).setNegativeButton("취소",null).create();
                 edit.setOnShowListener(a->edit.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{
                     if(busy)return;
@@ -886,21 +958,79 @@ public class MainActivity extends AppCompatActivity {
 
     private void source(Track t) {
         dialogBuilder().setTitle("곡 정보·출처")
-            .setMessage(t.title+"\n"+t.artist+"\n\nMusicBrainz 핵심 메타데이터 · CC0\n분위기 태그: TapTap 직접 작성\n\n음원 파일은 저장하지 않아요.")
+            .setMessage(t.title+"\n"+t.artist+"\n\nMusicBrainz 핵심 메타데이터 · CC0\n음악 태그: "+(t.tagsSource.isEmpty()?"TapTap 직접 작성":t.tagsSource)+"\n\n음원 파일은 저장하지 않아요.")
             .setPositiveButton("출처 열기",(d,w)->openUrl(t.sourceUrl)).setNegativeButton("닫기",null).show();
     }
 
     private void listen(Track track) {
         stopPlayer();
         if (track.youtubeVideoId.isEmpty()) {
-            dialogBuilder().setTitle("외부에서 찾아볼까요?").setMessage("이 곡의 공식 영상 연결은 아직 확인하지 못했어요. 곡명·아티스트로 검색할 수 있어요.")
-                .setPositiveButton("외부에서 검색",(d,w)->external(track)).setNegativeButton("닫기",null).show(); return;
+            if(api==null){unavailableVideo(track,"영상 자동 검색을 위한 서버 연결이 필요해요. 외부에서 직접 검색할 수 있어요.");return;}
+            if(!ApiClient.consentAccepted(this,api.base)){networkPermission(api.base,()->listen(track));return;}
+            ApiClient source=api;
+            task(()->{
+                try{return source.object("GET","/playback/tracks/"+track.id+"?includeCandidates=true",null);}
+                catch(ApiClient.ApiError error){if(error.statusCode==401)throw error;return new JSONObject().put("message",error.getMessage()).put("statusCode",error.statusCode);}
+            },result->{
+                if(!foregroundActive)return;
+                String video=result.optString("videoId");
+                if(!video.matches("[A-Za-z0-9_-]{11}")){int status=result.optInt("statusCode");unavailableVideo(track,result.optString("message","영상 검색 결과를 확인하지 못했어요. 외부에서 직접 검색할 수 있어요."),status==429||status>=500);return;}
+                if(result.optBoolean("requiresConfirmation",false)){
+                    String candidate=result.optString("candidateTitle"),channel=result.optString("candidateChannel");
+                    var dialog=dialogBuilder().setTitle("이 영상이 맞나요?").setMessage(candidate+"\n"+channel+"\n\n곡명과 가수가 일치하지만 공식 채널 여부는 확인하지 못했어요.")
+                        .setPositiveButton("영상 재생",(d,w)->showPlayback(track.title,video,0,()->external(track),result))
+                        .setNegativeButton("닫기",null);
+                    JSONArray alternatives=result.optJSONArray("alternatives");
+                    if(alternatives!=null&&alternatives.length()>0)dialog.setNeutralButton("다른 영상",(d,w)->choosePlaybackAlternative(track,alternatives));
+                    dialog.show();return;
+                }
+                showPlayback(track.title,video,0,()->external(track),result);
+            },()->listen(track));return;
         }
         listenVideo(track.title,track.youtubeVideoId,0,()->external(track));
+    }
+    private void choosePlaybackAlternative(Track track,JSONArray rows){
+        java.util.List<JSONObject> options=new java.util.ArrayList<>();
+        for(int i=0;i<Math.min(rows.length(),5);i++){
+            JSONObject row=rows.optJSONObject(i);
+            if(row!=null&&row.optString("videoId").matches("[A-Za-z0-9_-]{11}")&&row.optBoolean("playbackAllowed",false))options.add(row);
+        }
+        if(options.isEmpty()){unavailableVideo(track,"다른 재생 가능한 영상을 확인하지 못했어요.");return;}
+        String[] labels=new String[options.size()];for(int i=0;i<options.size();i++)labels[i]=options.get(i).optString("candidateTitle")+"\n"+options.get(i).optString("candidateChannel");
+        dialogBuilder().setTitle("다른 영상 선택").setItems(labels,(d,index)->{
+            JSONObject row=options.get(index);showPlayback(track.title,row.optString("videoId"),0,()->external(track),row);
+        }).setNegativeButton("닫기",null).show();
+    }
+
+    private void unavailableVideo(Track track,String message){unavailableVideo(track,message,false);}
+    private void unavailableVideo(Track track,String message,boolean retry){
+        var dialog=dialogBuilder().setTitle("영상 연결을 확인해 주세요").setMessage(message)
+            .setPositiveButton("외부에서 검색",(d,w)->external(track)).setNegativeButton("닫기",null);
+        if(retry)dialog.setNeutralButton("다시 시도",(d,w)->listen(track));
+        dialog.show();
     }
 
     private void listenVideo(String title,String videoId,int seconds,Runnable fallback) {
         stopPlayer();if(!videoId.matches("[A-Za-z0-9_-]{11}")||seconds<0||seconds>86400){showError("영상 연결 정보를 확인해 주세요.",null);return;}
+        if(api==null){externalVideo(title,videoId,seconds,"YouTube에서 이 영상을 재생할 수 있어요.");return;}
+        if(!ApiClient.consentAccepted(this,api.base)){networkPermission(api.base,()->listenVideo(title,videoId,seconds,fallback));return;}
+        ApiClient source=api;
+        task(()->{try{return source.object("GET","/playback/youtube/"+videoId,null);}catch(ApiClient.ApiError error){if(error.statusCode==401)throw error;return null;}catch(Exception unavailable){return null;}},result->{
+            if(!foregroundActive)return;
+            showPlayback(title,videoId,seconds,fallback,result);
+        },null);
+    }
+    private void showPlayback(String title,String videoId,int seconds,Runnable fallback,JSONObject result){
+        if(result!=null&&videoId.equals(result.optString("videoId"))&&Boolean.FALSE.equals(result.opt("madeForKids"))
+                &&Boolean.TRUE.equals(result.opt("embeddable"))&&Boolean.TRUE.equals(result.opt("playbackAllowed"))&&!result.optString("checkedAt").isEmpty()){
+            embedVideo(title,videoId,seconds,fallback);return;
+        }
+        externalVideo(title,videoId,seconds,result!=null&&Boolean.TRUE.equals(result.opt("madeForKids"))?"이 영상은 YouTube에서 재생할 수 있어요.":"영상의 재생 정보를 확인하지 못했어요. YouTube에서 열 수 있어요.");
+    }
+    private void externalVideo(String title,String videoId,int seconds,String message){
+        dialogBuilder().setTitle(title).setMessage(message).setPositiveButton("YouTube에서 열기",(d,w)->openUrl("https://www.youtube.com/watch?v="+videoId+(seconds==0?"":"&t="+seconds+"s"))).setNegativeButton("닫기",null).show();
+    }
+    private void embedVideo(String title,String videoId,int seconds,Runnable fallback){
         LinearLayout box=column(); TextView status=text("YouTube 영상 연결 중…",14,false);status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE); box.addView(status);
         try {
             player=new WebView(this); player.setContentDescription(title+" YouTube 공식 플레이어");
@@ -925,7 +1055,7 @@ public class MainActivity extends AppCompatActivity {
         } catch(Exception | LinkageError e){stopPlayer();status.setText("플레이어를 준비하지 못했어요. 외부에서 열어보세요.");}
         playerDialog=dialogBuilder().setTitle(title).setView(box)
             .setPositiveButton("외부에서 열기",(d,w)->fallback.run()).setNegativeButton("닫기",null).create();
-        playerDialog.setOnDismissListener(d->{if(playerDialog==d)stopPlayer();}); playerDialog.show();
+        playerDialog.setOnDismissListener(d->{if(playerDialog==d)stopPlayer();}); playerDialog.show();player.requestFocus(View.FOCUS_DOWN);
     }
 
     private void stopPlayer(){
@@ -940,37 +1070,93 @@ public class MainActivity extends AppCompatActivity {
         if(playerDialog!=null){AlertDialog dialog=playerDialog;playerDialog=null;dialog.dismiss();}
     }
 
+    private void connectService(){
+        if(busy)return;
+        String base=api==null?TapTapApplication.defaultServer():api.base;
+        if(base.isEmpty()){
+            showError("서비스를 아직 준비하고 있어요. 잠시 후 다시 시도해 주세요.",this::connectService);return;
+        }
+        ApiClient candidate=new ApiClient(this,base);
+        networkPermission(base,()->task(()->storeConnection(candidate),data->applyStorage(candidate,data),this::connectService,false,candidate),true);
+    }
+
     private void showSettings(){
+        if(settingsDialog!=null&&settingsDialog.isShowing())return;
         LinearLayout box=column(); box.addView(text("나의 음악 설정",23,true));
-        box.addView(button("계정 · 플랫폼 연결",v->openHub("account",null)));
+        box.addView(button("계정 · 플랫폼 연결",v->{if(settingsDialog!=null)settingsDialog.dismiss();openHub("account",null);}));
         box.addView(text("추천에는 직접 입력한 요청과 앱 안의 좋아요·싫어요만 사용해요. 저장·외부 열기를 청취 기록으로 간주하지 않아요.",14,false));
         MaterialButton reactions=button(metadataReady?"좋아요·싫어요 관리 ("+feedback.size()+")":"좋아요·싫어요를 불러오지 못했어요",v->manageFeedback());
         reactions.setEnabled(metadataReady);box.addView(reactions);
-        box.addView(text("AI 추천 서버 연결",18,true));
-        box.addView(text(api==null?"기본 추천을 사용 중이에요. 목록은 이 기기에 보관돼요.":"서버에 연결된 내 반응과 목록을 사용해요.",14,false));
-        EditText address=new AppCompatEditText(this);address.setSingleLine(true);address.setHint("https://서버주소");address.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_VARIATION_URI);
-        address.setText(api==null?"":api.base);box.addView(address);
-        TextView failure=text("",14,false);failure.setTextColor(getColor(R.color.accent));failure.setVisibility(View.GONE);failure.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);box.addView(failure);
-        AlertDialog dialog=dialogBuilder().setView(scroll(box)).setNegativeButton("닫기",null).create();
-        box.addView(button("서버에 연결",v->{
-            address.setError(null);failure.setVisibility(View.GONE);
-            final ApiClient candidate;
-            try {candidate=new ApiClient(this,address.getText().toString());}catch(Exception e){failure.setText(e.getMessage());failure.setVisibility(View.VISIBLE);address.setError(failure.getText());box.setFocusableInTouchMode(true);box.requestFocus();return;}
-            networkPermission(candidate.base,()->task(()->{
-                try{
-                    return storeConnection(candidate);
-                }catch(Exception error){
-                    runOnUiThread(()->{if(!isDestroyed()&&dialog.isShowing()){failure.setText("서버에 연결하지 못했어요. 주소와 서버 실행 상태를 확인해 주세요.");failure.setVisibility(View.VISIBLE);address.setError(failure.getText());box.setFocusableInTouchMode(true);box.requestFocus();}});throw error;
-                }
-            },data->{dialog.dismiss();applyStorage(candidate,data);},null,false,candidate),true);
-        }));
-        if(api!=null)box.addView(button("이 기기의 기본 추천 사용",v->{
-            if(busy)return;dialog.dismiss();task(()->storeConnection(null),data->applyStorage(null,data),null);
-        }));
+        box.addView(text("음악 서비스",18,true));
+        box.addView(text(api==null?"서비스 이용 안내에 동의하면 추천과 계정 기능을 바로 사용할 수 있어요.":"앱이 음악 서비스에 자동으로 연결돼요. 연결이 끊기면 다시 시도할 수 있어요.",14,false));
+        AlertDialog dialog=dialogBuilder().setView(scroll(box)).setNegativeButton("닫기",(d,w)->cancelHubConnection()).create();
+        settingsDialog=dialog;dialog.setOnCancelListener(d->cancelHubConnection());
+        dialog.setOnDismissListener(d->{if(settingsDialog==dialog)settingsDialog=null;});
+        box.addView(button(api==null?"서비스 이용 시작":"연결 다시 시도",v->{dialog.dismiss();connectService();}));
+        if(BuildConfig.DEBUG){
+            LinearLayout developer=column();developer.setVisibility(View.GONE);
+            box.addView(button("개발자 연결 설정",v->developer.setVisibility(developer.getVisibility()==View.VISIBLE?View.GONE:View.VISIBLE)));
+            box.addView(developer);
+            developer.addView(text("AI 추천 서버 연결",18,true));
+            developer.addView(text(api==null?"AI 추천은 아직 연결되지 않았어요. 연결하면 입력한 요청으로 새 곡을 찾을 수 있어요.":"서버에 연결된 내 반응과 목록을 사용해요.",14,false));
+            EditText address=new AppCompatEditText(this);address.setSingleLine(true);address.setHint("https://서버주소");address.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_VARIATION_URI);TapTapUi.input(address);
+            String suggested=(getApplicationInfo().flags&android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE)!=0
+                &&("ranchu".equals(android.os.Build.HARDWARE)||"goldfish".equals(android.os.Build.HARDWARE))?"http://10.0.2.2:8080":"";
+            address.setText(api==null?(pendingHubMode!=null&&hubServerAddress!=null?hubServerAddress:suggested):api.base);developer.addView(address);
+            address.addTextChangedListener(new TextWatcher(){public void beforeTextChanged(CharSequence s,int start,int count,int after){}public void onTextChanged(CharSequence s,int start,int before,int count){if(pendingHubMode!=null)hubServerAddress=s.toString();}public void afterTextChanged(Editable s){}});
+            TextView failure=text("",14,false);failure.setTextColor(getColor(R.color.error_ink));failure.setVisibility(View.GONE);failure.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);developer.addView(failure);
+            developer.addView(button("서버에 연결",v->{
+                address.setError(null);failure.setVisibility(View.GONE);
+                final ApiClient candidate;
+                try {candidate=new ApiClient(this,address.getText().toString());}catch(Exception e){failure.setText(e.getMessage());failure.setVisibility(View.VISIBLE);address.setError(failure.getText());box.setFocusableInTouchMode(true);box.requestFocus();return;}
+                networkPermission(candidate.base,()->task(()->{
+                    try{
+                        return storeConnection(candidate);
+                    }catch(Exception error){
+                        runOnUiThread(()->{if(!isDestroyed()&&dialog.isShowing()){failure.setText("서버에 연결하지 못했어요. 주소와 서버 실행 상태를 확인해 주세요.");failure.setVisibility(View.VISIBLE);address.setError(failure.getText());box.setFocusableInTouchMode(true);box.requestFocus();}});throw error;
+                    }
+                },data->{dialog.dismiss();applyStorage(candidate,data);},null,false,candidate),true);
+            }));
+            if(api!=null)developer.addView(button("AI 연결 해제 · 이 기기의 목록 사용",v->{
+                if(busy)return;cancelHubConnection();dialog.dismiss();task(()->storeConnection(null),data->applyStorage(null,data),null);
+            }));
+        }
         box.addView(button("곡 데이터와 이용 안내",v->dialogBuilder().setTitle("추천 데이터")
-            .setMessage((metadataReady?"MusicBrainz 핵심 메타데이터(CC0)로 검증한 "+catalogue.size()+"곡과 직접 작성한 태그를 사용해요. 곡이 부족하면 조건을 줄여 주세요.":"음악 데이터를 불러오지 못했어요. 설정에서 다시 연결해 주세요.")+"\n\n외부 서비스에서 가져온 데이터는 추천에 사용하지 않아요. 영상 재생과 외부 연결은 네트워크·서비스·지역에 따라 달라질 수 있어요.")
+            .setMessage("AI가 요청에 맞는 새 곡을 제안하고 MusicBrainz 핵심 메타데이터(CC0)로 실제 곡인지 확인해요. AI 연결이나 곡 검증에 실패하면 고정 곡 목록으로 대체하지 않고 재시도를 안내해요.\n\n외부 서비스에서 가져온 데이터는 추천에 사용하지 않아요. 영상 재생과 외부 연결은 네트워크·서비스·지역에 따라 달라질 수 있어요.")
             .setPositiveButton("출처·이용 조건",(d,w)->openUrl("https://musicbrainz.org/doc/About/Data_License")).setNegativeButton("닫기",null).show()));
+        box.addView(text("앱 정보와 개인정보",18,true));
+        box.addView(text("TapTap "+BuildConfig.VERSION_NAME+" ("+BuildConfig.VERSION_CODE+")",14,false));
+        box.addView(button("개인정보 처리 안내",v->openServicePage("/privacy")));
+        box.addView(button("계정·데이터 삭제 안내",v->dialogBuilder().setTitle("계정과 데이터 삭제")
+            .setMessage("계정 화면에서 ‘계정 삭제’를 선택하고 비밀번호 또는 카카오 계정을 다시 확인하면 로그인한 TapTap 계정의 목록·반응·서비스 연결 정보를 삭제할 수 있어요. 외부 음악 서비스의 원본 플레이리스트는 유지돼요. 이 기기에만 저장한 목록은 서버 계정과 별개예요.")
+            .setPositiveButton("계정 관리 열기",(d,w)->{dialog.dismiss();openHub("account",null);}).setNeutralButton("자세한 삭제 안내",(d,w)->openServicePage("/account-deletion")).setNegativeButton("닫기",null).show()));
+        box.addView(button("오픈소스 라이선스",v->showLicenses()));
+        if(!BuildConfig.SUPPORT_EMAIL.isEmpty())box.addView(button("문의하기",v->{try{startActivity(new Intent(Intent.ACTION_SENDTO,Uri.fromParts("mailto",BuildConfig.SUPPORT_EMAIL,null)).putExtra(Intent.EXTRA_SUBJECT,"TapTap "+BuildConfig.VERSION_NAME+" 문의"));}catch(ActivityNotFoundException error){showError("메일 앱을 찾을 수 없어요. 문의 주소: "+BuildConfig.SUPPORT_EMAIL,null);}}));
         dialog.show();
+    }
+
+    private void openServicePage(String path){
+        String base=api==null?BuildConfig.API_BASE:api.base;
+        if(base.isEmpty()){dialogBuilder().setTitle("서비스 안내").setMessage("서비스를 준비 중이에요. 잠시 후 다시 시도해 주세요. 음악 계정 연결은 선택 사항이에요.").setPositiveButton("확인",null).show();return;}
+        openConsentLink(base+path);
+    }
+    private void openConsentLink(String address){
+        Uri uri=Uri.parse(address);if("https".equals(uri.getScheme())){openUrl(address);return;}
+        if(BuildConfig.DEBUG&&"http".equals(uri.getScheme())&&ApiClient.localHost(uri.getHost()))try{startActivity(new Intent(Intent.ACTION_VIEW,uri).addCategory(Intent.CATEGORY_BROWSABLE));return;}catch(ActivityNotFoundException ignored){}
+        showError("서비스 안내를 열 브라우저가 없어요.",null);
+    }
+
+    private void showLicenses(){
+        LinearLayout box=column();box.addView(text("앱에 포함된 오픈소스",18,true));
+        box.addView(text("AndroidX · Material Components for Android · Kakao Android SDK · Kotlin · kotlinx.coroutines · kotlinx.serialization · OkHttp · Okio · Retrofit · Retrofit Kotlin Serialization Converter\nApache License 2.0",14,false));
+        box.addView(button("포함 라이브러리와 저작권 안내",v->showLicense("오픈소스 고지","licenses/dependencies.txt")));
+        box.addView(button("Apache License 2.0 전문",v->showLicense("Apache License 2.0","licenses/apache-2.0.txt")));
+        box.addView(button("Pretendard · SIL Open Font License",v->showLicense("Pretendard","licenses/pretendard.txt")));
+        dialogBuilder().setTitle("오픈소스 라이선스").setView(scroll(box)).setPositiveButton("닫기",null).show();
+    }
+    private void showLicense(String title,String asset){
+        try{TextView license=text(ApiClient.read(getAssets().open(asset)),12,false);license.setTextIsSelectable(true);dialogBuilder().setTitle(title).setView(scroll(license)).setPositiveButton("닫기",null).show();}
+        catch(Exception error){showError("라이선스 안내를 불러오지 못했어요.",null);}
     }
 
     private void manageFeedback(){
@@ -984,18 +1170,12 @@ public class MainActivity extends AppCompatActivity {
         dialog.show();
     }
 
-    private MaterialAlertDialogBuilder dialogBuilder(){
-        return new MaterialAlertDialogBuilder(this){
-            @Override public AlertDialog create(){
-                AlertDialog dialog=super.create();dialogs.add(dialog);return dialog;
-            }
-        };
-    }
+    private MaterialAlertDialogBuilder dialogBuilder(){return TapTapUi.dialog(this,dialogs);}
 
     private LinearLayout column(){LinearLayout box=new LinearLayout(this);box.setOrientation(LinearLayout.VERTICAL);box.setPadding(dp(20),dp(8),dp(20),dp(16));return box;}
     private ScrollView scroll(View child){ScrollView view=new ScrollView(this);view.addView(child);return view;}
-    private TextView text(String value,int size,boolean bold){TextView view=new AppCompatTextView(this);view.setText(value);view.setTextSize(size);view.setTextColor(getColor(bold?R.color.ink:R.color.muted));view.setPadding(0,dp(10),0,dp(10));if(bold)view.setTypeface(view.getTypeface(),Typeface.BOLD);return view;}
-    private MaterialButton button(String label,View.OnClickListener action){MaterialButton view=new MaterialButton(this,null,com.google.android.material.R.attr.materialButtonOutlinedStyle);view.setText(label);view.setTextSize(14);view.setGravity(android.view.Gravity.START|android.view.Gravity.CENTER_VERTICAL);view.setMinHeight(dp(52));view.setCornerRadius(dp(16));view.setStrokeColor(android.content.res.ColorStateList.valueOf(getColor(R.color.line)));view.setTextColor(getColor(R.color.ink));view.setBackgroundTintList(android.content.res.ColorStateList.valueOf(getColor(R.color.surface)));view.setOnClickListener(v->{if(!busy)action.onClick(v);});return view;}
+    private TextView text(String value,int size,boolean bold){TextView view=new AppCompatTextView(this);view.setText(value);view.setTextSize(size);view.setTextColor(getColor(bold?R.color.ink:R.color.muted));view.setPadding(0,dp(10),0,dp(10));TapTapUi.font(view,bold);view.setLineSpacing(dp(3),1);return view;}
+    private MaterialButton button(String label,View.OnClickListener action){MaterialButton view=new MaterialButton(this,null,com.google.android.material.R.attr.materialButtonOutlinedStyle);view.setText(label);TapTapUi.button(view);view.setGravity(android.view.Gravity.START|android.view.Gravity.CENTER_VERTICAL);view.setOnClickListener(v->{if(!busy)action.onClick(v);});return view;}
     private int dp(int value){return Math.round(value*getResources().getDisplayMetrics().density);}
 
     private <T> void task(Callable<T> operation,Consumer<T> success,Runnable retry){
@@ -1039,14 +1219,21 @@ public class MainActivity extends AppCompatActivity {
         TextView empty=findViewById(R.id.empty);empty.setText(R.string.home_empty);empty.setVisibility(View.VISIBLE);cards.notifyDataSetChanged();updateDiscoverAppearance();
     }
     private void clearStorageResults(){
+        dismissFailure();
         metadataReady=false;catalogue=new ArrayList<>();feedback=new HashMap<>();savedTracks=new HashSet<>();
-        recommendation.discard();clearResults();playlistId=null;libraryQuery="";
+        replacementPosition=-1;recommendation.discard();clearResults();playlistId=null;libraryQuery="";
         ((LinearLayout)findViewById(R.id.library)).removeAllViews();
     }
     private void networkPermission(String base,Runnable action){
         networkPermission(base,action,false);
     }
     private void networkPermission(String base,Runnable action,boolean connecting){
+        if(!base.isEmpty()&&!ApiClient.consentAccepted(this,base)){
+            TapTapUi.consent(this,dialogs,base,()->{try{ApiClient.acceptConsent(this,base);networkPermission(base,action,connecting);}catch(IllegalStateException error){showError(error.getMessage(),()->networkPermission(base,action,connecting));}},()->{
+                ApiClient.declineConsent(this,base);cancelHubConnection();
+                if(api!=null&&api.base.equals(base)){api=null;storageIdentity="local";conversation.clear();settings.edit().remove("conversation").apply();clearStorageResults();refreshData(()->{if(librarySelected)loadLibrary();});}
+            },this::openConsentLink);return;
+        }
         if(android.os.Build.VERSION.SDK_INT>=37&&!base.isEmpty()&&ApiClient.localHost(java.net.URI.create(base).getHost())
                 &&checkSelfPermission(android.Manifest.permission.ACCESS_LOCAL_NETWORK)!=android.content.pm.PackageManager.PERMISSION_GRANTED){
             pendingConnection=action;pendingPermissionBase=base;pendingServerConnection=connecting;
@@ -1063,15 +1250,19 @@ public class MainActivity extends AppCompatActivity {
         for(int i=0;i<menu.size();i++)menu.getItem(i).setEnabled(!busy);
         updateMode();updateCounter();cards.notifyDataSetChanged();
         if(!busy&&foregroundRefreshIdentity!=null)findViewById(R.id.main).post(this::refreshForeground);
+        if(!busy&&pendingHubMode!=null)findViewById(R.id.main).post(this::continuePendingHub);
     }
     private Snackbar snackbar(String message,int duration){
         View anchor=findViewById(R.id.card_navigation);
         if(!anchor.getGlobalVisibleRect(new android.graphics.Rect()))anchor=findViewById(R.id.navigation);
         Snackbar bar=Snackbar.make(findViewById(R.id.main),message,duration).setAnchorView(anchor);
+        bar.setBackgroundTint(getColor(R.color.surface)).setTextColor(getColor(R.color.ink)).setActionTextColor(getColor(R.color.deck_accent));
+        bar.getView().setBackground(TapTapUi.rounded(this,R.color.surface,16,true));
         bar.setTextMaxLines(4);
         bar.setAnchorViewLayoutListenerEnabled(true);return bar;
     }
-    private void showError(String message,Runnable retry){Snackbar bar=snackbar(message,Snackbar.LENGTH_LONG);if(retry!=null)bar.setAction("재시도",v->retry.run());bar.show();}
+    private void dismissFailure(){if(failureBar!=null){failureBar.dismiss();failureBar=null;}}
+    private void showError(String message,Runnable retry){dismissFailure();Snackbar bar=snackbar(message,retry==null?Snackbar.LENGTH_LONG:Snackbar.LENGTH_INDEFINITE);failureBar=bar;if(retry!=null)bar.setAction("재시도",v->{dismissFailure();retry.run();});bar.show();}
 
     private final class CardAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder>{
         @NonNull @Override public RecyclerView.ViewHolder onCreateViewHolder(@NonNull ViewGroup parent,int type){
@@ -1090,9 +1281,9 @@ public class MainActivity extends AppCompatActivity {
             ((TextView)view.findViewById(R.id.track_title)).setText(track.title);((TextView)view.findViewById(R.id.track_artist)).setText(track.artist);
             view.findViewById(R.id.track_title).setContentDescription(track.title+" · 곡 정보와 출처 보기");
             ((TextView)view.findViewById(R.id.reason)).setText(pick.reason);
-            List<String> labels=new ArrayList<>();for(String tag:track.tags)if(Recommender.LABELS.containsKey(tag)&&labels.size()<3)labels.add(Recommender.LABELS.get(tag));
+            List<String> labels=new ArrayList<>();for(String tag:track.tags)if(labels.size()<3)labels.add(Recommender.label(tag));
             ((TextView)view.findViewById(R.id.track_tags)).setText(android.text.TextUtils.join("  ·  ",labels));
-            artwork.load((ImageView)view.findViewById(R.id.track_artwork),track.youtubeVideoId,bitmap->{
+            artwork.load((ImageView)view.findViewById(R.id.track_artwork),track.youtubeVideoId,track.artworkUrl,bitmap->{
                 if(!picks.isEmpty()&&picks.get(Math.min(pager.getCurrentItem(),picks.size()-1)).track.id.equals(track.id))updateDiscoverAppearance();
             });
             MaterialButton save=view.findViewById(R.id.save);
@@ -1111,6 +1302,8 @@ public class MainActivity extends AppCompatActivity {
         state.putString("storageBase",api==null?"":api.base);
         state.remove("storageIdentity");state.putString("storageOwner",ApiClient.ownerFingerprint(api==null?"":api.base,storageIdentity));state.putBoolean("returningFromHub",returningFromHub);
         state.putParcelable("pendingHubPlaylist",pendingHubPlaylist);
+        state.putString("pendingHubMode",pendingHubMode);state.putString("hubServerAddress",hubServerAddress);
+        state.putBoolean("pendingHubSettings",pendingHubMode!=null&&(pendingHubSettings||settingsDialog!=null&&settingsDialog.isShowing()));
         if(refinementPrompt!=null){state.putString("refinementDraft",refinementPrompt.getText().toString());
             List<String> kept=new ArrayList<>();for(Map.Entry<String,android.widget.CheckBox> entry:refinementChoices.entrySet())if(entry.getValue().isChecked())kept.add(entry.getKey());
             state.putString("refinementKeeps",new JSONArray(kept).toString());}
@@ -1118,6 +1311,7 @@ public class MainActivity extends AppCompatActivity {
         if(librarySelected){state.putString("playlistId",playlistId);state.putInt("libraryScroll",findViewById(R.id.library_scroll).getScrollY());}
         state.putBoolean("hasResults",hasResults);state.putBoolean("editingRequest",hasResults && findViewById(R.id.request_panel).getVisibility()==View.VISIBLE);
         state.putBoolean("requestPending",recommendation.current().loading);
+        state.putInt("replacementPosition",replacementPosition);state.putInt("replacementKeptCount",replacementKeptCount);
         if(recommendation.current().loading&&recommendation.snapshot()!=null)state.putString("pendingRecommendation",recommendation.snapshot().toString());
         try { state.putString("conditions",TrackJson.conditions(resultConditions).toString()); } catch(Exception ignored){}
         state.putString("hiddenTracks",new JSONArray(hiddenTracks).toString());
@@ -1125,7 +1319,7 @@ public class MainActivity extends AppCompatActivity {
     @Override protected void onStop(){stopPlayer();super.onStop();}
     @Override protected void onDestroy(){
         artwork.close();
-        stopPlayer();for(AlertDialog dialog:dialogs)dialog.dismiss();dialogs.clear();
+        dismissFailure();stopPlayer();for(AlertDialog dialog:dialogs)dialog.dismiss();dialogs.clear();
         worker.execute(local::close);worker.shutdown();super.onDestroy();
     }
 }

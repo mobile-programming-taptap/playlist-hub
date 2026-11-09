@@ -1,0 +1,138 @@
+TapTap — Open Source Notices
+
+The following third-party runtime components are included in this app.
+Apache License, Version 2.0: https://www.apache.org/licenses/LICENSE-2.0
+The full Apache License is available in the app alongside these notices.
+Pretendard has a separate bundled SIL Open Font License notice.
+
+AndroidX — The Android Open Source Project
+https://android.googlesource.com/platform/frameworks/support/
+Apache License, Version 2.0
+androidx.activity:activity-ktx:1.13.0
+androidx.activity:activity:1.13.0
+androidx.annotation:annotation-experimental:1.4.1
+androidx.annotation:annotation-jvm:1.9.1
+androidx.appcompat:appcompat-resources:1.8.0
+androidx.appcompat:appcompat:1.8.0
+androidx.arch.core:core-common:2.2.0
+androidx.arch.core:core-runtime:2.2.0
+androidx.browser:browser:1.4.0
+androidx.cardview:cardview:1.0.0
+androidx.collection:collection-jvm:1.4.2
+androidx.compose.runtime:runtime-annotation-android:1.9.0
+androidx.concurrent:concurrent-futures:1.1.0
+androidx.constraintlayout:constraintlayout-core:1.1.2
+androidx.constraintlayout:constraintlayout:2.2.2
+androidx.coordinatorlayout:coordinatorlayout:1.1.0
+androidx.core:core-ktx:1.18.0
+androidx.core:core-viewtree:1.0.0
+androidx.core:core:1.18.0
+androidx.cursoradapter:cursoradapter:1.0.0
+androidx.customview:customview:1.2.0
+androidx.databinding:viewbinding:8.4.2
+androidx.drawerlayout:drawerlayout:1.1.1
+androidx.dynamicanimation:dynamicanimation:1.1.0
+androidx.emoji2:emoji2-views-helper:1.3.0
+androidx.emoji2:emoji2:1.3.0
+androidx.fragment:fragment:1.5.4
+androidx.graphics:graphics-shapes-android:1.0.1
+androidx.interpolator:interpolator:1.0.0
+androidx.lifecycle:lifecycle-common:2.6.2
+androidx.lifecycle:lifecycle-livedata-core:2.6.2
+androidx.lifecycle:lifecycle-livedata:2.6.2
+androidx.lifecycle:lifecycle-process:2.6.2
+androidx.lifecycle:lifecycle-runtime-ktx:2.6.2
+androidx.lifecycle:lifecycle-runtime:2.6.2
+androidx.lifecycle:lifecycle-viewmodel-ktx:2.6.2
+androidx.lifecycle:lifecycle-viewmodel-savedstate:2.6.2
+androidx.lifecycle:lifecycle-viewmodel:2.6.2
+androidx.loader:loader:1.0.0
+androidx.navigationevent:navigationevent-android:1.0.0
+androidx.profileinstaller:profileinstaller:1.4.0
+androidx.recyclerview:recyclerview:1.2.1
+androidx.resourceinspection:resourceinspection-annotation:1.0.1
+androidx.savedstate:savedstate-ktx:1.2.1
+androidx.savedstate:savedstate:1.2.1
+androidx.startup:startup-runtime:1.1.1
+androidx.tracing:tracing:1.2.0
+androidx.transition:transition:1.5.0
+androidx.vectordrawable:vectordrawable-animated:1.1.0
+androidx.vectordrawable:vectordrawable:1.1.0
+androidx.versionedparcelable:versionedparcelable:1.1.1
+androidx.viewpager2:viewpager2:1.0.0
+androidx.viewpager:viewpager:1.0.0
+
+Material Components for Android — The Android Open Source Project
+https://github.com/material-components/material-components-android
+Apache License, Version 2.0
+com.google.android.material:material:1.14.0
+
+Kakao Android SDK — Kakao Corp.
+https://github.com/kakao/kakao-sdk-android
+Apache License, Version 2.0
+com.kakao.sdk:v2-auth:2.25.0
+com.kakao.sdk:v2-common:2.25.0
+com.kakao.sdk:v2-network:2.25.0
+com.kakao.sdk:v2-user:2.25.0
+
+Kotlin — JetBrains s.r.o. and Kotlin Programming Language contributors
+https://github.com/JetBrains/kotlin
+Apache License, Version 2.0
+org.jetbrains.kotlin:kotlin-android-extensions-runtime:1.8.0
+org.jetbrains.kotlin:kotlin-parcelize-runtime:1.8.0
+org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.8.22
+org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.22
+org.jetbrains.kotlin:kotlin-stdlib:2.2.10
+
+kotlinx.coroutines — JetBrains s.r.o. and Kotlin Programming Language contributors
+https://github.com/Kotlin/kotlinx.coroutines
+Apache License, Version 2.0
+org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0
+org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.9.0
+
+kotlinx.serialization — JetBrains s.r.o. and Kotlin Programming Language contributors
+https://github.com/Kotlin/kotlinx.serialization
+Apache License, Version 2.0
+org.jetbrains.kotlinx:kotlinx-serialization-core-jvm:1.6.3
+org.jetbrains.kotlinx:kotlinx-serialization-json-jvm:1.6.3
+
+OkHttp — Square, Inc.
+https://github.com/square/okhttp
+Apache License, Version 2.0
+com.squareup.okhttp3:logging-interceptor:4.9.3
+com.squareup.okhttp3:okhttp:4.9.3
+
+Okio — Square, Inc.
+https://github.com/square/okio
+Apache License, Version 2.0
+com.squareup.okio:okio:2.8.0
+
+Retrofit — Square, Inc.
+https://github.com/square/retrofit
+Apache License, Version 2.0
+com.squareup.retrofit2:retrofit:2.9.0
+
+Retrofit Kotlin Serialization Converter — Jake Wharton
+https://github.com/JakeWharton/retrofit2-kotlinx-serialization-converter
+Apache License, Version 2.0
+com.jakewharton.retrofit:retrofit2-kotlinx-serialization-converter:1.0.0
+
+Guava — The Guava Authors
+https://github.com/google/guava
+Apache License, Version 2.0
+com.google.guava:listenablefuture:1.0
+
+Error Prone — The Error Prone Authors
+https://github.com/google/error-prone
+Apache License, Version 2.0
+com.google.errorprone:error_prone_annotations:2.15.0
+
+JetBrains Java Annotations — JetBrains s.r.o.
+https://github.com/JetBrains/java-annotations
+Apache License, Version 2.0
+org.jetbrains:annotations:23.0.0
+
+JSpecify — The JSpecify Authors
+https://github.com/jspecify/jspecify
+Apache License, Version 2.0
+org.jspecify:jspecify:1.0.0

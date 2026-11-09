@@ -35,12 +35,13 @@ public final class Conversation {
         for (String request : previousConditions==null?validated:List.of(prompt)) {
             if (request.matches("(?is).*(처음부터|새로 시작|조건 초기화|start over|reset).*")) result = new Recommender.Conditions();
             Recommender.Conditions next = Recommender.parse(request);
-            for (List<String> group : List.of(List.of("calm","bright","energetic","warm","sad"),
-                    Recommender.GENRES)) {
+            for (List<String> group : List.of(List.of("calm","bright","energetic","warm","sad"))) {
                 if (!Collections.disjoint(next.tags, group)) result.tags.removeAll(group);
             }
+            if(next.tags.stream().anyMatch(Recommender::genre))result.tags.removeIf(Recommender::genre);
             result.tags.removeAll(next.excludedTags);
             if(next.excludedTags.contains("instrumental")&&result.language.equals("none"))result.language="";
+            if(Recommender.languageExcluded(request,result.language))result.language="";
             result.excludedTags.removeAll(next.tags);
             for (String tag : next.tags) if (!result.tags.contains(tag)) result.tags.add(tag);
             for (String tag : next.excludedTags) if (!result.excludedTags.contains(tag)) result.excludedTags.add(tag);
@@ -52,29 +53,34 @@ public final class Conversation {
         }
         return Recommender.validate(result);
     }
-    public static Recommender.Result recommend(List<Track> catalogue, Recommender.Conditions conditions,
-            Map<String,Integer> feedback, String mode, List<String> kept, List<String> excluded) {
-        List<String> keep = kept == null ? List.of() : kept;
-        List<String> skip = excluded == null ? List.of() : excluded;
+    public static void validateSelection(List<Track> catalogue, Map<String,Integer> feedback, List<String> kept, List<String> excluded) {
+        List<String> keep=kept==null?List.of():kept, skip=excluded==null?List.of():excluded;
         Set<String> ids = new LinkedHashSet<>(); for (Track t : catalogue) ids.add(t.id);
         if (keep.size() > 8 || skip.size() > 100 || new LinkedHashSet<>(keep).size()!=keep.size()
                 || !ids.containsAll(keep) || !ids.containsAll(skip) || !Collections.disjoint(keep,skip))
             throw new IllegalArgumentException("유지하거나 제외할 추천 곡을 다시 확인해 주세요.");
+        for(String id:keep)if(feedback.getOrDefault(id,0)==-1)
+            throw new IllegalArgumentException("싫어요를 남긴 곡은 유지할 수 없어요. 반응을 취소한 뒤 선택해 주세요.");
+    }
+    public static Recommender.Result recommend(List<Track> catalogue, Recommender.Conditions conditions,
+            Map<String,Integer> feedback, String mode, List<String> kept, List<String> excluded) {
+        List<String> keep = kept == null ? List.of() : kept;
+        List<String> skip = excluded == null ? List.of() : excluded;
+        validateSelection(catalogue,feedback,keep,skip);
         Set<String> excludedIds = new LinkedHashSet<>(skip); excludedIds.addAll(keep);
         Recommender.Result fresh = Recommender.recommend(catalogue, conditions, feedback, mode, excludedIds);
         List<Recommender.Pick> picks = new ArrayList<>();
         for (String id : keep) {
-            if(feedback.getOrDefault(id,0)==-1)throw new IllegalArgumentException("싫어요를 남긴 곡은 유지할 수 없어요. 반응을 취소한 뒤 선택해 주세요.");
             Track track = catalogue.stream().filter(t -> t.id.equals(id) && t.usable()).findFirst().orElseThrow();
             picks.add(new Recommender.Pick(track,"이전 추천에서 직접 유지한 곡이에요."));
         }
         picks.addAll(fresh.tracks.subList(0,Math.min(8-picks.size(),fresh.tracks.size())));
         String notice = fresh.notice;
-        if(keep.size()>0 && !conditions.language.equals("unsupported") && (!conditions.tags.isEmpty()||!conditions.language.isEmpty()))
+        if(keep.size()>0 && (!conditions.language.equals("unsupported")||!fresh.tracks.isEmpty()) && (!conditions.tags.isEmpty()||!conditions.language.isEmpty()))
             notice=picks.size()<7?"조건에 맞는 곡과 유지한 곡을 합해 "+picks.size()+"곡이에요. 조건을 줄이면 더 많은 곡을 찾을 수 있어요.":"";
-        if(!keep.isEmpty() && fresh.tracks.isEmpty() && !Collections.disjoint(conditions.tags,Recommender.GENRES))
-            notice="현재 카탈로그에서 요청한 장르 조건에 맞는 새 곡을 찾지 못했어요.";
-        if(!keep.isEmpty()&&conditions.language.equals("unsupported"))notice="요청한 언어의 곡이 현재 카탈로그에 없어 새 추천을 찾지 못했어요.";
+        if(!keep.isEmpty() && fresh.tracks.isEmpty() && conditions.tags.stream().anyMatch(Recommender::genre))
+            notice="이번 추천에서 요청한 장르 조건에 맞는 새 곡을 확인하지 못했어요.";
+        if(!keep.isEmpty()&&fresh.tracks.isEmpty()&&!conditions.language.isEmpty()&&!conditions.language.equals("none"))notice="이번 추천에서 요청한 언어 조건에 맞는 새 추천을 찾지 못했어요.";
         if (!keep.isEmpty()) notice = "직접 유지한 "+keep.size()+"곡은 새 조건과 관계없이 남겼어요. " + notice;
         return new Recommender.Result(picks, conditions, mode, notice.trim());
     }

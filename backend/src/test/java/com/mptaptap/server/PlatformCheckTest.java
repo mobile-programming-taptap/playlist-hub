@@ -33,6 +33,31 @@ class PlatformCheckTest {
     private static final String SOURCE="S".repeat(22), SONG="T".repeat(22), TARGET="R".repeat(22), VIDEO="dQw4w9WgXcQ";
     private final ObjectMapper json=new ObjectMapper();
 
+    @Test void unavailableOAuthIdentifiesOnlyRequiredSettingsAndCanRecover() throws Exception {
+        try(Fixture f=new Fixture()) {
+            var manager=new DataSourceTransactionManager(f.db.getDataSource());
+            var incomplete=new PlatformClient(json,Map.of("GOOGLE_CLIENT_ID","private-client-value"),Map.of());
+            try {
+                var unavailable=new PlatformApi(f.users,f.store,incomplete,json,manager);
+                try {
+                    var row=rows(unavailable.config(f.auth),"providers").get(1);
+                    assertEquals(false,row.get("configured"));String message=(String)row.get("setupMessage");
+                    for(String setting:List.of("GOOGLE_CLIENT_SECRET","PUBLIC_BASE_URL","GOOGLE_REDIRECT_URI"))assertTrue(message.contains(setting));
+                    assertFalse(message.contains("private-client-value"));assertFalse(message.contains("PLATFORM_TOKEN_SECRET"));
+                    var error=assertThrows(ResponseStatusException.class,()->unavailable.start(f.auth,"youtube"));
+                    assertEquals(503,error.getStatusCode().value());assertEquals(message,error.getReason());
+                    assertEquals(0,f.db.queryForObject("SELECT COUNT(*) FROM platform_oauth_states",Integer.class));
+                } finally {unavailable.close();}
+            } finally {incomplete.close();}
+            var noKey=new PlatformStore(f.db,manager,json,"");var locked=new PlatformApi(f.users,noKey,f.remote,json,manager);
+            try {assertTrue(assertThrows(ResponseStatusException.class,()->locked.start(f.auth,"youtube")).getReason().contains("PLATFORM_TOKEN_SECRET"));}
+            finally {locked.close();}
+            assertEquals("",rows(f.api.config(f.auth),"providers").get(1).get("setupMessage"));
+            assertTrue(f.api.start(f.auth,"youtube").get("authorizationUrl").contains("code_challenge_method=S256"));
+            f.assertHealthy();
+        }
+    }
+
     @Test void connectedOwnedPlaylistPagesUseValidatedCursorsAndStayOutsideRecommendations() throws Exception {
         try(Fixture f=new Fixture()) {
             f.browsePlaylists.set(true);
@@ -82,6 +107,73 @@ class PlatformCheckTest {
         }
     }
 
+    @Test void oauthCancellationExpiryAndProviderFailuresReturnOnlySafeAppOutcomes() throws Exception {
+        try(Fixture f=new Fixture()) {
+            Map<String,String> denied=f.api.start(f.auth,"youtube");
+            callback(f.api.callback("youtube",denied.get("state"),"private-authorization-code","access_denied"),"youtube","cancelled","access_denied");
+            callback(f.api.callback("youtube",denied.get("state"),"private-authorization-code",null),"youtube","error","session_expired");
+            for(String state:java.util.Arrays.asList(null,"malformed-private-state","X".repeat(43)))
+                callback(f.api.callback("youtube",state,"private-authorization-code",null),"youtube","error","session_expired");
+            Map<String,String> expired=f.api.start(f.auth,"youtube");
+            f.db.update("UPDATE platform_oauth_states SET expires_at=? WHERE state_hash=?",Instant.EPOCH.toString(),PlatformStore.hash(expired.get("state")));
+            callback(f.api.callback("youtube",expired.get("state"),"private-authorization-code",null),"youtube","error","session_expired");
+            Map<String,String> wrongSession=f.api.start(f.auth,"youtube");
+            f.db.update("UPDATE platform_oauth_states SET session_hash=? WHERE state_hash=?",PlatformStore.hash("another-session"),PlatformStore.hash(wrongSession.get("state")));
+            callback(f.api.callback("youtube",wrongSession.get("state"),"private-authorization-code",null),"youtube","error","session_expired");
+            Map<String,String> superseded=f.api.start(f.auth,"youtube"),current=f.api.start(f.auth,"youtube");
+            callback(f.api.callback("youtube",superseded.get("state"),"private-authorization-code",null),"youtube","error","session_expired");
+            callback(f.api.callback("spotify",current.get("state"),"private-authorization-code",null),"spotify","error","session_expired");
+            callback(f.api.callback("youtube",current.get("state"),null,"private-provider-error?access_token=secret"),"youtube","error","connection_failed");
+            Map<String,String> missingCode=f.api.start(f.auth,"youtube");
+            callback(f.api.callback("youtube",missingCode.get("state"),null,null),"youtube","error","connection_failed");
+            assertEquals(0,f.tokenExchanges.get(),"Rejected and cancelled requests never contact the token endpoint.");
+            for(var expected:Map.of(401,"provider_unauthorized",403,"provider_forbidden",429,"provider_rate_limited",500,"provider_unavailable").entrySet()) {
+                f.tokenStatus.set(expected.getKey());Map<String,String> started=f.api.start(f.auth,"youtube");
+                callback(f.api.callback("youtube",started.get("state"),"private-authorization-code",null),"youtube","error",expected.getValue());
+                callback(f.api.callback("youtube",started.get("state"),"private-authorization-code",null),"youtube","error","session_expired");
+            }
+            assertEquals(4,f.tokenExchanges.get());assertTrue(f.api.connections(f.auth).isEmpty());
+            f.tokenStatus.set(200);f.noYoutubeChannel.set(true);Map<String,String> noChannel=f.api.start(f.auth,"youtube");
+            f.challenge=query(URI.create(noChannel.get("authorizationUrl")),"code_challenge");
+            callback(f.api.callback("youtube",noChannel.get("state"),"private-authorization-code",null),"youtube","error","provider_forbidden");
+            assertTrue(f.api.connections(f.auth).isEmpty());f.noYoutubeChannel.set(false);
+            var manager=new DataSourceTransactionManager(f.db.getDataSource());
+            var unavailableStore=new PlatformStore(f.db,manager,json,Base64.getEncoder().encodeToString(new byte[32])) {
+                @Override synchronized void connection(String user,String provider,PlatformClient.Tokens tokens){throw new IllegalStateException("private-storage-error access_token=secret");}
+            };
+            var unavailable=new PlatformApi(f.users,unavailableStore,f.remote,json,manager);
+            try {
+                Map<String,String> started=unavailable.start(f.auth,"youtube");f.challenge=query(URI.create(started.get("authorizationUrl")),"code_challenge");
+                callback(unavailable.callback("youtube",started.get("state"),"private-authorization-code",null),"youtube","error","connection_failed");
+                assertTrue(f.api.connections(f.auth).isEmpty());
+            } finally {unavailable.close();}
+            f.assertHealthy();
+        }
+    }
+
+    @Test void youtubeUnavailableRowsKeepOriginalPositionsAndCannotBecomeAFilteredTransferPrefix() throws Exception {
+        try(Fixture f=new Fixture()) {
+            f.store.connection(f.owner,"youtube",new PlatformClient.Tokens("google-access","google-refresh","channel-owner","youtube.force-ssl",Instant.now().plusSeconds(3600)));
+            f.youtubeSourceRows.set(List.of(f.youtubeRow(10,VIDEO,"Song","Artist"),f.youtubeRow(11,"invalid","Missing video",""),
+                f.youtubeRow(12,VIDEO,"Song","Artist"),f.youtubeRow(13,VIDEO,"Deleted video",""),f.youtubeRow(14,VIDEO,"Song","Artist"),
+                f.youtubeRow(15,VIDEO,"Private video",""),f.youtubeRow(16,VIDEO,"","")));
+            String id=UUID.randomUUID().toString();Map<String,Object> imported=f.api.importPlaylist(f.auth,new PlatformApi.ImportBody(id,"youtube","https://www.youtube.com/playlist?list=PLTEST",null));
+            assertEquals(List.of(10,12,14),rows(imported,"items").stream().map(row->row.get("sourceIndex")).toList());
+            assertEquals(4,imported.get("skippedCount"));assertEquals(List.of(11,13,15,16),rows(imported,"skippedItems").stream().map(row->row.get("sourceIndex")).toList());
+            assertTrue(((String)imported.get("notice")).contains("4개 항목"));assertEquals(3,rows(f.users.playlist(f.owner,id),"items").size());
+            assertEquals(List.of(10,12,14),rows(f.api.matches(f.auth,new PlatformApi.MatchBody(id,"youtube",0)),"items").stream().map(row->row.get("sourceIndex")).toList());
+            f.api.review(f.auth,id,new PlatformApi.ReviewBody("youtube",List.of(new PlatformApi.Selection(10,VIDEO,false),new PlatformApi.Selection(12,VIDEO,false),new PlatformApi.Selection(14,VIDEO,false))));
+            String job=UUID.randomUUID().toString();f.api.transfer(f.auth,new PlatformApi.TransferBody(job,id,"youtube","Keep unavailable rows visible",true));f.awaitJob(job,"PARTIAL");
+            f.remoteItems.add(VIDEO);f.youtubeTargetRows.set(List.of(f.youtubeRow(0,VIDEO,"Song","Artist"),f.youtubeRow(1,VIDEO,"Private video","")));
+            assertEquals(409,assertThrows(PlatformClient.Failure.class,()->f.remote.existingIds("youtube","PLTARGET",f.store.tokens(f.owner,"youtube"))).status);
+            f.youtubeTargetRows.set(List.of(f.youtubeRow(0,VIDEO,"Song","Artist"),f.youtubeRow(2,VIDEO,"Song","Artist")));
+            assertEquals(409,assertThrows(PlatformClient.Failure.class,()->f.remote.existingIds("youtube","PLTARGET",f.store.tokens(f.owner,"youtube"))).status,"A missing API row is also unsafe when original positions expose the gap.");
+            f.api.retry(f.auth,job,new PlatformApi.Confirm(true));f.awaitJob(job,"PARTIAL");
+            assertEquals(1,f.creates.get());assertEquals(0,f.adds.get(),"Incomplete remote observations must not be mistaken for a safe prefix to append to.");
+            assertEquals(List.of(VIDEO),f.remoteItems);assertEquals(Map.of(),f.users.feedback(f.owner));f.assertHealthy();
+        }
+    }
+
     @Test void officialOAuthRepeatedTracksAndLostTransferResponsesRemainIdempotent() throws Exception {
         try(Fixture f=new Fixture()) {
             assertEquals(List.of("spotify","youtube"),rows(f.api.config(f.auth),"providers").stream().map(row->row.get("provider")).toList());
@@ -107,7 +199,7 @@ class PlatformCheckTest {
             assertFalse(start.get("authorizationUrl").contains("Bearer"));
             f.challenge=query(URI.create(start.get("authorizationUrl")),"code_challenge");
             assertEquals("taptap://connected?provider=spotify&status=connected",f.api.callback("spotify",start.get("state"),"code-only-for-test",null).getHeaders().getLocation().toString());
-            assertThrows(IllegalArgumentException.class,()->f.api.callback("spotify",start.get("state"),"code-only-for-test",null));
+            callback(f.api.callback("spotify",start.get("state"),"code-only-for-test",null),"spotify","error","session_expired");
             String ciphertext=f.db.queryForObject("SELECT token_json FROM platform_connections WHERE user_id=?",String.class,f.owner);
             assertFalse(ciphertext.contains("test-access"));assertFalse(json.writeValueAsString(f.api.connections(f.auth)).contains("test-refresh"));
 
@@ -214,6 +306,7 @@ class PlatformCheckTest {
             f.api.saveImport(f.auth,id,new PlatformApi.SaveImport("Repeated songs",id,List.of(new PlatformApi.TimelineEdit(0,"Manual aged song","Artist",false,null))));
             Map<String,Object> agedItem=rows(f.users.playlist(f.owner,id),"items").get(0);Map<String,Object> agedTrack=map(agedItem.get("track"));assertEquals(fetchedAt,Instant.parse((String)agedTrack.get("checkedAt")),"Manual review keeps the original provider retrieval age.");
             assertEquals(expiresAt,f.db.queryForObject("SELECT metadata_expires_at FROM platform_documents WHERE id=?",String.class,id));assertEquals(404,assertThrows(ResponseStatusException.class,()->f.store.metadataCheckedAt(f.users.user(f.otherAuth),id)).getStatusCode().value());
+            f.users.acceptCommunityRules(f.owner,Store.COMMUNITY_RULES_VERSION,true);
             String share=(String)f.users.publish(f.owner,id,true).get("shareId");Map<String,Object> published=json.readValue(f.db.queryForObject("SELECT snapshot_json FROM public_playlists WHERE share_id=?",String.class,share),Map.class);
             // Advance both fixture snapshots by two days without changing the production clock.
             agedTrack.put("checkedAt",fetchedAt.minus(Duration.ofDays(2)).toString());map(rows(published,"items").get(0).get("track")).put("checkedAt",agedTrack.get("checkedAt"));
@@ -320,6 +413,58 @@ class PlatformCheckTest {
             f.assertHealthy();
         }
     }
+
+    @Test void publicConversionAndIndividualVideoSavingIgnoreExpiredOAuthAndKeepTheOriginalSeparate() throws Exception {
+        try(Fixture f=new Fixture()){
+            f.store.connection(f.owner,"youtube",new PlatformClient.Tokens("expired-access","google-refresh","owner","scope",Instant.EPOCH));
+            f.tokenStatus.set(400);
+            String id=UUID.randomUUID().toString();
+            f.api.conversion(f.auth,new PlatformApi.Conversion(id,"https://www.youtube.com/watch?v=abcdefghijk",null,null));
+            assertEquals(0,f.refreshes.get(),"Public metadata uses the server key before expired OAuth.");
+            assertEquals(0,f.users.playlists(f.owner).size());
+            f.api.reviewImport(f.auth,id,new PlatformApi.SaveImport("Individual videos",null,List.of(new PlatformApi.TimelineEdit(0,"Song","Artist",false,0),new PlatformApi.TimelineEdit(1,"Other","Artist",true,60))));
+            assertEquals(0,f.users.playlists(f.owner).size(),"Reviewing metadata does not create an unwanted source playlist.");
+            Map<String,Object> match=f.api.matches(f.auth,new PlatformApi.MatchBody(id,"youtube",0));
+            assertEquals(0,f.refreshes.get());assertEquals(1,rows(match,"items").size());
+            assertThrows(IllegalArgumentException.class,()->f.api.saveMatches(f.auth,id,new PlatformApi.SaveMatches("Individual videos")));
+            assertThrows(IllegalArgumentException.class,()->f.api.review(f.auth,id,new PlatformApi.ReviewBody("youtube",List.of(new PlatformApi.Selection(0,"unknown0000",false)))));
+            f.api.review(f.auth,id,new PlatformApi.ReviewBody("youtube",List.of(new PlatformApi.Selection(0,VIDEO,false))));
+            assertThrows(ResponseStatusException.class,()->f.api.saveMatches(f.otherAuth,id,new PlatformApi.SaveMatches("Stolen")));
+            Map<String,Object> saved=f.api.saveMatches(f.auth,id,new PlatformApi.SaveMatches("Individual videos"));
+            assertEquals(1,saved.get("size"));String playlist=(String)saved.get("id");
+            Map<String,Object> track=map(rows(f.users.playlist(f.owner,playlist),"items").get(0).get("track"));
+            assertEquals(VIDEO,track.get("externalId"));assertEquals("https://www.youtube.com/watch?v="+VIDEO,track.get("sourceUrl"));assertFalse(track.containsKey("timestamp"));
+            assertEquals(1,f.api.saveMatches(f.auth,id,new PlatformApi.SaveMatches("Individual videos")).get("size"));
+            assertEquals("abcdefghijk",f.api.imported(f.auth,id).get("videoId"));assertEquals(0,f.creates.get());assertEquals(0,f.adds.get());
+            String original=UUID.randomUUID().toString();f.api.conversion(f.auth,new PlatformApi.Conversion(original,"https://www.youtube.com/watch?v="+VIDEO,"0:00 Artist - Song",180));
+            assertTrue(rows(rows(f.api.matches(f.auth,new PlatformApi.MatchBody(original,"youtube",0)),"items").get(0),"candidates").isEmpty(),"The long source video cannot masquerade as an individual song.");
+        }
+    }
+
+    @Test void revokedRefreshRequiresReconnectionWithoutDeletingSavedData() throws Exception {
+        try(Fixture f=new Fixture()){
+            f.store.connection(f.owner,"youtube",new PlatformClient.Tokens("expired-access","google-refresh","owner","scope",Instant.EPOCH));f.tokenStatus.set(400);
+            ResponseStatusException failure=assertThrows(ResponseStatusException.class,()->f.api.importPlaylist(f.auth,new PlatformApi.ImportBody(UUID.randomUUID().toString(),"youtube","https://www.youtube.com/playlist?list=PLTEST",null)));
+            assertEquals(409,failure.getStatusCode().value());assertTrue(failure.getReason().contains("다시 연결"));assertEquals(1,f.store.connections(f.owner).size());
+        }
+    }
+
+    @Test void commentsProvideTimelineOnlyWhenDescriptionHasNone() throws Exception {
+        try(Fixture f=new Fixture()) {
+            String url="https://www.youtube.com/watch?v="+VIDEO;
+            f.videoDescription="This is a playlist";
+            f.comments=List.of(comment("1:00 Nice moment"),comment("0:00 Artist - First\n1:00 Artist - Second\n2:00 Artist - Third"),comment("0:10 Other - One\n1:20 Other - Two"));
+            var result=f.api.conversion(f.auth,new PlatformApi.Conversion(null,url,null,null));
+            assertEquals("official_comment",result.get("metadataMode"));assertEquals(3,rows(result,"entries").size());assertEquals("First",rows(result,"entries").get(0).get("title"));
+            assertEquals(1,f.commentReads.get());assertTrue(((String)result.get("notice")).contains("댓글"));
+            f.videoDescription="0:00 Artist - Description";
+            result=f.api.conversion(f.auth,new PlatformApi.Conversion(null,url,null,null));assertEquals("official_metadata",result.get("metadataMode"));assertEquals(1,f.commentReads.get());
+            f.videoDescription="No timeline";f.comments=List.of(comment("0:30 I love this"));
+            result=f.api.conversion(f.auth,new PlatformApi.Conversion(null,url,null,null));assertTrue(rows(result,"entries").isEmpty());
+            f.comments="invalid response";result=f.api.conversion(f.auth,new PlatformApi.Conversion(null,url,null,null));assertTrue(((String)result.get("notice")).contains("댓글을 확인하지 못했어요"));
+        }
+    }
+    private static Map<String,Object> comment(String text){return Map.of("snippet",Map.of("topLevelComment",Map.of("snippet",Map.of("textDisplay",text))));}
 
     @Test void officialVideoAndUserTimelineEditsStayOutsideRecommendations() throws Exception {
         try(Fixture f=new Fixture()) {
@@ -449,6 +594,10 @@ class PlatformCheckTest {
         for(String table:List.of("platform_connections","platform_documents","platform_oauth_states"))assertEquals(0,db.queryForObject("SELECT COUNT(*) FROM "+table,Integer.class));
     }
 
+    private static void callback(org.springframework.http.ResponseEntity<Void> response,String provider,String status,String reason){
+        assertEquals(302,response.getStatusCode().value());assertNull(response.getBody());
+        assertEquals("taptap://connected?provider="+provider+"&status="+status+(reason.isEmpty()?"":"&reason="+reason),response.getHeaders().getLocation().toString(),"Callback outcomes contain only fixed app-facing values, never provider bodies, state, codes or tokens.");
+    }
     @SuppressWarnings("unchecked") private static Map<String,Object> map(Object value){return (Map<String,Object>)value;}
     @SuppressWarnings("unchecked") private static List<Map<String,Object>> rows(Map<String,Object> value,String key){return (List<Map<String,Object>>)value.get(key);}
     private static String query(URI uri,String key){for(String p:uri.getRawQuery().split("&")){String[] pair=p.split("=",2);if(pair[0].equals(key))return java.net.URLDecoder.decode(pair[1],StandardCharsets.UTF_8);}return "";}
@@ -458,11 +607,15 @@ class PlatformCheckTest {
         final java.util.concurrent.ExecutorService worker=Executors.newCachedThreadPool();
         final AtomicReference<Throwable> failure=new AtomicReference<>();
         final AtomicInteger creates=new AtomicInteger(),adds=new AtomicInteger(),videos=new AtomicInteger(),sourceItems=new AtomicInteger(2),refreshes=new AtomicInteger(),revokes=new AtomicInteger(),markerPages=new AtomicInteger(),searches=new AtomicInteger();
+        final AtomicInteger tokenStatus=new AtomicInteger(200),tokenExchanges=new AtomicInteger();
+        final AtomicReference<List<Object>> youtubeSourceRows=new AtomicReference<>(),youtubeTargetRows=new AtomicReference<>();
         final List<String> remoteItems=new CopyOnWriteArrayList<>(),playlistPages=new CopyOnWriteArrayList<>();
         final java.util.concurrent.atomic.AtomicBoolean stallVideo=new java.util.concurrent.atomic.AtomicBoolean(),holdExchange=new java.util.concurrent.atomic.AtomicBoolean(),holdCreate=new java.util.concurrent.atomic.AtomicBoolean(),unavailableSpotifyItems=new java.util.concurrent.atomic.AtomicBoolean(),emptySearch=new java.util.concurrent.atomic.AtomicBoolean(),browsePlaylists=new java.util.concurrent.atomic.AtomicBoolean();
+        final java.util.concurrent.atomic.AtomicBoolean noYoutubeChannel=new java.util.concurrent.atomic.AtomicBoolean();
         final java.util.concurrent.CountDownLatch videoStarted=new java.util.concurrent.CountDownLatch(1),releaseVideo=new java.util.concurrent.CountDownLatch(1),exchangeStarted=new java.util.concurrent.CountDownLatch(1),releaseExchange=new java.util.concurrent.CountDownLatch(1),createStarted=new java.util.concurrent.CountDownLatch(1),releaseCreate=new java.util.concurrent.CountDownLatch(1);
         final JdbcTemplate db;final Store users;final PlatformStore store;final PlatformClient remote;final PlatformApi api;
         final String owner,auth,otherAuth,testSchema;final JdbcTemplate schemaOwner;String challenge="";volatile String marker="";
+        volatile String videoDescription="0:00 Artist - Song one\n1:10 Artist - Song two";volatile Object comments=List.of();final AtomicInteger commentReads=new AtomicInteger();
         Fixture() throws Exception {this(null);}
         Fixture(Runnable beforeCommit) throws Exception {
             String configured=System.getenv("TAPTAP_TEST_DATABASE_URL");boolean postgres=configured!=null&&!configured.isBlank();
@@ -485,14 +638,18 @@ class PlatformCheckTest {
             }catch(Exception|Error error){server.stop(0);worker.shutdownNow();if(schemaOwner!=null)try{schemaOwner.execute("DROP SCHEMA IF EXISTS "+testSchema+" CASCADE");}catch(RuntimeException cleanup){error.addSuppressed(cleanup);}throw error;}
         }
         private Map<String,Object> spotifyTrack(String id){return Map.of("id",id,"type","track","name","Song","artists",List.of(Map.of("name","Artist")),"duration_ms",180000,"external_ids",Map.of("isrc","USABC1234567"),"album",Map.of("name","Album"));}
+        private Map<String,Object> youtubeRow(int position,String id,String title,String artist){return Map.of("contentDetails",Map.of("videoId",id),"snippet",Map.of("position",position,"title",title,"videoOwnerChannelTitle",artist));}
         private void serve(HttpExchange exchange) {
             try {
                 String path=exchange.getRequestURI().getPath(),method=exchange.getRequestMethod();
                 byte[] bytes=exchange.getRequestBody().readNBytes(100_001);assertTrue(bytes.length<=100_000);
                 String body=new String(bytes,StandardCharsets.UTF_8);JsonNode value=body.isEmpty()||path.equals("/spotify_auth/api/token")||path.startsWith("/google_auth/")?json.createObjectNode():json.readTree(body);
+                if(path.equals("/spotify_auth/api/token")||path.equals("/google_auth/token")) {
+                    tokenExchanges.incrementAndGet();if(tokenStatus.get()!=200){byte[] result="{\"error\":\"private-provider-error access_token=secret\"}".getBytes(StandardCharsets.UTF_8);exchange.sendResponseHeaders(tokenStatus.get(),result.length);exchange.getResponseBody().write(result);return;}
+                }
                 Object response;
                 if(path.equals("/spotify_auth/api/token")){if(holdExchange.get()){exchangeStarted.countDown();assertTrue(releaseExchange.await(10,java.util.concurrent.TimeUnit.SECONDS));}String verifier=query(URI.create("http://fixture/?"+body),"code_verifier");assertEquals(challenge,Base64.getUrlEncoder().withoutPadding().encodeToString(java.util.HexFormat.of().parseHex(PlatformStore.hash(verifier))));response=Map.of("access_token","test-access","refresh_token","test-refresh","expires_in",3600,"scope","playlist-read-private playlist-modify-private");}
-                else if(path.equals("/google_auth/token")){String grant=query(URI.create("http://fixture/?"+body),"grant_type");if(grant.equals("refresh_token")){refreshes.incrementAndGet();assertEquals("google-refresh",query(URI.create("http://fixture/?"+body),"refresh_token"));}else{String verifier=query(URI.create("http://fixture/?"+body),"code_verifier");assertEquals(challenge,Base64.getUrlEncoder().withoutPadding().encodeToString(java.util.HexFormat.of().parseHex(PlatformStore.hash(verifier))));}response=Map.of("access_token","google-access","refresh_token","google-refresh","expires_in",3600,"scope","youtube.force-ssl");}
+                else if(path.equals("/google_auth/token")){if(tokenStatus.get()!=200){byte[] error="{\"error\":\"invalid_grant\"}".getBytes(StandardCharsets.UTF_8);exchange.sendResponseHeaders(tokenStatus.get(),error.length);exchange.getResponseBody().write(error);return;}String grant=query(URI.create("http://fixture/?"+body),"grant_type");if(grant.equals("refresh_token")){refreshes.incrementAndGet();assertEquals("google-refresh",query(URI.create("http://fixture/?"+body),"refresh_token"));}else{String verifier=query(URI.create("http://fixture/?"+body),"code_verifier");assertEquals(challenge,Base64.getUrlEncoder().withoutPadding().encodeToString(java.util.HexFormat.of().parseHex(PlatformStore.hash(verifier))));}response=Map.of("access_token","google-access","refresh_token","google-refresh","expires_in",3600,"scope","youtube.force-ssl");}
                 else if(path.equals("/google_auth/revoke")){assertEquals("google-refresh",query(URI.create("http://fixture/?"+body),"token"));revokes.incrementAndGet();response=Map.of();}
                 else if(path.equals("/spotify/me"))response=Map.of("id","owner");
                 else if(path.equals("/spotify/playlists/"+SOURCE))response=Map.of("name","Repeated songs","owner",Map.of("id","owner"),"collaborative",false);
@@ -507,7 +664,7 @@ class PlatformCheckTest {
                 else if(path.equals("/spotify/me/playlists")&&method.equals("POST")){assertFalse(value.path("public").asBoolean(true));marker=value.path("description").asString();creates.incrementAndGet();if(holdCreate.get()){createStarted.countDown();assertTrue(releaseCreate.await(10,java.util.concurrent.TimeUnit.SECONDS));}lost(exchange);return;}
                 else if(path.equals("/spotify/playlists/"+TARGET+"/items")&&method.equals("GET"))response=Map.of("items",remoteItems.stream().map(id->Map.of("item",spotifyTrack(id))).toList());
                 else if(path.equals("/spotify/playlists/"+TARGET+"/items")&&method.equals("POST")){String uri=value.path("uris").get(0).asString();assertEquals("spotify:track:"+SONG,uri);remoteItems.add(SONG);if(adds.incrementAndGet()==1){lost(exchange);return;}response=Map.of("snapshot_id","snapshot");}
-                else if(path.equals("/youtube/channels"))response=Map.of("items",List.of(Map.of("id","channel-owner")));
+                else if(path.equals("/youtube/channels"))response=Map.of("items",noYoutubeChannel.get()?List.of():List.of(Map.of("id","channel-owner")));
                 else if(path.equals("/youtube/search"))response=Map.of("items",List.of(Map.of("id",Map.of("videoId",VIDEO),"snippet",Map.of("title","Song","channelTitle","Artist"))));
                 else if(path.equals("/youtube/playlists")&&method.equals("POST")){assertEquals("private",value.path("status").path("privacyStatus").asString());marker=value.path("snippet").path("description").asString();creates.incrementAndGet();lost(exchange);return;}
                 else if(browsePlaylists.get()&&path.equals("/youtube/playlists")&&method.equals("GET")&&query(exchange.getRequestURI(),"mine").equals("true")){
@@ -518,8 +675,9 @@ class PlatformCheckTest {
                 }
                 else if(path.equals("/youtube/playlists")){String query=exchange.getRequestURI().getRawQuery();if(query.contains("id=PLTEST")||browsePlaylists.get()&&query.contains("id=PLSECOND"))response=Map.of("items",List.of(Map.of("id",query.contains("id=PLSECOND")?"PLSECOND":"PLTEST","snippet",Map.of("title","YouTube own","channelId","channel-owner"))));else if(marker.isEmpty())response=Map.of("items",List.of());else if(query.contains("pageToken=")){markerPages.incrementAndGet();response=Map.of("items",List.of(Map.of("id","PLTARGET","snippet",Map.of("description",marker))));}else response=Map.of("items",List.of(),"nextPageToken","page-two");}
                 else if(path.equals("/youtube/playlistItems")&&method.equals("POST")){assertEquals("PLTARGET",value.path("snippet").path("playlistId").asString());assertEquals(VIDEO,value.path("snippet").path("resourceId").path("videoId").asString());remoteItems.add(VIDEO);if(adds.incrementAndGet()==1){lost(exchange);return;}response=Map.of("id","added");}
-                else if(path.equals("/youtube/playlistItems")){int count=exchange.getRequestURI().getRawQuery().contains("playlistId=PLTEST")||browsePlaylists.get()&&exchange.getRequestURI().getRawQuery().contains("playlistId=PLSECOND")?2:remoteItems.size();List<Object> items=new ArrayList<>();for(int i=0;i<count;i++)items.add(Map.of("contentDetails",Map.of("videoId",VIDEO),"snippet",Map.of("title","Song","videoOwnerChannelTitle","Artist")));response=Map.of("items",items);}
-                else if(path.equals("/youtube/videos")){videos.incrementAndGet();if(stallVideo.get()){exchange.sendResponseHeaders(200,64);exchange.getResponseBody().write('{');exchange.getResponseBody().flush();videoStarted.countDown();releaseVideo.await(25,java.util.concurrent.TimeUnit.SECONDS);return;}response=Map.of("items",List.of(Map.of("id",VIDEO,"snippet",Map.of("title","Official video","description","0:00 Artist - Song one\n1:10 Artist - Song two"),"contentDetails",Map.of("duration","PT3M"))));}
+                else if(path.equals("/youtube/playlistItems")){boolean source=exchange.getRequestURI().getRawQuery().contains("playlistId=PLTEST")||browsePlaylists.get()&&exchange.getRequestURI().getRawQuery().contains("playlistId=PLSECOND");List<Object> overridden=source?youtubeSourceRows.get():youtubeTargetRows.get();int count=source?2:remoteItems.size();List<Object> items=new ArrayList<>();for(int i=0;i<count;i++)items.add(youtubeRow(i,VIDEO,"Song","Artist"));response=Map.of("items",overridden==null?items:overridden);}
+                else if(path.equals("/youtube/commentThreads")){commentReads.incrementAndGet();assertTrue(exchange.getRequestURI().getRawQuery().contains("textFormat=plainText"));response=Map.of("items",comments);}
+                else if(path.equals("/youtube/videos")){videos.incrementAndGet();if(stallVideo.get()){exchange.sendResponseHeaders(200,64);exchange.getResponseBody().write('{');exchange.getResponseBody().flush();videoStarted.countDown();releaseVideo.await(25,java.util.concurrent.TimeUnit.SECONDS);return;}response=Map.of("items",List.of(Map.of("id",VIDEO,"snippet",Map.of("title","Official video","description",videoDescription),"contentDetails",Map.of("duration","PT3M"))));}
                 else throw new AssertionError("Unexpected mocked provider request: "+method+" "+path);
                 byte[] result=json.writeValueAsBytes(response);exchange.getResponseHeaders().set("Content-Type","application/json");exchange.sendResponseHeaders(200,result.length);exchange.getResponseBody().write(result);
             }catch(Throwable error){failure.compareAndSet(null,error);try{exchange.sendResponseHeaders(500,-1);}catch(Exception ignored){}}

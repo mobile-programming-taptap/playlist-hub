@@ -34,6 +34,11 @@ public final class RecommendationCheck {
         invalid.sourceUrl = "https://musicbrainz.org/recording/" + invalid.id;
         assert !invalid.usable() : "Malformed recording ID must not be treated as a verified source";
         Recommender.Conditions conditions = Recommender.parse("공부할 때 가사 없는 잔잔한 피아노 음악");
+        Recommender.Conditions happyJpop=Recommender.parse("즐거운 제이팝");
+        assert happyJpop.tags.equals(List.of("jpop"))&&happyJpop.language.isEmpty();
+        assert !Recommender.isKnownConditionRequest("즐거운 제이팝"):"Interpret natural-language moods through AI, without request-specific keyword exceptions";
+        Recommender.Result absentJpop=Recommender.recommend(tracks,happyJpop,feedback,"openai");
+        assert absentJpop.tracks.isEmpty()&&!absentJpop.notice.contains("카탈로그")&&absentJpop.notice.contains("이번 추천");
         Recommender.Result result = Recommender.recommend(tracks, conditions, feedback, "basic");
         assert result.tracks.size() == 8;
         assert result.tracks.stream().allMatch(p -> p.track.language.equals("none"));
@@ -102,6 +107,26 @@ public final class RecommendationCheck {
         assert Recommender.recommend(tracks,noLongerInstrumental,feedback,"basic").tracks.size()==3:
                 "Removing an earlier no-vocals condition must allow vocal tracks again";
         assert Recommender.recommend(tracks, Recommender.parse("일본어 노래"), feedback, "basic").tracks.isEmpty();
+        Track foreign=new Track();foreign.id="00000000-0000-0000-0000-000000000012";foreign.title="Verified foreign-language song";foreign.artist="Artist";
+        foreign.language="ja";foreign.tags.add("pop");foreign.source="MusicBrainz";foreign.license="CC0-1.0";foreign.aiUseAllowed=true;
+        foreign.sourceUrl="https://musicbrainz.org/recording/"+foreign.id;
+        List<Track> expanded=new ArrayList<>(tracks);expanded.add(foreign);Recommender.Conditions foreignConditions=Recommender.parse("일본어 팝");
+        Recommender.Result foreignResult=Recommender.recommend(expanded,foreignConditions,feedback,"openai");
+        assert foreignResult.tracks.size()==1&&foreignResult.notice.contains("1곡")&&!foreignResult.notice.contains("0곡"):"A verified foreign-language song must not be announced as absent";
+        Recommender.Result keptForeign=Conversation.recommend(expanded,foreignConditions,feedback,"openai",List.of(tracks.get(4).id),List.of());
+        assert keptForeign.tracks.size()==2&&keptForeign.notice.contains("합해 2곡")&&!keptForeign.notice.contains("새 추천을 찾지 못"):"Count kept and new foreign-language songs together";
+        Recommender.Result absentForeign=Conversation.recommend(tracks,foreignConditions,feedback,"basic",List.of(tracks.get(4).id),List.of());
+        assert absentForeign.tracks.size()==1&&absentForeign.notice.contains("새 추천을 찾지 못"):"Retain the missing-language notice when only a kept song remains";
+        foreign.tags=List.of("genre:chanson");foreign.language="fr";
+        Recommender.Conditions open=new Recommender.Conditions();open.tags.add("genre:chanson");open.language="fr";
+        assert Recommender.recommend(expanded,open,feedback,"openai").tracks.size()==1;
+        assert Recommender.recommend(expanded,open,feedback,"openai").tracks.get(0).reason.contains("chanson");
+        foreign.language="ja";assert Recommender.recommend(expanded,open,feedback,"openai").tracks.isEmpty():"French and Japanese must never share one unknown-language bucket";
+        foreign.language="fr-ca";assert Recommender.recommend(expanded,open,feedback,"openai").tracks.size()==1;
+        open.excludedTags.add("genre:chanson");assert Recommender.recommend(expanded,open,feedback,"openai").tracks.isEmpty();
+        assert Recommender.validTag("genre:hindustani_dhrupad")&&Recommender.validLanguage("sa")&&Recommender.validLanguage("zh-hant");
+        assert !Recommender.validTag("genre:<script>")&&!Recommender.validTag("genre:"+"x".repeat(65))&&!Recommender.validLanguage("fr_ca");
+        assert !Recommender.label("genre:gregorian_chant").isEmpty()&&!Recommender.languageLabel("fr").isEmpty();
         tracks.get(0).youtubeVideoId = "12345678901";
         String shared = PlaylistText.format("  공부 목록  ", tracks.subList(0, 2));
         assert shared.startsWith("공부 목록\n총 2곡\n");
@@ -118,7 +143,7 @@ public final class RecommendationCheck {
         boolean rejected = false;
         try { Recommender.parse(" "); } catch (IllegalArgumentException e) { rejected = true; }
         assert rejected;
-        conditions.language = "fr";
+        conditions.language = "not_a_language";
         try { Recommender.validate(conditions); throw new AssertionError("Unknown language accepted"); } catch (IllegalArgumentException expected) { }
         System.out.println("PASS: catalogue source boundary, 8 picks, missing genre/kept boundaries, temporary replacement, vocal/unsupported language filters, dislike exclusion/undo, like ranking, negation, input validation and playlist text sharing.");
     }

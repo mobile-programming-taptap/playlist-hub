@@ -15,6 +15,37 @@ public class CommunityApi {
     public record Favourite(Boolean favourite) {}
     public record Copy(String title,String id) {}
     public record Edit(String title,String artist,Integer seconds) {}
+    public record Acceptance(String version,Boolean accepted) {}
+    public record Report(String target,String reason,String details) {}
+
+    @GetMapping("/community/rules")
+    public Map<String,Object> rules(){return Map.of("version",Store.COMMUNITY_RULES_VERSION,"rules",List.of(
+        "공개할 권리가 있는 목록·곡 정보만 게시하고 타인의 저작권과 개인정보를 존중해 주세요.",
+        "스팸·사기, 혐오·차별, 괴롭힘·신상 공개, 성적 착취·아동 유해 콘텐츠, 폭력·위협과 불법 콘텐츠를 게시하지 마세요.",
+        "문제 있는 목록이나 작성자는 앱에서 신고할 수 있어요. 신고는 운영 검토를 위해 저장되며 자동 삭제나 즉시 처리 완료를 의미하지 않아요.",
+        "작성자 차단은 로그인한 내 앱의 발견·검색·순위·즐겨찾기·상세·복사에 적용돼요. 이미 복사한 목록이나 비로그인 공개 웹 링크를 전부 삭제하는 기능은 아니에요.",
+        "운영 검토로 숨겨진 목록은 공개 링크에서도 열리지 않으며 같은 목록을 다시 공개할 수 없어요."),"reportReasons",Store.COMMUNITY_REPORT_REASONS,"maxReportDetails",500,"reportDailyLimit",10);}
+
+    @GetMapping("/community/rules/acceptance")
+    public Map<String,Object> acceptance(@RequestHeader(value="Authorization",required=false)String auth){return store.communityAcceptance(store.user(auth));}
+
+    @PutMapping("/community/rules/acceptance")
+    public Map<String,Object> accept(@RequestHeader(value="Authorization",required=false)String auth,@RequestBody Acceptance body){return withOwner(auth,user->store.acceptCommunityRules(user,body.version(),body.accepted()));}
+
+    @PostMapping("/public/playlists/{shareId}/reports")
+    public ResponseEntity<Map<String,Object>> report(@RequestHeader(value="Authorization",required=false)String auth,@PathVariable String shareId,@RequestBody Report body){
+        var result=withOwner(auth,user->store.reportPublic(user,shareId,body.target(),body.reason(),body.details()));
+        return ResponseEntity.status(Boolean.TRUE.equals(result.get("duplicate"))?200:201).body(result);
+    }
+
+    @PostMapping("/public/playlists/{shareId}/block-author")
+    public Map<String,Object> block(@RequestHeader(value="Authorization",required=false)String auth,@PathVariable String shareId){return withOwner(auth,user->store.blockPublicAuthor(user,shareId));}
+
+    @GetMapping("/community/blocks")
+    public List<Map<String,Object>> blocks(@RequestHeader(value="Authorization",required=false)String auth){return store.communityBlocks(store.user(auth));}
+
+    @DeleteMapping("/community/blocks/{blockId}") @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void unblock(@RequestHeader(value="Authorization",required=false)String auth,@PathVariable String blockId){withOwner(auth,user->{store.unblockCommunityAuthor(user,blockId);return true;});}
 
     @GetMapping("/playlists/{id}/publication")
     public Map<String,Object> publication(@RequestHeader(value="Authorization",required=false) String auth,@PathVariable String id) {
@@ -24,7 +55,7 @@ public class CommunityApi {
     @PutMapping("/playlists/{id}/publication")
     public Map<String,Object> publish(@RequestHeader(value="Authorization",required=false) String auth,@PathVariable String id,@RequestBody Map<String,Object> body) {
         if (!(body.get("public") instanceof Boolean visible)) throw new IllegalArgumentException("공개 여부를 선택해 주세요.");
-        return store.publish(store.user(auth),id,visible);
+        return withOwner(auth,user->store.publish(user,id,visible));
     }
 
     @PutMapping("/playlists/{id}/items/{item}")
@@ -76,6 +107,7 @@ public class CommunityApi {
             .header("X-Content-Type-Options","nosniff").header("Cache-Control","no-store").body(page.toString());
     }
 
+    private <T> T withOwner(String auth,java.util.function.Function<String,T> action){String user=store.user(auth);synchronized(store.ownerLock(user)){store.user(auth);return action.apply(user);}}
     private String optionalUser(String auth) { return auth==null?null:store.user(auth); }
     private static String escape(Object value) {
         return String.valueOf(value==null?"":value).replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace("\"","&quot;").replace("'","&#39;");

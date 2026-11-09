@@ -23,6 +23,7 @@ public class StorageCheckTest {
             String base="http://127.0.0.1:"+server.getLocalPort();
             android.content.SharedPreferences credentials=context.getSharedPreferences("server_credentials",Context.MODE_PRIVATE);
             credentials.edit().putString(base,"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").commit();
+            android.content.SharedPreferences policy=context.getSharedPreferences("settings",Context.MODE_PRIVATE);String previousConsent=policy.getString("serviceConsent:"+base,null);ApiClient.acceptConsent(context,base);
             String fresh="BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
             java.util.concurrent.Future<?> replies=worker.submit(()->{
                 try{
@@ -53,7 +54,7 @@ public class StorageCheckTest {
                 catch(ApiClient.ApiError expected){assertEquals(404,expected.statusCode);assertEquals("목록을 찾을 수 없어요.",expected.getMessage());}
                 assertEquals(fresh,credentials.getString(base,""));
                 replies.get(10,java.util.concurrent.TimeUnit.SECONDS);
-            }finally{credentials.edit().remove(base).commit();}
+            }finally{credentials.edit().remove(base).commit();if(previousConsent==null)policy.edit().remove("serviceConsent:"+base).commit();else policy.edit().putString("serviceConsent:"+base,previousConsent).commit();}
         }finally{worker.shutdownNow();}
     }
 
@@ -67,7 +68,9 @@ public class StorageCheckTest {
             try{TrackJson.conditions(invalid);fail("Unknown condition tags must be rejected");}catch(IllegalArgumentException expected){}
         }
         try{TrackJson.conditions(new JSONObject(encoded.toString()).put("tags","calm"));fail("Malformed tag arrays must be rejected");}catch(org.json.JSONException expected){}
-        try{TrackJson.conditions(new JSONObject(encoded.toString()).put("language","fr"));fail("Unsupported condition language codes must be rejected");}catch(IllegalArgumentException expected){}
+        assertEquals("fr",TrackJson.conditions(new JSONObject(encoded.toString()).put("language","fr")).language);
+        assertEquals("genre:afrobeat",TrackJson.conditions(new JSONObject(encoded.toString()).put("tags",new JSONArray().put("genre:afrobeat"))).tags.get(0));
+        try{TrackJson.conditions(new JSONObject(encoded.toString()).put("language","french$$"));fail("Malformed condition language codes must be rejected");}catch(IllegalArgumentException expected){}
         Context context=InstrumentationRegistry.getInstrumentation().getTargetContext();
         String name="storage-check.db";context.deleteDatabase(name);
         Track track=TrackJson.read(new JSONArray(ApiClient.read(context.getAssets().open("tracks.json"))).getJSONObject(0));
