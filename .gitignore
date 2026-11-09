@@ -7,3 +7,26 @@ backend/data/
 output/
 .env
 *.log
+
+# Private runtime and unrelated workspace outputs
+tmp/
+.env.*
+!.env.example
+**/*.jks
+**/*.keystore
+**/*.mv.db
+**/*.trace.db
+**/*.sqlite
+**/*.sqlite3
+**/*.sqlite3-*
+**/*.db
+**/*.db-*
+**/*-backup.sql
+**/*-dump.sql
+backups/
+dumps/
+
+# Synthetic compatibility fixture; contains no user data.
+!backend/src/test/resources/h2/legacy-2.4.240.mv.db
+
+**/__pycache__/
