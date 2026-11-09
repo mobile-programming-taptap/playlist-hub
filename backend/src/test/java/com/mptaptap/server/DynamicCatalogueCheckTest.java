@@ -314,6 +314,7 @@ class DynamicCatalogueCheckTest {
 
     @Test void shortVerifiedResultGetsOneBoundedSupplementWithoutChangingConditionsOrUsingUnselectedCache() throws Exception {
         var aiCalls=new AtomicInteger();var failExtra=new java.util.concurrent.atomic.AtomicBoolean();
+        var verificationCalls=new AtomicInteger();
         List<JsonNode> requests=new CopyOnWriteArrayList<>();List<Map<String,Object>> rows=new ArrayList<>();
         List<Map<String,Object>> initial=new ArrayList<>(),extra=new ArrayList<>();
         for(int i=0;i<11;i++) {
@@ -325,17 +326,23 @@ class DynamicCatalogueCheckTest {
         HttpServer ai=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0),mb=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
         ai.createContext("/responses",exchange->{
             requests.add(json.readTree(exchange.getRequestBody().readAllBytes()));int call=aiCalls.incrementAndGet();
+            try {if(call==1)Thread.sleep(11000);else if(call==2)Thread.sleep(4500);}catch(InterruptedException error){Thread.currentThread().interrupt();}
             if(call%2==0&&failExtra.get())respond(exchange,503,Map.of("error",Map.of("code","unavailable")));
             else respond(exchange,200,envelope(plan(call%2==1?"jazz":"pop",call%2==1?initial:extra)));
         });
-        mb.createContext("/recording/",exchange->respond(exchange,200,Map.of("recordings",rows)));ai.start();mb.start();
+        mb.createContext("/recording/",exchange->{
+            try {if(verificationCalls.incrementAndGet()==1)Thread.sleep(3500);}catch(InterruptedException error){Thread.currentThread().interrupt();}
+            respond(exchange,200,Map.of("recordings",rows));
+        });ai.start();mb.start();
         ConfigurableApplicationContext app=null;
         try {
             app=start("jdbc:h2:mem:supplement-"+UUID.randomUUID()+";MODE=PostgreSQL;DB_CLOSE_DELAY=-1","sa","",
                 "http://127.0.0.1:"+ai.getAddress().getPort()+"/responses","http://127.0.0.1:"+mb.getAddress().getPort()+"/recording/");
             String token=value("POST","/sessions",null,null,201).path("token").asString();
+            long started=System.nanoTime();
             JsonNode complete=value("POST","/recommendations",token,Map.of("prompt","재즈 추천"),200);
             assertEquals(8,complete.path("tracks").size());assertEquals(2,aiCalls.get());
+            assertTrue(Duration.ofNanos(System.nanoTime()-started).compareTo(Duration.ofSeconds(30))<0,"A slow first round must leave time for both supplementation and verification within the app deadline");
             assertEquals("[\"jazz\"]",complete.path("conditions").path("tags").toString(),"Supplement output cannot replace original constraints");
             String instructions=requests.get(1).path("instructions").asString();
             assertTrue(instructions.contains("earlier AI-generated title/artist proposals"));assertTrue(instructions.contains("Supplement song 0"));
