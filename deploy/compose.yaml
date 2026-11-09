@@ -33,6 +33,7 @@ services:
       DATABASE_USER: ${DATABASE_USER:-taptap}
       DATABASE_PASSWORD: ${DATABASE_PASSWORD:?DATABASE_PASSWORD must be set in the private env file}
       PUBLIC_BASE_URL: https://${DOMAIN:?DOMAIN must be a real public hostname}
+      SUPPORT_EMAIL: ${SUPPORT_EMAIL:-}
     depends_on:
       database:
         condition: service_healthy
