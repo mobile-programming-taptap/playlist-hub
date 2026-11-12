@@ -102,10 +102,10 @@ final class RecommendationCatalogue {
                     &&normalized(track.artist).equals(normalized(song.artist()))).findFirst().orElse(null);
             if(cached==null)missing.add(song);
             else {
-                // 번들된 사실(제목·아티스트·언어·태그)은 그대로 두고, 비어 있을 때만 AI 분류를 채운다.
+                // 검증된 곡의 식별 정보와 저장된 목록은 보존하고, 추천에 쓰는 분류를 갱신한다.
                 cached=json.readValue(json.writeValueAsString(cached),Track.class);
-                if(cached.tags==null||cached.tags.isEmpty())cached.tags=new ArrayList<>(song.tags());
-                if(cached.language==null||cached.language.isEmpty())cached.language=song.language();
+                cached.tags=new ArrayList<>(song.tags());
+                cached.language=song.language();
                 cached.tagsSource="OpenAI song classification; recording identity verified by MusicBrainz";
                 verified.put(cached.id,cached);
                 cachedHits++;

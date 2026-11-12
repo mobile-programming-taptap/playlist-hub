@@ -46,9 +46,14 @@ final class TrackJson {
         JSONArray tags=value.getJSONArray("tags"), excluded=value.getJSONArray("excludedTags");
         for (int i=0;i<tags.length();i++) c.tags.add(tags.getString(i));
         for (int i=0;i<excluded.length();i++) c.excludedTags.add(excluded.getString(i));
+        JSONArray artists = value.optJSONArray("excludedArtists");
+        if (artists != null) {
+            for (int i = 0; i < artists.length(); i++) c.excludedArtists.add(artists.getString(i));
+        }
         c.language=value.getString("language"); return Recommender.validate(c);
     }
     static JSONObject conditions(Recommender.Conditions c) throws JSONException {
-        return new JSONObject().put("tags", new JSONArray(c.tags)).put("excludedTags", new JSONArray(c.excludedTags)).put("language", c.language);
+        return new JSONObject().put("tags", new JSONArray(c.tags)).put("excludedTags", new JSONArray(c.excludedTags)).put("language", c.language)
+            .put("excludedArtists", new JSONArray(c.excludedArtists));
     }
 }
