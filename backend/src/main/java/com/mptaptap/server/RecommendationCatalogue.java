@@ -102,7 +102,7 @@ final class RecommendationCatalogue {
                     &&normalized(track.artist).equals(normalized(song.artist()))).findFirst().orElse(null);
             if(cached==null)missing.add(song);
             else {
-                // 검증된 곡의 식별 정보와 저장된 목록은 보존하고, 추천에 쓰는 분류를 갱신한다.
+                // 기존 분류를 보존하고, 이번 추천에만 AI 분류를 사용한다.
                 cached=json.readValue(json.writeValueAsString(cached),Track.class);
                 cached.tags=new ArrayList<>(song.tags());
                 cached.language=song.language();
@@ -115,11 +115,12 @@ final class RecommendationCatalogue {
         if(missing.isEmpty()){
             List<Track> result=new ArrayList<>(verified.values());
             logFunnel(proposed,cachedHits,searched,skippedByArtist,result.size());
-            remember(result);return result;
+            return result;
         }
         String query=missing.stream().map(song->"(recording:"+literal(song.title())+" AND artist:"+literal(song.artist())+")")
                 .collect(Collectors.joining(" OR "));
         JsonNode rows=search(query,deadline).path("recordings");
+        List<Track> discovered=new ArrayList<>();
         for(OpenAi.Suggestion song:missing) {
             for(JsonNode row:rows) {
                 String id=row.path("id").asString(),title=row.path("title").asString();
@@ -147,12 +148,17 @@ final class RecommendationCatalogue {
                     String releaseId=release.path("id").asString();
                     if(releaseId.matches(UUID_PATTERN)){track.artworkUrl="https://coverartarchive.org/release/"+releaseId+"/front-500";break;}
                 }
-                if(track.usable()){verified.put(id,track);break;}
+                if(track.usable()){
+                    verified.put(id,track);
+                    if(!seeds.containsKey(id))discovered.add(track);
+                    break;
+                }
             }
         }
         List<Track> result=new ArrayList<>(verified.values());
         logFunnel(proposed,cachedHits,searched,skippedByArtist,result.size());
-        remember(result);return result;
+        if(!discovered.isEmpty())remember(discovered);
+        return result;
     }
 
     /** AI 후보가 어느 단계에서 줄었는지 남긴다. 조건 부족과 외부 오류를 구분하는 근거가 된다. */
@@ -174,8 +180,7 @@ final class RecommendationCatalogue {
     private synchronized void remember(List<Track> tracks) {
         tx.executeWithoutResult(status->{for(Track track:tracks) {
             String snapshot=json.writeValueAsString(track);
-            if(db.update("UPDATE recommendation_tracks SET track_json=? WHERE id=?",snapshot,track.id)==0)
-                db.update("INSERT INTO recommendation_tracks (id,track_json) VALUES (?,?)",track.id,snapshot);
+            db.update("INSERT INTO recommendation_tracks (id,track_json) VALUES (?,?) ON CONFLICT DO NOTHING",track.id,snapshot);
         }});
     }
 

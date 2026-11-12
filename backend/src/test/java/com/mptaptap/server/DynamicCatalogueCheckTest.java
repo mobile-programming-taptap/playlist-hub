@@ -223,8 +223,8 @@ class DynamicCatalogueCheckTest {
             assertEquals("[\"citypop\"]",refreshed.path("tags").toString());assertEquals("unsupported",refreshed.path("language").asString());
             for(String field:List.of("id","title","artist","source","sourceUrl","license","licenseReference","tagsSource","artworkUrl","youtubeVideoId","checkedAt","aiUseAllowed"))
                 assertEquals(verifiedFacts.path(field),refreshed.path(field),"Reclassification must preserve verified recording facts: "+field);
-            assertEquals(refreshed,json.readTree(db.queryForObject("SELECT track_json FROM recommendation_tracks WHERE id=?",String.class,cityId)),"The all-cache path must persist the current AI classification.");
-            assertEquals(savedBefore,value("GET",savedPath,token,null,200),"Updating catalogue classification must not rewrite an already saved playlist snapshot.");
+            assertEquals(json.readTree(json.writeValueAsString(outdated)),json.readTree(db.queryForObject("SELECT track_json FROM recommendation_tracks WHERE id=?",String.class,cityId)),"Request-specific classification must leave the stored recording intact.");
+            assertEquals(savedBefore,value("GET",savedPath,token,null,200),"Request-specific classification must leave an existing playlist snapshot intact.");
         } finally {
             try {
                 if(app!=null) {
@@ -279,7 +279,10 @@ class DynamicCatalogueCheckTest {
             for(String field:List.of("id","title","artist","source","sourceUrl","license","licenseReference","checkedAt","youtubeVideoId"))assertEquals(seed.path(field),reclassified.path(field));
             String playlist=value("POST","/playlists",token,Map.of("title","Open classification"),201).path("id").asString();
             value("POST","/playlists/"+playlist+"/items",token,Map.of("trackId",seed.path("id").asString()),200);
-            assertEquals(reclassified,value("GET","/playlists/"+playlist,token,null,200).path("items").get(0).path("track"));
+            assertEquals(seed,value("GET","/playlists/"+playlist,token,null,200).path("items").get(0).path("track"),
+                "Saving a previously bundled recording must use its original classification.");
+            assertEquals(0,app.getBean(JdbcTemplate.class).queryForObject("SELECT COUNT(*) FROM recommendation_tracks WHERE id=?",Integer.class,seed.path("id").asString()),
+                "A recommendation must not create a database row that shadows a bundled track.");
             model.set(plan("genre:chanson",List.of(song("New lookup","Unknown artist",List.of("genre:chanson"),"fr"))));catalogueStatus.set(413);
             JsonNode oversized=value("POST","/recommendations",token,Map.of("prompt","샹송"),503);assertFalse(oversized.has("tracks"));
         } finally {if(app!=null){if(owner!=null)app.getBean(JdbcTemplate.class).update("DELETE FROM users WHERE id=?",owner);app.close();}ai.stop(0);mb.stop(0);}
