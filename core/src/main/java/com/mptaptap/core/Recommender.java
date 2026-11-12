@@ -187,8 +187,8 @@ public final class Recommender {
         // 문장을 지우지 않고 부정 구간으로 남겨 두어야 "조용함"이 제외 조건으로 읽힌다.
         List<int[]> reasonNegations = new ArrayList<>();
         java.util.regex.Matcher reason = Pattern.compile(
-                        "([가-힣]+(?:하면|하니까|하니|해서|한데|하더니)\\s*(?:[가-힣]+\\s*){0,2}"
-                                + "(?:졸려|졸리|졸음|지루|지겹|심심|답답|따분|힘들|피곤|잠\\s*(?:이|은|와|옴)))")
+                "([가-힣]+(?:하면|하니까|하니|해서|한데|하더니)\\s*(?:[가-힣]+\\s*){0,2}"
+                + "(?:졸려|졸리|졸음|지루|지겹|심심|답답|따분|힘들|피곤|잠\\s*(?:이|은|와|옴)))")
                 .matcher(input);
         while (reason.find()) reasonNegations.add(new int[]{reason.start(), reason.end()});
         Conditions c = new Conditions();
@@ -208,16 +208,18 @@ public final class Recommender {
                 List<String> target = negated ? c.excludedTags : c.tags;
                 if (!target.contains(word.getKey())) target.add(word.getKey());
                 // "안 잔잔한"은 calm:AVOID만으로 검색이 안 된다. 반대편 긍정 태그를 함께 요구한다.
-                if(negated)for(String opposite:OPPOSITES.getOrDefault(word.getKey(),List.of()))
+                // "잔잔한 곡은 제외"처럼 뒤에서 빼는 말은 반대편을 원하는 것이 아니므로
+                // 부정어가 대상 앞에 온 경우에만 반대편 태그를 요구한다.
+                if(negated&&frontNegated(input,start))for(String opposite:OPPOSITES.getOrDefault(word.getKey(),List.of()))
                     if(!c.tags.contains(opposite)&&!c.excludedTags.contains(opposite))c.tags.add(opposite);
             }
         }
         c.tags.removeAll(c.excludedTags);
         for(LanguageMention mention:languages(input))if(!mention.negative)c.language=mention.code;
         c.unread = unread(input);
+        // "가사 없는/가사ㄴㄴ"은 연주곡을 원하는 요청이므로 language none 이다.
+        // 반대로 "연주곡 제외"는 연주곡을 빼달라는 요청이므로 language 를 비운 채로 둔다.
         if (c.tags.contains("instrumental")) c.language = "none";
-        // "가사를 빼줘"도 결과적으로는 연주곡 요청이다.
-        if (c.excludedTags.contains("instrumental") && c.language.isEmpty()) c.language = "none";
         return c;
     }
 
@@ -226,10 +228,38 @@ public final class Recommender {
             + "|추천|추천해|추천해줘|추천해주세요|바꿔|바꿔줘|바꿔주세요|빼고|빼|제외|제외하고|말고|듣고|싶어|싶은|좀|너무|정도|같은|느낌)");
     /** 남은 토큰 = 사전이 읽지 못한 표현. 화면 안내와 AI 보완 판단에 쓴다. */
     private static List<String> unread(String input){
+        // 조건이 아니라 명령인 표현은 먼저 지운다.
+        String body = input.replaceAll("(?:처음부터|새로\\s*시작|조건\\s*초기화|start\\s+over|reset)"," ")
+                .replaceAll("\\b(?:recommend|recommends|recommendation|music|song|songs|please|only|instead|genre|exclude|excludes|excluded|excluding|avoid|avoids|avoided|without|except|no|not)\\b"," ");
+        // 사전이 읽은 표현을 원문에서 먼저 지운다. "가사 없는"처럼 여러 단어가 붙어야 뜻이 되는
+        // 표현을 토큰 단위로 쪼개면 놓치기 때문이다.
+        // 사전이 읽은 표현을 원문에서 먼저 지운다. 조각을 남기지 않도록 매칭 구간을 한 번에 표시한 뒤 지운다.
+        // "city pop"처럼 두 단어로 된 별칭은 "pop"만 지우면 "city"가 남기 때문이다.
+        boolean[] consumed = new boolean[body.length()];
+        for (String pattern : WORDS.values()) {
+            java.util.regex.Matcher matcher = Pattern.compile(pattern).matcher(body);
+            while (matcher.find()) for (int i=matcher.start();i<matcher.end();i++) consumed[i]=true;
+        }
+        for (String pattern : LANGUAGE_WORDS.values()) {
+            java.util.regex.Matcher matcher = Pattern.compile(pattern).matcher(body);
+            while (matcher.find()) for (int i=matcher.start();i<matcher.end();i++) consumed[i]=true;
+        }
+        StringBuilder remaining = new StringBuilder();
+        for (int i=0;i<body.length();i++) remaining.append(consumed[i]?' ':body.charAt(i));
         List<String> result = new ArrayList<>();
-        for (String token : SEPARATORS.split(input))
-            if (!token.isEmpty() && !FILLER.matcher(token).matches()) result.add(token);
+        for (String token : SEPARATORS.split(remaining)) {
+            if (token.isEmpty()) continue;
+            String stripped = token.replaceAll("(?:은|는|을|를|이|가|도|만|와|과|으로|로|에|의|께|서|까지|부터|할|하게|한|게|때|날|더)$", "");
+            if (stripped.isEmpty() || FILLER.matcher(stripped).matches()) continue;
+            result.add(token);
+        }
         return result.size() > 8 ? new ArrayList<>(result.subList(0, 8)) : result;
+    }
+
+    /** 부정어가 대상 앞에 오는가. "안 잔잔한"은 참, "잔잔한 곡은 제외"는 거짓. */
+    private static boolean frontNegated(String input,int start){
+        String head=input.substring(0,start);
+        return head.matches("(?s).*(?:\\b(?:no|not|never|without|except)\\s+|(?:안|못)\\s*)$");
     }
 
     private static boolean negative(String input,int start,int end){
@@ -278,9 +308,8 @@ public final class Recommender {
         if(c.unread==null)c.unread=new ArrayList<>();
         c.unread = new ArrayList<>(new LinkedHashSet<>(c.unread));
         c.tags.removeAll(c.excludedTags);
+        // "가사 없는/가사ㄴㄴ"은 연주곡을 원하는 요청이다. "연주곡 제외"는 반대이므로 건드리지 않는다.
         if (c.tags.contains("instrumental")) c.language = "none";
-        // "가사를 빼줘"도 결과적으로는 연주곡 요청이다. removeAll 뒤에 판정해야 한다.
-        if (c.excludedTags.contains("instrumental") && c.language.isEmpty()) c.language = "none";
 
         if (c.hardTags == null) c.hardTags = new ArrayList<>();
         if (c.softTags == null) c.softTags = new ArrayList<>();

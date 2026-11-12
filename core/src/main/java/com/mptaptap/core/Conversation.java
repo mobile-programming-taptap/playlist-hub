@@ -28,10 +28,10 @@ public final class Conversation {
         copy.excludedTags=source.excludedTags==null?null:new ArrayList<>(source.excludedTags);
         copy.unread=source.unread==null?null:new ArrayList<>(source.unread);
         copy.language=source.language;
-        // 필수·선호 분류와 가수 제외는 조건과 함께 이어져야 한다.
-        copy.hardTags=source.hardTags==null?null:new ArrayList<>(source.hardTags);
-        copy.softTags=source.softTags==null?null:new ArrayList<>(source.softTags);
+        // 가수 제외는 사용자가 직접 말한 입력이므로 조건과 함께 이어져야 한다.
         copy.excludedArtists=source.excludedArtists==null?null:new ArrayList<>(source.excludedArtists);
+        // hardTags/softTags 는 tags 에서 파생되는 값이라 복사하지 않는다.
+        // 복사하면 tags 가 바뀐 뒤에도 옛 분류가 남아 필터가 어긋난다.
         return Recommender.validate(copy);
     }
     public static Recommender.Conditions parse(Recommender.Conditions previousConditions, List<String> history, String prompt) {
