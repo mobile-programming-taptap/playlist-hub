@@ -1,5 +1,6 @@
 package com.mptaptap.server;
 
+import com.mptaptap.core.Recommender;
 import com.mptaptap.core.Track;
 import java.net.URI;
 import java.net.URLEncoder;
@@ -74,28 +75,48 @@ final class RecommendationCatalogue {
     }
 
     List<Track> resolve(List<OpenAi.Suggestion> candidates) throws Exception {
-        return resolve(candidates,Duration.ofSeconds(12));
+        return resolve(candidates,Duration.ofSeconds(12),null);
     }
 
     List<Track> resolve(List<OpenAi.Suggestion> candidates,Duration timeout) throws Exception {
+        return resolve(candidates,timeout,null);
+    }
+
+    /** 조건을 함께 받아야 연주곡 요청과 제외 가수를 조회 단계에서 반영할 수 있다. */
+    List<Track> resolve(List<OpenAi.Suggestion> candidates,Duration timeout,Recommender.Conditions conditions) throws Exception {
         long deadline=System.nanoTime()+Math.min(Duration.ofSeconds(12).toNanos(),timeout.toNanos());
         if(candidates.isEmpty())return List.of();
         if(candidates.size()>12)throw new IllegalArgumentException("Too many song candidates");
+        int proposed=candidates.size();
+        boolean wantsInstrumental=conditions!=null&&(conditions.tags.contains("instrumental")||conditions.language.equals("none"));
+        List<String> excludedArtists=conditions==null?List.of():
+                (conditions.excludedArtists==null?List.of():conditions.excludedArtists);
         List<Track> known=all();List<OpenAi.Suggestion> missing=new ArrayList<>();
         Map<String,Track> verified=new LinkedHashMap<>();Set<String> identities=new java.util.HashSet<>();
+        int cachedHits=0,skippedByArtist=0;
         for(OpenAi.Suggestion song:candidates) {
             if(!identities.add(normalized(song.title())+"|"+normalized(song.artist())))continue;
+            // 직접 제외한 가수는 조회 전에 걸러 MusicBrainz 요청을 낭비하지 않는다.
+            if(artistExcluded(song.artist(),excludedArtists)){skippedByArtist++;continue;}
             Track cached=known.stream().filter(track->normalized(track.title).equals(normalized(song.title()))
                     &&normalized(track.artist).equals(normalized(song.artist()))).findFirst().orElse(null);
             if(cached==null)missing.add(song);
             else {
-                // Reclassify every verified recording without mutating bundled identity facts or saved snapshots.
-                cached=json.readValue(json.writeValueAsString(cached),Track.class);cached.tags=new ArrayList<>(song.tags());cached.language=song.language();
+                // 번들된 사실(제목·아티스트·언어·태그)은 그대로 두고, 비어 있을 때만 AI 분류를 채운다.
+                cached=json.readValue(json.writeValueAsString(cached),Track.class);
+                if(cached.tags==null||cached.tags.isEmpty())cached.tags=new ArrayList<>(song.tags());
+                if(cached.language==null||cached.language.isEmpty())cached.language=song.language();
                 cached.tagsSource="OpenAI song classification; recording identity verified by MusicBrainz";
                 verified.put(cached.id,cached);
+                cachedHits++;
             }
         }
-        if(missing.isEmpty()){List<Track> result=new ArrayList<>(verified.values());remember(result);return result;}
+        int searched=missing.size();
+        if(missing.isEmpty()){
+            List<Track> result=new ArrayList<>(verified.values());
+            logFunnel(proposed,cachedHits,searched,skippedByArtist,result.size());
+            remember(result);return result;
+        }
         String query=missing.stream().map(song->"(recording:"+literal(song.title())+" AND artist:"+literal(song.artist())+")")
                 .collect(Collectors.joining(" OR "));
         JsonNode rows=search(query,deadline).path("recordings");
@@ -104,7 +125,9 @@ final class RecommendationCatalogue {
                 String id=row.path("id").asString(),title=row.path("title").asString();
                 if(!id.matches(UUID_PATTERN)||row.path("video").asBoolean(false)||!normalized(title).equals(normalized(song.title())))continue;
                 String version=row.path("disambiguation").asString().toLowerCase(Locale.ROOT);
-                if(version.matches("(?s).*(live|remix|karaoke|cover|demo|instrumental|atmos).*"))continue;
+                if(version.matches("(?s).*(live|remix|karaoke|cover|demo|atmos).*"))continue;
+                // 연주곡을 요청했을 때만 instrumental 버전을 살린다.
+                if(version.contains("instrumental")&&!wantsInstrumental)continue;
                 boolean artistMatches=false;StringBuilder artist=new StringBuilder();
                 for(JsonNode credit:row.path("artist-credit")) {
                     String name=credit.path("name").asString(credit.path("artist").path("name").asString());
@@ -113,6 +136,7 @@ final class RecommendationCatalogue {
                 }
                 artistMatches|=normalized(artist.toString()).equals(normalized(song.artist()));
                 if(!artistMatches||artist.isEmpty()||verified.containsKey(id))continue;
+                if(artistExcluded(artist.toString(),excludedArtists)){skippedByArtist++;continue;}
                 Track track=new Track();track.id=id;track.title=title;track.artist=artist.toString();
                 track.tags=new ArrayList<>(song.tags());track.language=song.language();
                 track.source="MusicBrainz";track.sourceUrl="https://musicbrainz.org/recording/"+id;
@@ -126,7 +150,25 @@ final class RecommendationCatalogue {
                 if(track.usable()){verified.put(id,track);break;}
             }
         }
-        List<Track> result=new ArrayList<>(verified.values());remember(result);return result;
+        List<Track> result=new ArrayList<>(verified.values());
+        logFunnel(proposed,cachedHits,searched,skippedByArtist,result.size());
+        remember(result);return result;
+    }
+
+    /** AI 후보가 어느 단계에서 줄었는지 남긴다. 조건 부족과 외부 오류를 구분하는 근거가 된다. */
+    private void logFunnel(int proposed,int cachedHits,int searched,int skippedByArtist,int resolved) {
+        org.slf4j.LoggerFactory.getLogger(RecommendationCatalogue.class).info(
+            "Catalogue funnel: proposed={}, cached={}, searched={}, skippedByArtist={}, resolved={}, lostInSearch={}",
+            proposed,cachedHits,searched,skippedByArtist,resolved,(searched+skippedByArtist)-(resolved-cachedHits));
+    }
+
+    private static boolean artistExcluded(String credit,List<String> excludedArtists) {
+        if(excludedArtists==null||excludedArtists.isEmpty())return false;
+        String artist=Recommender.normalizeArtist(credit);
+        if(artist.isEmpty())return false;
+        for(String excluded:excludedArtists)
+            if(artist.equals(excluded)||artist.startsWith(excluded))return true;
+        return false;
     }
 
     private synchronized void remember(List<Track> tracks) {
@@ -171,6 +213,9 @@ final class RecommendationCatalogue {
         }finally{searchLock.unlock();}
     }
 
-    private static String literal(String value) {return "\""+value.replaceAll("([+\\-!(){}\\[\\]^\"~*?:\\\\/])","\\\\$1")+"\"";}
-    private static String normalized(String value) {return Normalizer.normalize(value,Normalizer.Form.NFKD).toLowerCase(Locale.ROOT).replaceAll("[^\\p{L}\\p{N}]","");}
+    private static String literal(String value){return "\""+value.replaceAll("([+\\-!(){}\\[\\]^\"~*?:\\\\/])","\\\\$1")+"\"";}
+    private static String normalized(String value) {
+        String base=Normalizer.normalize(value==null?"":value,Normalizer.Form.NFKD).toLowerCase(Locale.ROOT).replaceAll("[^\\p{L}\\p{N}]","");
+        return base;
+    }
 }

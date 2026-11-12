@@ -47,6 +47,18 @@ public class Api {
     public record Items(List<String> trackIds) {}
     public record Order(List<String> itemIds) {}
 
+    /** 외부 서비스 오류를 사용자가 읽을 수 있는 안내로 바꾼다. 조건 부족과 구분해서 쓴다. */
+    private static String catalogueNotice(String reason) {
+        if (reason == null || reason.isEmpty()) return "음악 정보를 확인하는 중 문제가 생겼어요. 같은 요청으로 다시 시도해 주세요.";
+        if (reason.equals("CATALOGUE_BUSY"))
+            return "지금 곡 확인 요청이 많아요. 잠시 뒤 같은 요청으로 다시 시도해 주세요.";
+        if (reason.startsWith("CATALOGUE_HTTP_5") || reason.equals("CATALOGUE_UNAVAILABLE"))
+            return "실제 곡 정보를 확인하는 서비스가 응답하지 않아요. 잠시 뒤 같은 요청으로 다시 시도해 주세요.";
+        if (reason.equals("CATALOGUE_INVALID"))
+            return "곡 정보 형식을 확인하지 못했어요. 같은 요청으로 다시 시도해 주세요.";
+        return "실제 곡 정보를 확인하는 서비스에 연결하지 못했어요. 같은 요청으로 다시 시도해 주세요.";
+    }
+
     @PostMapping("/recommendations")
     public Recommender.Result recommendations(@RequestHeader(value="Authorization", required=false) String auth, @RequestBody Prompt body) {
         String user = store.user(auth);
@@ -70,13 +82,13 @@ public class Api {
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"AI 연결이 원활하지 않아요. 같은 요청으로 다시 시도해 주세요.");
         }
         List<Track> verified;
-        try {verified=catalogue.resolve(plan.candidates(),java.time.Duration.ofNanos(Math.max(1,deadline-System.nanoTime())));}
+        try {verified=catalogue.resolve(plan.candidates(),java.time.Duration.ofNanos(Math.max(1,deadline-System.nanoTime())),plan.conditions());}
         catch(InterruptedException error){Thread.currentThread().interrupt();throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"곡 확인 요청이 중단됐어요. 같은 요청으로 다시 시도해 주세요.");}
         catch(Exception error){
             String reason=error.getMessage();
             if(reason==null||!reason.matches("(?:CATALOGUE_[A-Z0-9_]+|RESPONSE_[A-Z_]+)"))reason=error.getClass().getSimpleName();
             org.slf4j.LoggerFactory.getLogger(Api.class).warn("Recording verification failed: {}",reason);
-            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"실제 곡 정보를 확인하는 서비스에 연결하지 못했어요. 같은 요청으로 다시 시도해 주세요.");
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,catalogueNotice(reason));
         }
         Map<String,Track> candidates=new LinkedHashMap<>();
         for(Track track:verified)candidates.put(track.id,track);
@@ -94,7 +106,7 @@ public class Api {
                 var previous=plan.candidates().stream().map(song->song.title()+"|"+song.artist()).collect(java.util.stream.Collectors.toSet());
                 var fresh=extra.candidates().stream().filter(song->!previous.contains(song.title()+"|"+song.artist())).toList();
                 proposed+=fresh.size();
-                for(Track track:catalogue.resolve(fresh,java.time.Duration.ofNanos(Math.max(1,deadline-System.nanoTime())))){candidates.putIfAbsent(track.id,track);verifiedIds.add(track.id);}
+                for(Track track:catalogue.resolve(fresh,java.time.Duration.ofNanos(Math.max(1,deadline-System.nanoTime())),plan.conditions())){candidates.putIfAbsent(track.id,track);verifiedIds.add(track.id);}
                 result=Conversation.recommend(new ArrayList<>(candidates.values()),plan.conditions(),feedback,"openai",body.keptTrackIds(),body.excludedTrackIds());
             } catch(InterruptedException interrupted){Thread.currentThread().interrupt();throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"AI 요청이 중단됐어요. 같은 요청으로 다시 시도해 주세요.");}
             catch(Exception error){org.slf4j.LoggerFactory.getLogger(Api.class).warn("Supplementary recommendation failed: {}",error.getClass().getSimpleName());}
