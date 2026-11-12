@@ -26,7 +26,12 @@ public final class Conversation {
         Recommender.Conditions copy=new Recommender.Conditions();
         copy.tags=source.tags==null?null:new ArrayList<>(source.tags);
         copy.excludedTags=source.excludedTags==null?null:new ArrayList<>(source.excludedTags);
+        copy.unread=source.unread==null?null:new ArrayList<>(source.unread);
         copy.language=source.language;
+        // 필수·선호 분류와 가수 제외는 조건과 함께 이어져야 한다.
+        copy.hardTags=source.hardTags==null?null:new ArrayList<>(source.hardTags);
+        copy.softTags=source.softTags==null?null:new ArrayList<>(source.softTags);
+        copy.excludedArtists=source.excludedArtists==null?null:new ArrayList<>(source.excludedArtists);
         return Recommender.validate(copy);
     }
     public static Recommender.Conditions parse(Recommender.Conditions previousConditions, List<String> history, String prompt) {
@@ -45,6 +50,9 @@ public final class Conversation {
             result.excludedTags.removeAll(next.tags);
             for (String tag : next.tags) if (!result.tags.contains(tag)) result.tags.add(tag);
             for (String tag : next.excludedTags) if (!result.excludedTags.contains(tag)) result.excludedTags.add(tag);
+            for (String word : next.unread) if (!result.unread.contains(word)) result.unread.add(word);
+            for (String artist : next.excludedArtists)
+                if (!result.excludedArtists.contains(artist)) result.excludedArtists.add(artist);
             if (!next.language.isEmpty()) {
                 result.language = next.language;
                 if (!next.language.equals("none")) result.tags.remove("instrumental");
@@ -63,7 +71,7 @@ public final class Conversation {
             throw new IllegalArgumentException("싫어요를 남긴 곡은 유지할 수 없어요. 반응을 취소한 뒤 선택해 주세요.");
     }
     public static Recommender.Result recommend(List<Track> catalogue, Recommender.Conditions conditions,
-            Map<String,Integer> feedback, String mode, List<String> kept, List<String> excluded) {
+                                               Map<String,Integer> feedback, String mode, List<String> kept, List<String> excluded) {
         List<String> keep = kept == null ? List.of() : kept;
         List<String> skip = excluded == null ? List.of() : excluded;
         validateSelection(catalogue,feedback,keep,skip);
