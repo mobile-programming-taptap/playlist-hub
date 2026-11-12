@@ -241,7 +241,7 @@ class DynamicCatalogueCheckTest {
         String french=UUID.randomUUID().toString(),japanese=UUID.randomUUID().toString(),release=UUID.randomUUID().toString();
         List<Map<String,Object>> candidates=List.of(song("La vie en rose","Édith Piaf",List.of("genre:chanson","warm"),"fr"),
             song("夜に駆ける","YOASOBI",List.of("genre:chanson","warm"),"ja"),song("Not independently verified","Unknown artist",List.of("genre:chanson"),"fr"));
-        AtomicReference<Map<String,Object>> model=new AtomicReference<>(Map.of("tags",List.of("genre:chanson"),"excludedTags",List.of("genre:enka"),"language","fr","languageSpecified",true,"candidates",candidates));
+        AtomicReference<Map<String,Object>> model=new AtomicReference<>(Map.of("tags",List.of("genre:chanson"),"excludedTags",List.of("genre:enka"),"language","fr","languageSpecified",true,"excludedArtists",List.of(),"candidates",candidates));
         AtomicInteger catalogueStatus=new AtomicInteger(200);List<JsonNode> sent=new CopyOnWriteArrayList<>();
         HttpServer ai=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0),mb=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
         ai.createContext("/responses",exchange->{sent.add(json.readTree(exchange.getRequestBody().readAllBytes()));respond(exchange,200,envelope(model.get()));});
@@ -259,15 +259,15 @@ class DynamicCatalogueCheckTest {
             assertTrue(schema.path("properties").path("tags").path("items").path("pattern").asString().contains("genre:"));
             assertFalse(schema.path("properties").path("language").has("enum"));assertTrue(schema.path("properties").path("language").has("pattern"));
             value("PUT","/me/feedback/"+french,token,Map.of("reaction",1),200);
-            model.set(Map.of("tags",List.of("genre:chanson","warm"),"excludedTags",List.of("genre:enka"),"language","fr","languageSpecified",false,"candidates",candidates));
+            model.set(Map.of("tags",List.of("genre:chanson","warm"),"excludedTags",List.of("genre:enka"),"language","fr","languageSpecified",false,"excludedArtists",List.of(),"candidates",candidates));
             JsonNode warmer=value("POST","/recommendations",token,Map.of("prompt","더 따뜻하게","previousConditions",first.path("conditions")),200);
             assertEquals(List.of(french),ids(warmer.path("tracks")));assertEquals("fr",warmer.path("conditions").path("language").asString());
             assertTrue(warmer.path("conditions").path("tags").toString().contains("genre:chanson"));assertTrue(sent.get(1).path("instructions").asString().contains("\"genre:chanson\":1"));
             assertFalse(sent.get(1).toString().contains("La vie en rose"));assertFalse(sent.get(1).toString().contains(french));
-            model.set(Map.of("tags",List.of("genre:chanson","warm"),"excludedTags",List.of("genre:enka"),"language","ja","languageSpecified",true,"candidates",candidates));
+            model.set(Map.of("tags",List.of("genre:chanson","warm"),"excludedTags",List.of("genre:enka"),"language","ja","languageSpecified",true,"excludedArtists",List.of(),"candidates",candidates));
             JsonNode changed=value("POST","/recommendations",token,Map.of("prompt","일본어로 바꿔줘","previousConditions",warmer.path("conditions")),200);
             assertEquals(List.of(japanese),ids(changed.path("tracks")));assertEquals("ja",changed.path("conditions").path("language").asString());
-            model.set(Map.of("tags",List.of("genre:gregorian_chant"),"excludedTags",List.of("genre:dhrupad"),"language","la","languageSpecified",true,"candidates",List.of()));
+            model.set(Map.of("tags",List.of("genre:gregorian_chant"),"excludedTags",List.of("genre:dhrupad"),"language","la","languageSpecified",true,"excludedArtists",List.of(),"candidates",List.of()));
             JsonNode reset=value("POST","/recommendations",token,Map.of("prompt","처음부터 라틴어 그레고리오 성가, 드루파드는 제외","previousConditions",changed.path("conditions")),200);
             assertEquals("la",reset.path("conditions").path("language").asString());assertEquals("[\"genre:gregorian_chant\"]",reset.path("conditions").path("tags").toString());
             assertEquals(0,reset.path("tracks").size(),"No verified AI candidate means no catalogue fallback, even for an accepted open genre.");
@@ -438,7 +438,7 @@ class DynamicCatalogueCheckTest {
             assertTrue(instructions.contains("neighboring styles and shared instruments are NOT synonyms"));
             assertTrue(instructions.contains("genre:free_79"));assertFalse(instructions.contains("\"genre:free_0\""));
             for(var languages:Map.of("일본어 말고 프랑스어","fr","프랑스어 말고 일본어","ja","영어와 일본어 제외하고 프랑스어","fr","French or Japanese","fr","힌디어 노래","hi").entrySet()) {
-                payload.set(Map.of("tags",List.of("genre:chanson"),"excludedTags",List.of(),"language",languages.getValue(),"languageSpecified",true,"candidates",List.of()));
+                payload.set(Map.of("tags",List.of("genre:chanson"),"excludedTags",List.of(),"language",languages.getValue(),"languageSpecified",true,"excludedArtists",List.of(),"candidates",List.of()));
                 assertEquals(languages.getValue(),api.plan(languages.getKey(),List.of(),null,Map.of()).conditions().language);
             }
             Map<String,Object> legacy=new LinkedHashMap<>(plan("jazz",List.of()));legacy.remove("candidates");payload.set(legacy);
@@ -477,7 +477,7 @@ class DynamicCatalogueCheckTest {
         List<String> result=new ArrayList<>();for(JsonNode row:rows)result.add(row.isString()?row.asString():row.path("track").path("id").asString());return result;
     }
     private static Map<String,Object> song(String title,String artist,List<String> tags,String language) {return Map.of("title",title,"artist",artist,"tags",tags,"language",language);}
-    private static Map<String,Object> plan(String genre,List<Map<String,Object>> songs) {return Map.of("tags",List.of(genre),"excludedTags",List.of(),"language","","languageSpecified",false,"candidates",songs);}
+    private static Map<String,Object> plan(String genre,List<Map<String,Object>> songs) {return Map.of("tags",List.of(genre),"excludedTags",List.of(),"language","","languageSpecified",false,"excludedArtists",List.of(),"candidates",songs);}
     private static Map<String,Object> recording(String id,String title,String artist,String version,String release) {
         return Map.of("id",id,"title",title,"video",false,"disambiguation",version,
             "artist-credit",List.of(Map.of("name",artist,"artist",Map.of("name",artist),"joinphrase","")),"releases",List.of(Map.of("id",release)));
