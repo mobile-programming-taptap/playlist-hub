@@ -30,9 +30,11 @@ public class ConversationFlowCheckTest {
     @Test public void pendingSnapshotRetainsRefinementAndRejectsAnotherOwner() throws Exception {
         var instrumentation=InstrumentationRegistry.getInstrumentation();Context context=instrumentation.getTargetContext();
         List<Track> tracks=TrackJson.list(new JSONArray(ApiClient.read(context.getAssets().open("tracks.json"))));
+        Recommender.Conditions previousConditions = Recommender.parse("잔잔한 한국어 피아노 음악");
+        previousConditions.excludedArtists = List.of("bts");
         JSONObject snapshot=new JSONObject().put("prompt","팝으로 바꿔줘").put("history",new JSONArray(List.of("잔잔한 한국어 피아노 음악")))
             .put("keptTrackIds",new JSONArray(List.of(tracks.get(0).id))).put("excludedTrackIds",new JSONArray())
-            .put("previousConditions",TrackJson.conditions(Recommender.parse("잔잔한 한국어 피아노 음악")));
+            .put("previousConditions",TrackJson.conditions(previousConditions));
         RecommendationRequest restored=new RecommendationRequest();AtomicReference<Throwable> failure=new AtomicReference<>();
         instrumentation.runOnMainSync(()->{try{restored.restore(snapshot,null);assertTrue(restored.retry(null));}catch(Throwable e){failure.set(e);}});
         long end=SystemClock.elapsedRealtime()+10000;AtomicReference<RecommendationRequest.State> result=new AtomicReference<>();

@@ -48,6 +48,7 @@ class ApiCheckTest {
 
     static String modelPlan(ObjectMapper json,String conditions) throws java.io.IOException {
         var plan=(tools.jackson.databind.node.ObjectNode)json.readTree(conditions);
+        if (!plan.has("excludedArtists")) plan.putArray("excludedArtists");
         var candidates=plan.putArray("candidates");
         try(var input=new org.springframework.core.io.ClassPathResource("tracks.json").getInputStream()) {
             for(JsonNode track:json.readTree(input)) {
@@ -147,6 +148,11 @@ class ApiCheckTest {
             if(input.isArray()&&latest.equals("신나는 음악을 추천해줘")&&input.get(0).path("content").asString().equals("cozy music"))
                 conditions="{\"tags\":[\"warm\",\"pop\",\"energetic\"],\"excludedTags\":[],\"language\":\"\",\"languageSpecified\":false}";
             if(incoming.path("text").path("format").path("schema").path("properties").has("candidates"))conditions=modelPlan(json,conditions);
+            else {
+                var conditionOnly = (tools.jackson.databind.node.ObjectNode) json.readTree(conditions);
+                conditionOnly.putArray("excludedArtists");
+                conditions = json.writeValueAsString(conditionOnly);
+            }
             byte[] reply=json.writeValueAsBytes(Map.of("status","completed","output",List.of(Map.of("type","message","content",List.of(Map.of("type","output_text","text",conditions))))));
             exchange.getResponseHeaders().set("Content-Type","application/json");exchange.sendResponseHeaders(200,reply.length);exchange.getResponseBody().write(reply);exchange.close();
         });stub.start();
