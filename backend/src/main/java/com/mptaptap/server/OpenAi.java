@@ -74,8 +74,12 @@ public class OpenAi {
                     "language", Map.of("type", "string", "pattern",languagePattern,
                         "description", "Requested vocal language only. Never infer it from input text language, genre, a requested artist or that artist's nationality. Keep the prior value when unchanged; use empty when unspecified without a prior constraint, or after reset."),
                     "languageSpecified", Map.of("type", "boolean", "description",
-                        "True only for an effective vocal-language or no-vocals request in the direct user requests, not their text language, a bare genre, an artist name or the artist's nationality. With a snapshot, an unchanged language may be inherited with false; without a snapshot consider effective requests across the history. Gregorian chant alone is false with language empty.")));
-        List<String> required = new ArrayList<>(List.of("tags", "excludedTags", "language", "languageSpecified"));
+                        "True only for an effective vocal-language or no-vocals request in the direct user requests, not their text language, a bare genre, an artist name or the artist's nationality. With a snapshot, an unchanged language may be inherited with false; without a snapshot consider effective requests across the history. Gregorian chant alone is false with language empty."),
+                    "excludedArtists", Map.of("type","array","maxItems",16,
+                        "items", Map.of("type","string","maxLength",160,
+                            "description","Official artist credit, in its original release spelling, that the user directly asked to exclude."),
+                        "description","Only artists the user directly asked to exclude, in their original credit spelling, such as BTS 말고 or 아이유 빼줘. Never infer an exclusion from a genre, a mood, a language or a negative mood statement. Keep an exclusion from the snapshot when the latest request does not change or reset it. Empty array when none.")));
+        List<String> required = new ArrayList<>(List.of("tags", "excludedTags", "language", "languageSpecified","excludedArtists"));
         String candidateInstructions="";
         if(includeCandidates) {
             Map<String,Integer> preferences=new LinkedHashMap<>();
@@ -93,7 +97,7 @@ public class OpenAi {
                     "artist",Map.of("type","string","description","Official artist credit in its original release script. Preserve native spelling; never translate or transliterate a credit into English. Exact full official credit for collaborations, at most 160 characters."),
                     "tags",Map.of("type","array","maxItems",64,"items",tagArray.get("items"),"description","The recording's actual genre and musical traits. Include instrumental if and only if it has no sung or spoken vocals; do not copy request preferences."),
                     "language",Map.of("type","string","pattern",languagePattern,"description",
-                        "Actual vocal language, independently of the request, as a lowercase ISO639 or BCP47 code, such as ja, fr, hi, la or zh-hant. Empty means unknown; none means no sung or spoken vocals and requires instrumental in tags. Never collapse different languages into an unsupported value.")))));
+                        "Actual vocal language, independently of the request, as a lowercase ISO639 or BCP47 code, such as ja, fr, hi, la or zh-hant. Empty means unknown; none means no sung or spoken vocals and requires instrumental in tags.")))));
             required.add("candidates");
             candidateInstructions=" Also suggest 12 distinct actual released recordings when enough confident matches exist; return fewer only when genuinely uncertain. The candidates must match the complete natural-language meaning and current constraints, not limited to a bundled catalogue. "
                 +"Use the original released recording title AND original official artist credit, preserving their native writing system. Do not romanize, anglicize or translate either field to make it easier to read. A translated or romanized artist may return zero MusicBrainz matches even when the native credit exists. A stage name officially released in Latin script stays in Latin script: 아이유 is IU, 방탄소년단 is BTS. "
@@ -112,6 +116,8 @@ public class OpenAi {
                     "Genres are not limited to these aliases. Represent any additional genre by genre:<canonical_lowercase_english_slug>, at most 64 slug characters, using the same exact key for that genre in conditions and candidates. " +
                     "A known genre alias is allowed ONLY when it is the exact canonical genre or a true synonym of the requested genre. Similarity, parent genres, neighboring styles and shared instruments are NOT synonyms. For any explicitly named genre without an exact alias, preserve its specific canonical English name as a dynamic genre key; never replace it with a list of broader known aliases. Apply the same exact dynamic key to matching candidate classifications. Never output the legacy unsupported_genre or unsupported markers. " +
                     "Recognize Korean/English moods, situations, genres and negation. Use excludedTags for preferences to avoid. " +
+                    "A reason clause that names an unwanted state states an avoidance, never a preference: 너무 조용하면 졸려 means exclude calm and never select calm; 너무 처지지 않게 excludes sad. Put the negated trait in excludedTags, not tags. " +
+                    "가사ㄴㄴ, 보컬ㄴㄴ, 노래방ㄴㄴ, 가사 no and similar chat abbreviations mean no vocals, so they set language none with instrumental in tags. " +
                     "A requested artist is not a requested genre; never infer a genre constraint from an artist name or the artist's nationality. Preserve genres directly requested by the user. " +
                     "Use excludedTags only for directly requested negatives or unchanged explicit snapshot exclusions; never expand only or a requested genre into a complement of other tags. " +
                     "Keep explicitly requested genres even when this catalogue has no matching songs; never replace it with a different genre or silently remove it. " +
@@ -154,10 +160,14 @@ public class OpenAi {
     }
 
     private Recommender.Conditions conditions(ObjectNode object,String prompt,List<String> history,Recommender.Conditions previousConditions,List<String> requests) {
-        if(object.size()!=4||!object.path("tags").isArray()||!object.path("excludedTags").isArray()||!object.path("language").isString())
+        if(object.size()!=5||!object.path("tags").isArray()||!object.path("excludedTags").isArray()||!object.path("language").isString()
+                ||!object.path("excludedArtists").isArray())
             throw new IllegalStateException("AI_CONDITIONS_INVALID");
         for(String field:List.of("tags","excludedTags"))for(JsonNode tag:object.path(field))
             if(!tag.isString())throw new IllegalStateException("AI_CONDITIONS_INVALID");
+        for(JsonNode artist:object.path("excludedArtists"))
+            if(!artist.isString()||artist.asString().strip().isEmpty()||artist.asString().strip().length()>160)
+                throw new IllegalStateException("AI_CONDITIONS_INVALID");
         boolean languageSpecified=object.remove("languageSpecified").asBoolean();
         Recommender.Conditions raw=json.treeToValue(object,Recommender.Conditions.class);
         boolean positiveUnknown=raw!=null&&raw.tags!=null&&raw.tags.contains("unsupported_genre");
@@ -183,9 +193,15 @@ public class OpenAi {
             interpreted.excludedTags.remove("unsupported_genre");
             interpreted.tags.add("unsupported_genre");
         }
+        // 사전이 확실히 아는 요청은 AI 호출을 아끼되, 부정 표현이 조건으로 승격되지 않는 경우에만 그렇게 한다.
         if(Recommender.isKnownConditionRequest(prompt)) {
-            if(previousConditions!=null||history==null||history.isEmpty())return Conversation.parse(previousConditions,history,prompt);
-            return Conversation.parse(interpreted,List.of(),prompt);
+            Recommender.Conditions known=previousConditions!=null||history==null||history.isEmpty()
+                    ?Conversation.parse(previousConditions,history,prompt)
+                    :Conversation.parse(interpreted,List.of(),prompt);
+            // 부정 표현이 결과에서 사라졌다면 AI 해석을 유지한다.
+            if(missingNegation(interpreted,known))return interpreted;
+            affected(known,interpreted);
+            return known;
         }
         // The model already interpreted reset; replay explicit overrides without erasing its new semantic tags.
         String explicit=prompt.replaceAll("(?i)(처음부터|새로 시작|조건 초기화|start over|reset)","").trim();
@@ -195,7 +211,27 @@ public class OpenAi {
         if(languageSpecified&&Recommender.ambiguousLanguage(explicit))resolved.language=interpreted.language;
         if(interpretedGenres.stream().anyMatch(value->value.startsWith("genre:"))){resolved.tags.removeIf(Recommender::genre);resolved.tags.addAll(interpretedGenres);}
         if(unlisted&&!resolved.tags.contains("unsupported_genre"))resolved.tags.add("unsupported_genre");
+        affected(resolved,interpreted);
         return Recommender.validate(resolved);
+    }
+
+    /** 사전 해석에 부정 조건이 빠져 있으면 AI 해석을 버리지 않는다. */
+    private static boolean missingNegation(Recommender.Conditions interpreted,Recommender.Conditions known) {
+        if(interpreted==null)return false;
+        List<String> ai=interpreted.excludedTags==null?List.of():interpreted.excludedTags;
+        List<String> dict=known==null||known.excludedTags==null?List.of():known.excludedTags;
+        for(String tag:ai)if(!dict.contains(tag))return true;
+        return false;
+    }
+
+    /** 필수·선호 분류와 가수 제외는 사전 해석이 덮어쓰지 않도록 AI 해석 값으로 다시 채운다. */
+    private static void affected(Recommender.Conditions target,Recommender.Conditions interpreted) {
+        if(target==null||interpreted==null)return;
+        if(interpreted.excludedArtists!=null&&!interpreted.excludedArtists.isEmpty()) {
+            if(target.excludedArtists==null)target.excludedArtists=new ArrayList<>();
+            for(String artist:interpreted.excludedArtists)if(!target.excludedArtists.contains(artist))target.excludedArtists.add(artist);
+        }
+        target.hardTags=null;target.softTags=null;
     }
 
     private List<Suggestion> suggestions(JsonNode candidates) {
@@ -226,8 +262,8 @@ public class OpenAi {
         for(String direct:previousConditions==null?requests:List.of(prompt)) {
             if(direct.matches("(?is).*(처음부터|새로 시작|조건 초기화|start over|reset).*"))excluded=false;
             String text=Normalizer.normalize(direct,Normalizer.Form.NFKC).toLowerCase(Locale.ROOT)
-                    .replaceAll("(?:가사|보컬)\\s*(?:없는|없이)|\\b(?:no|without)\\s+vocals\\b"," ");
-            if(text.matches("(?s).*(?:빼|제외|말고|싫|아니|없|\\b(?:no|not|never|don't|don’t|without|exclude[ds]?|excluding|avoid(?:s|ed|ing)?|except|dislik(?:e|es|ed|ing)|hate[sd]?|hating)\\b).*"))excluded=true;
+                    .replaceAll("(?:가사|보컬|노래방)\\s*(?:없는|없이|ㄴㄴ|no)|\\b(?:no|without)\\s+vocals\\b"," ");
+            if(text.matches("(?s).*(?:빼|제외|말고|싫|아니|없|ㄴㄴ|노노|\\b(?:no|not|never|don't|don’t|without|exclude[ds]?|excluding|avoid(?:s|ed|ing)?|except|dislik(?:e|es|ed|ing)|hate[sd]?|hating)\\b).*"))excluded=true;
         }
         return excluded;
     }
