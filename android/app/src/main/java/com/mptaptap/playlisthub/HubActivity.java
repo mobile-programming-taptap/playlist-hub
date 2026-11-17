@@ -46,13 +46,14 @@ import org.json.JSONObject;
 public final class HubActivity extends AppCompatActivity {
     private static final String[] PROVIDERS={"spotify","youtube"};
     private static final String[] PROVIDER_NAMES={"Spotify","YouTube Music"};
-    private static final String[] SAVED_TEXT={"screen","importId","targetProvider","transferId","transferKey","saveId","matchedSaveId","sourceKey","importRequestId","conversionRequestId","publicationId","shareId","videoUrl","timeline","timelineExpanded","linkExpanded","listUrl","listTitle","email","name","emailExpanded","kakaoAction","welcomeAction","sourceProvider","query","sort","copyId","copyTitle","copyShare","libraryProvider","libraryCursor","libraryRequestCursor","libraryReset","libraryLoaded","libraryConnect","batchActiveId","authorizationProvider","authorizationStatus","authorizationReason","authorizationNotice","authorizationRejected","rulesPurpose","rulesPlaylist","rulesVersion","publishing","reportShare","reportTitle","reportAuthor","reportTarget","reportReason","reportDetails","communityNotice"};
+    private static final String[] SAVED_TEXT={"screen","importId","targetProvider","transferId","transferKey","saveId","matchedSaveId","sourceKey","importRequestId","conversionRequestId","publicationId","shareId","videoUrl","timeline","timelineExpanded","linkExpanded","listUrl","listTitle","email","name","emailExpanded","kakaoAction","welcomeAction","sourceProvider","query","sort","copyId","copyTitle","copyShare","libraryProvider","libraryCursor","libraryRequestCursor","libraryReset","libraryLoaded","libraryConnect","batchActiveId","authorizationProvider","authorizationStatus","authorizationReason","authorizationNotice","authorizationNoticeProvider","authorizationRejected","rulesPurpose","rulesPlaylist","rulesVersion","publishing","reportShare","reportTitle","reportAuthor","reportTarget","reportReason","reportDetails","communityNotice"};
     private HubRequest requests;
     private String base,mode;
     private LinearLayout content;
     private TextView headerTitle;
     private BottomNavigationView navigation;
     private TextView status;
+    private final java.util.Map<String,TextView> connectionNotices=new java.util.HashMap<>();
     private MaterialButton retry;
     private LinearProgressIndicator progress;
     private final List<View> controls=new ArrayList<>();
@@ -168,7 +169,7 @@ public final class HubActivity extends AppCompatActivity {
     }
     private void render() {
         headerTitle.setText(mode.equals("account")?"내 계정":mode.equals("community")?"음악 발견":"목록 만들기");((View)headerTitle.getParent()).findViewWithTag("historyAction").setVisibility(mode.equals("create")?View.VISIBLE:View.GONE);
-        controls.clear();content.removeAllViews();retry=null;status=text("",14,false);status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);status.setVisibility(View.GONE);content.addView(status);
+        controls.clear();connectionNotices.clear();content.removeAllViews();retry=null;status=text("",14,false);status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);status.setVisibility(View.GONE);content.addView(status);
         if(mode.equals("welcome")){welcome();busy(requests.busy());return;}
         if(base.isEmpty()) {heading("TapTap 시작하기");paragraph("이용 안내를 확인하면 계정과 음악 서비스 기능을 사용할 수 있어요. 연결은 앱이 자동으로 처리해요.");
             addPrimaryButton(content,"서비스 이용 시작",()->{setResult(RESULT_OK,new Intent().putExtra("connectServer",true).putExtra("mode",mode));finish();});
@@ -192,7 +193,7 @@ public final class HubActivity extends AppCompatActivity {
             default:create();
         }
         busy(requests.busy());
-        if((value("screen").equals("account")||value("screen").equals("library"))&&!value("authorizationNotice").isEmpty())message(value("authorizationNotice"));
+        if((value("screen").equals("library")||value("screen").equals("account")&&value("authorizationNoticeProvider").isEmpty())&&!value("authorizationNotice").isEmpty())message(value("authorizationNotice"));
         if(java.util.Arrays.asList("community","publicDetail","blockedAuthors").contains(value("screen"))&&!value("communityNotice").isEmpty())message(value("communityNotice"));
     }
 
@@ -436,8 +437,14 @@ public final class HubActivity extends AppCompatActivity {
             row.addView(text(connected?"연결됨":enabled?"연결할 수 있어요":"서버에서 연결 설정이 필요해요",13,false));
             if(capability!=null&&!capability.optString("notice").isEmpty())row.addView(text(capability.optString("notice"),13,false));
             if(!enabled&&capability!=null&&!capability.optString("setupMessage").isEmpty())addButton(row,"필요한 연결 설정 확인",()->dialog().setTitle(providerName(provider)+" 연결 설정").setMessage(capability.optString("setupMessage")).setPositiveButton("확인",null).show());
-            if(connected){addButton(row,"내 플레이리스트 선택",()->openLibrary(provider));addButton(row,"다시 인증하기",()->authorize(provider));addButton(row,"연결 해제",()->send("disconnected","DELETE","/connections/"+provider,null));}
-            else if(enabled)addButton(row,"브라우저에서 연결",()->authorize(provider));
+            if(connected)addButton(row,"내 플레이리스트 선택",()->openLibrary(provider));
+            if(connected||enabled)addButton(row,connected?"다시 인증하기":"브라우저에서 연결",()->authorize(provider));
+            TextView notice=text("",14,false);
+            notice.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+            row.addView(notice);
+            connectionNotices.put(provider,notice);
+            updateConnectionNotice(provider,provider.equals(value("authorizationNoticeProvider"))?value("authorizationNotice"):"");
+            if(connected)addButton(row,"연결 해제",()->send("disconnected","DELETE","/connections/"+provider,null));
         }
         addButton(content,"연결 상태 새로고침",()->send("account","GET","/accounts/me",null));
     }
@@ -447,7 +454,25 @@ public final class HubActivity extends AppCompatActivity {
         }
         requests.data.remove("kakaoInterrupted");put("kakaoAction",delete?"delete":"login");send("kakaoConfiguration","GET","/accounts/kakao/config",null);
     }
-    private void authorize(String provider){put("authorizationProvider",provider);requests.data.remove("authorizationNotice");send("auth","POST","/connections/"+provider+"/start",null);}
+    private void authorize(String provider){
+        put("authorizationProvider",provider);
+        authorizationMessage("연결을 시작하고 있어요…");
+        send("auth","POST","/connections/"+provider+"/start",null);
+    }
+    private void authorizationMessage(String message){
+        String provider=value("authorizationProvider"),previous=value("authorizationNoticeProvider");
+        put("authorizationNoticeProvider",provider);
+        put("authorizationNotice",message);
+        if(!previous.equals(provider))updateConnectionNotice(previous,"");
+        if(connectionNotices.containsKey(provider))updateConnectionNotice(provider,message);
+        else message(message);
+    }
+    private void updateConnectionNotice(String provider,String message){
+        TextView notice=connectionNotices.get(provider);
+        if(notice==null)return;
+        notice.setText(message);
+        notice.setVisibility(message.isEmpty()?View.GONE:View.VISIBLE);
+    }
     private void serviceConsent(){TapTapUi.consent(this,dialogs,base,()->{try{ApiClient.acceptConsent(this,base);render();if(requests.data.optBoolean("authorizationPending"))refreshAuthorization();else reload();}catch(IllegalStateException error){message(error.getMessage());}},()->{ApiClient.declineConsent(this,base);finish();},this::open);}
     private void authenticate(boolean register,EditText email,EditText password) {
         String address=email.getText().toString().trim(),secret=password.getText().toString();
@@ -721,6 +746,7 @@ public final class HubActivity extends AppCompatActivity {
                 String authorizationProvider=value("authorizationProvider");
                 if(!authorizationProvider.isEmpty()&&!value("authorizationRejected").equals("true")){
                     JSONObject linked=find(value.optJSONArray("connections"),"provider",authorizationProvider);
+                    put("authorizationNoticeProvider",authorizationProvider);
                     boolean connected=linked!=null&&linked.optBoolean("connected");String outcome=value("authorizationStatus"),reason=value("authorizationReason");
                     if(outcome.equals("cancelled"))put("authorizationNotice","음악 계정 연결을 취소했어요."+(connected?" 기존 연결은 유지돼요.":" 다시 연결할 수 있어요."));
                     else if(outcome.equals("error"))put("authorizationNotice",authorizationFailure(reason)+(connected?" 기존 연결은 유지돼요.":""));
@@ -742,9 +768,9 @@ public final class HubActivity extends AppCompatActivity {
                 requests.data.remove("deletingKind");requests.data.remove("deletingId");requests.data.remove("history");put("screen","history");render();reload();return;
             case "auth":
                 try{requests.rememberAuthorization(this,base,value("authorizationProvider"),value("screen").equals("library"));}
-                catch(IllegalStateException error){message(error.getMessage());showRetry();return;}
-                if(open(value.optString("authorizationUrl")))message("브라우저에서 연결을 마친 뒤 돌아와 주세요.");
-                else{requests.forgetAuthorization(this);put("libraryConnect","false");put("authorizationPending",false);showRetry();}
+                catch(IllegalStateException error){authorizationMessage(error.getMessage());return;}
+                if(open(value.optString("authorizationUrl"),this::authorizationMessage))authorizationMessage("브라우저에서 연결을 마친 뒤 돌아와 주세요.");
+                else{requests.forgetAuthorization(this);put("libraryConnect","false");put("authorizationPending",false);}
                 return;
             case "disconnected":
                 clearLibrary();requests.data.remove("batchImports");requests.data.remove("batchActiveId");put("libraryConnect","false");
@@ -845,7 +871,11 @@ public final class HubActivity extends AppCompatActivity {
         if(route.equals("batchImport")){JSONObject row=find(array("batchImports"),"requestId",value("batchActiveId"));if(row!=null){set(row,"status","FAILED");set(row,"notice",message);}put("screen","batch");render();message("가져오기를 멈췄어요. 저장한 목록은 유지되며 남은 목록만 다시 가져올 수 있어요.");return;}
         if(error instanceof ApiClient.ApiError&&((ApiClient.ApiError)error).statusCode==409&&message.contains("다시 연결")){message(message);showRecovery("음악 서비스 다시 연결",()->{mode="account";put("screen","account");render();reload();});return;}
         if(route.equals("library")){put("screen","library");render();message(message);return;}
-        if(route.equals("auth")&&value("libraryConnect").equals("true"))put("libraryConnect","false");
+        if(route.equals("auth")){
+            put("libraryConnect","false");
+            authorizationMessage(message);
+            return;
+        }
         message(message);
         showRetry();
     }
@@ -894,7 +924,8 @@ public final class HubActivity extends AppCompatActivity {
     private String serverBase(){String selected=getSharedPreferences("settings",MODE_PRIVATE).getString("server","");if(!selected.isEmpty())try{return ApiClient.validate(selected);}catch(IllegalArgumentException ignored){}return "";}
     private MaterialAlertDialogBuilder dialog(){return TapTapUi.dialog(this,dialogs);}
     private int tabId(){return mode.equals("account")?R.id.nav_account:mode.equals("community")?R.id.nav_community:R.id.nav_create;}
-    private boolean open(String url){try{Uri uri=Uri.parse(url);if(uri.getHost()==null||!("https".equals(uri.getScheme())||"http".equals(uri.getScheme())&&ApiClient.localHost(uri.getHost())))throw new IllegalArgumentException();startActivity(new Intent(Intent.ACTION_VIEW,uri).addCategory(Intent.CATEGORY_BROWSABLE));return true;}catch(ActivityNotFoundException e){message("주소를 열 앱이나 브라우저가 없어요.");}catch(Exception e){message("연결 주소를 확인할 수 없어요.");}return false;}
+    private boolean open(String url){return open(url,this::message);}
+    private boolean open(String url,java.util.function.Consumer<String> onFailure){try{Uri uri=Uri.parse(url);if(uri.getHost()==null||!("https".equals(uri.getScheme())||"http".equals(uri.getScheme())&&ApiClient.localHost(uri.getHost())))throw new IllegalArgumentException();startActivity(new Intent(Intent.ACTION_VIEW,uri).addCategory(Intent.CATEGORY_BROWSABLE));return true;}catch(ActivityNotFoundException e){onFailure.accept("주소를 열 앱이나 브라우저가 없어요.");}catch(Exception e){onFailure.accept("연결 주소를 확인할 수 없어요.");}return false;}
     private void share(String url){try{startActivity(Intent.createChooser(new Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT,url),"공개 목록 공유"));}catch(ActivityNotFoundException e){message("공유할 앱을 찾지 못했어요.");}}
     private String song(JSONObject track){if(track==null)return "곡 정보 확인 필요";String title=track.optString("title");return (title.isEmpty()?"곡명 확인 필요":title)+(track.optString("artist").isEmpty()?"":" · "+track.optString("artist"));}
     private JSONArray previewEntries(JSONObject imported){if(imported==null)return new JSONArray();JSONArray entries=imported.optJSONArray("entries");if(entries==null)entries=imported.optJSONArray("items");return entries==null?new JSONArray():entries;}
