@@ -7,7 +7,6 @@ import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.util.List;
-import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.core.io.ClassPathResource;
@@ -19,7 +18,7 @@ import tools.jackson.databind.ObjectMapper;
 import static org.junit.jupiter.api.Assertions.*;
 
 class H2PoolRetirementCheckTest {
-    private static final String READER="00000000-0000-0000-0000-000000000002",TRACK="00000000-0000-0000-0000-000000000004",SHARE="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    private static final String READER="00000000-0000-0000-0000-000000000002",TRACK="00000000-0000-0000-0000-000000000004",PLAYLIST="00000000-0000-0000-0000-000000000003";
     @TempDir Path temporary;
 
     @Test void freshSchemaChecksSurviveRetiringTheirInitializationConnection() throws Exception { exercise(temporary.resolve("fresh"),false); }
@@ -44,20 +43,13 @@ class H2PoolRetirementCheckTest {
             try(var replacement=pool.getConnection();var sql=replacement.createStatement();var rows=sql.executeQuery("SELECT SESSION_ID()")){assertTrue(rows.next());assertNotEquals(oldSession,rows.getInt(1));}
             var db=new JdbcTemplate(pool);var store=new Store(db,new DataSourceTransactionManager(pool),new ObjectMapper(),200,20);
             assertEquals(1,db.queryForObject("SELECT reaction FROM recommendation_feedback WHERE user_id=? AND track_id=?",Integer.class,READER,TRACK));
-            assertEquals("OPEN",db.queryForObject("SELECT status FROM community_reports WHERE id='00000000-0000-0000-0000-000000000005'",String.class));
-            assertEquals("Persisted H2 fixture",store.publicPlaylist(SHARE,null).get("title"));
+            assertEquals("Persisted H2 fixture",db.queryForObject("SELECT title FROM playlists WHERE id=?",String.class,PLAYLIST));
+            for(String table:List.of("public_playlists","playlist_favourites","community_rules_acceptance","community_author_blocks","community_reports","community_hidden_playlists"))
+                assertEquals(0,db.queryForObject("SELECT COUNT(*) FROM information_schema.tables WHERE LOWER(table_name)=?",Integer.class,table),"Removed discovery table "+table+" must be dropped");
             String user=store.register().get("userId");
             store.feedback(user,TRACK,1);store.feedback(user,TRACK,-1);
             assertThrows(DataIntegrityViolationException.class,()->store.feedback(user,TRACK,2));
             assertEquals(-1,db.queryForObject("SELECT reaction FROM recommendation_feedback WHERE user_id=? AND track_id=?",Integer.class,user,TRACK));
-            for(String target:List.of("playlist","author")) {
-                Map<String,Object> report=store.reportPublic(user,SHARE,target,"other","Connection-retirement regression");
-                assertEquals("OPEN",report.get("status"));
-                for(String status:List.of("DISMISSED","HIDDEN"))assertEquals(1,db.update("UPDATE community_reports SET status=? WHERE id=?",status,report.get("reportId")));
-                assertThrows(DataIntegrityViolationException.class,()->db.update("UPDATE community_reports SET status='invalid' WHERE id=?",report.get("reportId")));
-                assertThrows(DataIntegrityViolationException.class,()->db.update("UPDATE community_reports SET target_kind='invalid' WHERE id=?",report.get("reportId")));
-            }
-            assertEquals(3,db.queryForObject("SELECT COUNT(*) FROM community_reports",Integer.class));
             assertFalse(keeper.isClosed(),"A second connection must keep the DB alive throughout physical pool retirement.");
         }
     }
