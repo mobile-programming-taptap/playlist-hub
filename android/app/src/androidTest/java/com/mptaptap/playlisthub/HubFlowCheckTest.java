@@ -293,12 +293,12 @@ public class HubFlowCheckTest {
                     onView(withText("선택한 곡: 대상 곡 A · 대상 가수")).perform(scrollTo()).check(matches(isDisplayed()));onView(withText("선택 확인 후 플레이리스트 보내기")).perform(scrollTo(),click());ready(app);
                     onView(withText("확인한 곡을 전송할까요?")).inRoot(isDialog()).check(matches(isDisplayed()));assertEquals("Confirmation must precede a remote transfer",0,transfers.get());assertEquals(1,reviews.get());
                     onView(withText("전송")).inRoot(isDialog()).perform(click());ready(app);assertNull("Test server failure",serverFailure.get());
-                    onView(withText("3번째 곡 · 실패 · 다시 시도할 수 있어요")).perform(scrollTo()).check(matches(isDisplayed()));onView(withText("5번째 곡 · 사용자가 제외")).perform(scrollTo()).check(matches(isDisplayed()));
+                    onView(withText("원본 곡 B · 검사 가수 · 실패 · 다시 시도할 수 있어요")).perform(scrollTo()).check(matches(isDisplayed())).check(androidx.test.espresso.assertion.PositionAssertions.isCompletelyAbove(withText("수정한 곡 A · 검사 가수 · 전송 완료")));onView(withText("원본 곡 C · 검사 가수 · 사용자가 제외")).perform(scrollTo()).check(matches(isDisplayed()));onView(withText("앱의 내 목록에도 사본이 저장됐어요.")).check(doesNotExist());
                     onView(withText("완료 1곡 · 실패 1곡 · 제외 1곡 · 대기 0곡 · 확인 필요 0곡")).perform(scrollTo()).check(matches(isDisplayed()));
                     onView(withText("남은 곡 이어서 보내기")).perform(scrollTo(),click());onView(withText("남은 곡을 보낼까요?")).inRoot(isDialog()).check(matches(isDisplayed()));assertEquals(0,retries.get());
                     onView(withText("계속 보내기")).inRoot(isDialog()).perform(click());ready(app);assertNull("Test server failure",serverFailure.get());
                     onView(withText("완료 2곡 · 실패 0곡 · 제외 1곡 · 대기 0곡 · 확인 필요 0곡")).perform(scrollTo()).check(matches(isDisplayed()));onView(withText("남은 곡 이어서 보내기")).check(doesNotExist());
-                    app.recreate();ready(app);focused(app);onView(withText("5번째 곡 · 사용자가 제외")).perform(scrollTo()).check(matches(isDisplayed()));onView(withText("완료 2곡 · 실패 0곡 · 제외 1곡 · 대기 0곡 · 확인 필요 0곡")).perform(scrollTo()).check(matches(isDisplayed()));
+                    app.recreate();ready(app);focused(app);onView(withText("원본 곡 C · 검사 가수 · 사용자가 제외")).perform(scrollTo()).check(matches(isDisplayed()));onView(withText("완료 2곡 · 실패 0곡 · 제외 1곡 · 대기 0곡 · 확인 필요 0곡")).perform(scrollTo()).check(matches(isDisplayed()));
                     assertNull("Test server failure",serverFailure.get());assertEquals(1,imports.get());assertEquals(2,saves.get());assertEquals(2,matches.get());assertEquals(1,reviews.get());assertEquals(1,transfers.get());assertEquals(1,retries.get());assertTrue(statusReads.get()>0);assertEquals(token,credentials.getString(base,""));
                 }
             } finally {running.set(false);server.close();replies.get(2,TimeUnit.SECONDS);}
@@ -407,9 +407,9 @@ public class HubFlowCheckTest {
                         review=new JSONObject().put("importId",importId.get()).put("targetProvider","youtube").put("items",rows).put("nextOffset",-1);response=review;
                     } else if(path.equals("/matches/"+importId.get())&&method.equals("PUT")){puts.incrementAndGet();assertEquals("youtube",body.getString("targetProvider"));lastSelections.set(body.getJSONArray("selections"));response=review;}
                     else if(path.equals("/transfers")) {
-                        transfers.incrementAndGet();response=new JSONObject().put("id",body.getString("id")).put("importId",importId.get()).put("provider","youtube").put("title","검수 목록").put("status","COMPLETED").put("playlistUrl","").put("notice","").put("excludedSourceIndices",new JSONArray())
-                                .put("items",new JSONArray().put(new JSONObject().put("sourceIndex",0).put("status","ADDED")));
-                    } else if(path.startsWith("/transfers/"))response=new JSONObject().put("id",path.substring(11)).put("importId",importId.get()).put("provider","youtube").put("title","검수 목록").put("status","COMPLETED").put("playlistUrl","").put("notice","").put("excludedSourceIndices",new JSONArray()).put("items",new JSONArray().put(new JSONObject().put("sourceIndex",0).put("status","ADDED")));
+                        transfers.incrementAndGet();response=new JSONObject().put("id",body.getString("id")).put("importId",importId.get()).put("provider","youtube").put("title","검수 목록").put("status","PARTIAL").put("playlistUrl","").put("notice","").put("excludedSourceIndices",new JSONArray().put(3))
+                                .put("items",new JSONArray().put(new JSONObject().put("sourceIndex",0).put("status","ADDED")).put(new JSONObject().put("sourceIndex",2).put("status","FAILED")));
+                    } else if(path.startsWith("/transfers/"))response=new JSONObject().put("id",path.substring(11)).put("importId",importId.get()).put("provider","youtube").put("title","검수 목록").put("status","PARTIAL").put("playlistUrl","").put("notice","").put("excludedSourceIndices",new JSONArray().put(3)).put("items",new JSONArray().put(new JSONObject().put("sourceIndex",0).put("status","ADDED")).put(new JSONObject().put("sourceIndex",2).put("status","FAILED")));
                     else throw new AssertionError("Unexpected test request: "+method+" "+path);
                     byte[] bytes=response.toString().getBytes(StandardCharsets.UTF_8);socket.getOutputStream().write(("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "+bytes.length+"\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.UTF_8));socket.getOutputStream().write(bytes);socket.getOutputStream().flush();
                 }catch(SocketTimeoutException timeout){
@@ -436,6 +436,7 @@ public class HubFlowCheckTest {
                     onView(withText(org.hamcrest.Matchers.containsString("자동 선택 1곡 포함"))).inRoot(isDialog()).check(matches(isDisplayed()));
                     onView(withText("전송")).inRoot(isDialog()).perform(click());ready(app);assertNull("Test server failure",serverFailure.get());
                     assertEquals(2,puts.get());assertEquals(1,transfers.get());
+                    onView(withText("원본 곡 0 · 검사 가수 · 전송 완료")).perform(scrollTo()).check(matches(isDisplayed()));onView(withText("원본 곡 2 · 검사 가수 · 실패 · 다시 시도할 수 있어요")).check(androidx.test.espresso.assertion.PositionAssertions.isCompletelyAbove(withText("원본 곡 0 · 검사 가수 · 전송 완료")));onView(withText("원본 곡 3 · 검사 가수 · 사용자가 제외")).perform(scrollTo()).check(matches(isDisplayed()));onView(withText("앱의 내 목록에도 사본이 저장됐어요.")).perform(scrollTo()).check(matches(isDisplayed()));
                 }
             } finally {running.set(false);server.close();replies.get(2,TimeUnit.SECONDS);}
         } finally {running.set(false);worker.shutdownNow();restore(settings,oldSettings);restore(credentials,oldCredentials);}

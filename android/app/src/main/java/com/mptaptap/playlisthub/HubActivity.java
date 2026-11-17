@@ -657,15 +657,17 @@ public final class HubActivity extends AppCompatActivity {
         if(transfer==null){paragraph("전송 기록을 확인하고 있어요.");addButton(content,"전송 상태 확인",()->send("transfer","GET","/transfers/"+Uri.encode(value("transferId")),null));return;}
         if(!supportedProvider(transfer.optString("provider"))){paragraph("이 음악 서비스의 전송은 더 이상 지원하지 않아요.");return;}
         JSONArray items=transfer.optJSONArray("items");int failed=0,success=0,pending=0,unknown=0;
-        if(items!=null)for(int i=0;i<items.length();i++) {
-            JSONObject item=items.optJSONObject(i);if(item==null)continue;String state=item.optString("status");
+        JSONObject review=requests.data.optJSONObject("review");JSONArray reviewItems=review!=null&&review.optString("importId").equals(transfer.optString("importId"))?review.optJSONArray("items"):null;
+        for(int pass=0;pass<2&&items!=null;pass++)for(int i=0;i<items.length();i++) {
+            JSONObject item=items.optJSONObject(i);if(item==null)continue;String state=item.optString("status");if(state.equals("ADDED")!=(pass==1))continue;
             if(state.equals("ADDED"))success++;else if(state.equals("FAILED"))failed++;else if(state.equals("PENDING"))pending++;else if(state.equals("UNKNOWN"))unknown++;
-            paragraph((item.optInt("sourceIndex",i)+1)+"번째 곡 · "+(state.equals("FAILED")?"실패 · 다시 시도할 수 있어요":state.equals("ADDED")?"전송 완료":state.equals("PENDING")?"전송 대기":"전송 결과 확인 필요"));
+            if(!item.has("sourceIndex"))set(item,"sourceIndex",i);paragraph(ExportReview.transferLine(item,reviewItems));
         }
         JSONArray excluded=transfer.optJSONArray("excludedSourceIndices");int excludedCount=excluded==null?0:excluded.length();
-        if(excluded!=null)for(int i=0;i<excluded.length();i++)paragraph((excluded.optInt(i)+1)+"번째 곡 · 사용자가 제외");
+        if(excluded!=null)for(int i=0;i<excluded.length();i++){JSONObject row=ExportReview.find(reviewItems,excluded.optInt(i)),source=row==null?null:row.optJSONObject("source");paragraph((source==null?(excluded.optInt(i)+1)+"번째 곡":song(source))+" · 사용자가 제외");}
         paragraph("완료 "+success+"곡 · 실패 "+failed+"곡 · 제외 "+excludedCount+"곡 · 대기 "+pending+"곡 · 확인 필요 "+unknown+"곡");
         if(!transfer.optString("notice").isEmpty())paragraph(transfer.optString("notice"));
+        if(!value("exportSourceUrl").isEmpty()&&transfer.optString("importId").equals(value("importId")))paragraph("앱의 내 목록에도 사본이 저장됐어요.");
         String playlistUrl=transfer.optString("playlistUrl");Uri playlist=Uri.parse(playlistUrl);String provider=transfer.optString("provider");
         String host=provider.equals("spotify")?"open.spotify.com":provider.equals("youtube")?"www.youtube.com":"";
         if(!host.isEmpty()&&"https".equals(playlist.getScheme())&&host.equals(playlist.getHost())&&playlist.getUserInfo()==null&&(playlist.getPort()==-1||playlist.getPort()==443))addButton(content,"생성된 목록 열기",()->open(playlistUrl));
