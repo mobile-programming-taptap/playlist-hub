@@ -46,6 +46,7 @@ public class Api {
     public record Item(String trackId) {}
     public record Items(List<String> trackIds) {}
     public record Order(List<String> itemIds) {}
+    public record PlaylistOrder(List<String> playlistIds) {}
     public record ItemEdit(String title, String artist, Integer seconds) {}
 
     /** 외부 서비스 오류를 사용자가 읽을 수 있는 안내로 바꾼다. 조건 부족과 구분해서 쓴다. */
@@ -161,6 +162,11 @@ public class Api {
     public Map<String, Object> create(@RequestHeader(value="Authorization", required=false) String auth, @RequestBody PlaylistCreate body) {
         String user = store.user(auth);
         return store.createPlaylist(user, title(body.title()), body.id());
+    }
+
+    @PutMapping("/playlists/order") @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void reorderPlaylists(@RequestHeader(value="Authorization", required=false) String auth, @RequestBody PlaylistOrder body) {
+        store.reorderPlaylists(store.user(auth), body.playlistIds());
     }
 
     @PutMapping("/playlists/{id}") @ResponseStatus(HttpStatus.NO_CONTENT)

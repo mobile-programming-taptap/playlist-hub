@@ -284,7 +284,7 @@ public class Store {
     }
 
     public List<Map<String, Object>> playlists(String user) {
-        return db.query("SELECT p.id,p.title,p.created_at,COUNT(i.id) AS size FROM playlists p LEFT JOIN playlist_items i ON p.id=i.playlist_id WHERE p.user_id=? GROUP BY p.id,p.title,p.created_at ORDER BY p.created_at DESC,p.id", (rs, row) ->
+        return db.query("SELECT p.id,p.title,p.created_at,COUNT(i.id) AS size FROM playlists p LEFT JOIN playlist_items i ON p.id=i.playlist_id WHERE p.user_id=? GROUP BY p.id,p.title,p.created_at,p.position ORDER BY CASE WHEN p.position IS NULL THEN 0 ELSE 1 END,p.position,p.created_at DESC,p.id", (rs, row) ->
                 Map.of("id", rs.getString(1), "title", rs.getString(2), "createdAt", rs.getString(3), "size", rs.getInt(4)), user);
     }
 
@@ -302,7 +302,7 @@ public class Store {
         int count = db.queryForObject("SELECT COUNT(*) FROM playlists WHERE user_id=?", Integer.class, user);
         if (count >= 100) throw new ResponseStatusException(HttpStatus.CONFLICT, "목록은 최대 100개까지 만들 수 있어요.");
         String at = Instant.now().toString();
-        db.update("INSERT INTO playlists VALUES (?,?,?,?)", id, user, title, at);
+        db.update("INSERT INTO playlists(id,user_id,title,created_at) VALUES (?,?,?,?)", id, user, title, at);
         return Map.of("id", id, "title", title, "createdAt", at, "size", 0);
     }
 
@@ -557,6 +557,16 @@ public class Store {
     public synchronized void delete(String user, String playlist) {
         ownedPlaylist(user, playlist);
         db.update("DELETE FROM playlists WHERE id=? AND user_id=?", playlist, user);
+    }
+
+    /** Saves the user's own order; lists created later have no position and show first, newest first. */
+    public synchronized void reorderPlaylists(String user, List<String> ids) {
+        tx.executeWithoutResult(status -> {
+            List<String> current = db.query("SELECT id FROM playlists WHERE user_id=?", (rs,row) -> rs.getString(1), user);
+            if (ids == null || ids.size() > 100 || ids.size() != current.size() || !new HashSet<>(ids).equals(new HashSet<>(current)))
+                throw new IllegalArgumentException("모든 목록을 중복 없이 지정해 주세요. 목록이 바뀌었다면 다시 열어주세요.");
+            for (int i=0;i<ids.size();i++) db.update("UPDATE playlists SET position=? WHERE user_id=? AND id=?", i, user, ids.get(i));
+        });
     }
 
     public synchronized void reorder(String user, String playlist, List<String> ids) {

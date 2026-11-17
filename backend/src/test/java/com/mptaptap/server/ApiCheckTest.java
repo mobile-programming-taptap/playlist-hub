@@ -78,6 +78,30 @@ class ApiCheckTest {
         }
     }
 
+    @Test void playlistOrderIsSavedPerUserAndNewListsComeFirst() throws Exception {
+        try(var context=new SpringApplicationBuilder(TapTapApplication.class).run("--spring.config.import=","--server.port=0","--server.address=127.0.0.1",
+                "--spring.datasource.url=jdbc:h2:mem:order"+UUID.randomUUID()+";MODE=PostgreSQL","--taptap.openai.key=",
+                "--logging.level.root=WARN","--spring.main.banner-mode=off")) {
+            base="http://127.0.0.1:"+((WebServerApplicationContext)context).getWebServer().getPort();
+            String token=value("POST","/sessions",null,null,201).path("token").asString(),other=value("POST","/sessions",null,null,201).path("token").asString();
+            List<String> ids=new java.util.ArrayList<>();
+            for(String title:List.of("A","B","C"))ids.add(value("POST","/playlists",token,Map.of("title",title),201).path("id").asString());
+            java.util.function.Function<String,List<String>> order=t->{try{List<String> out=new java.util.ArrayList<>();for(JsonNode row:value("GET","/playlists",t,null,200))out.add(row.path("title").asString());return out;}catch(Exception e){throw new AssertionError(e);}};
+            assertEquals(List.of("C","B","A"),order.apply(token));
+            value("PUT","/playlists/order",token,Map.of("playlistIds",List.of(ids.get(0),ids.get(2),ids.get(1))),204);
+            assertEquals(List.of("A","C","B"),order.apply(token));
+            value("PUT","/playlists/order",token,Map.of("playlistIds",List.of(ids.get(0),ids.get(1))),400);
+            value("PUT","/playlists/order",token,Map.of("playlistIds",List.of(ids.get(0),ids.get(0),ids.get(1))),400);
+            value("PUT","/playlists/order",other,Map.of("playlistIds",ids),400);
+            value("PUT","/playlists/order",null,Map.of("playlistIds",ids),401);
+            assertEquals(List.of("A","C","B"),order.apply(token));
+            value("POST","/playlists",token,Map.of("title","D"),201);
+            assertEquals(List.of("D","A","C","B"),order.apply(token));
+            value("DELETE","/playlists/"+ids.get(2),token,null,204);
+            assertEquals(List.of("D","A","B"),order.apply(token));
+        }
+    }
+
     @Test void aiLimitsRespectPreciseInstants() {
         try(ConfigurableApplicationContext context=start("jdbc:h2:mem:clock"+UUID.randomUUID()+";MODE=PostgreSQL","http://127.0.0.1:1/v1/responses")) {
             var db=context.getBean(org.springframework.jdbc.core.JdbcTemplate.class);
