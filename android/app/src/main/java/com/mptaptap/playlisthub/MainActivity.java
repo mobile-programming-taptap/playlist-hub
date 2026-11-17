@@ -764,17 +764,21 @@ public class MainActivity extends AppCompatActivity {
             box.addView(actions);
             MaterialButton share=button("목록 텍스트 공유", v -> sharePlaylist(data)); share.setEnabled(items.length()>0); box.addView(share);
             if (items.length() == 0) box.addView(text("아직 곡이 없어요. 추천 화면에서 음악을 담아보세요.", 16, false));
+            List<Object[]> songRows=new ArrayList<>();
             for (int i=0;i<items.length();i++) {
                 JSONObject row = items.optJSONObject(i);
                 if(row.has("trackId") && row.isNull("trackId") && row.optJSONObject("track")!=null){
                     JSONObject external=row.optJSONObject("track");String item=row.optString("id");int index=i;
-                    trackRow(box,i,external.optString("title","다시 확인 필요"),external.optString("artist")+" · 가져온 곡",external.optString("youtubeVideoId"),external.optString("artworkUrl"),v->externalItemActions(id,item,external,index,items.length()));continue;
+                    songRows.add(new Object[]{trackRow(box,i,external.optString("title","다시 확인 필요"),external.optString("artist")+" · 가져온 곡",external.optString("youtubeVideoId"),external.optString("artworkUrl"),v->externalItemActions(id,item,external,index,items.length())),item,external.optString("title","다시 확인 필요")});continue;
                 }
                 try {
                     Track track = TrackJson.read(row.getJSONObject("track")); String item = row.getString("id"); int index=i;
-                    trackRow(box,i,track.title,track.artist,track.youtubeVideoId,track.artworkUrl,v -> itemActions(id, item, track, index, items.length()));
+                    songRows.add(new Object[]{trackRow(box,i,track.title,track.artist,track.youtubeVideoId,track.artworkUrl,v -> itemActions(id, item, track, index, items.length())),item,track.title});
                 } catch (Exception e) { box.addView(text("곡 정보를 불러오지 못했어요.", 14, false)); }
             }
+            // A row that could not be read has no id, and the server needs every song in the new order.
+            if (songRows.size()==items.length()&&items.length()>1)
+                for (Object[] song:songRows) draggable(box,(LinearLayout)song[0],(String)song[1],(String)song[2],order->saveItemOrder(id,order));
             restoreLibraryScroll();
         }, () -> openPlaylist(id));
     }
@@ -807,10 +811,89 @@ public class MainActivity extends AppCompatActivity {
             JSONObject row=lists.optJSONObject(i);
             if (!Track.matches(row.optString("title"), query)) continue;
             String id=row.optString("id"); count++;
-            View playlist=mediaRow(rows,row.optString("title"),row.optInt("size") + "곡", v -> openPlaylist(id));
+            String title=row.optString("title");
+            View playlist=mediaRow(rows,title,row.optInt("size") + "곡", v -> openPlaylist(id));
             ImageView thumb=playlist.findViewById(R.id.row_artwork);thumb.setScaleType(ImageView.ScaleType.CENTER);thumb.setImageResource(R.drawable.ic_library);
+            playlist.findViewById(R.id.row_trailing).setVisibility(View.GONE);
+            ImageView delete=rowIcon((LinearLayout)playlist,R.drawable.ic_delete,"삭제: "+title);delete.setOnClickListener(v->deleteFromList(playlist,id,title));
+            if (query.trim().isEmpty()) draggable(rows,(LinearLayout)playlist,id,title,this::savePlaylistOrder);
         }
         if (count==0) rows.addView(text(query.trim().isEmpty() ? "아직 저장한 목록이 없어요.\n추천 곡에서 ‘목록에 저장’을 눌러보세요." : "검색한 이름의 목록이 없어요.", 16, false));
+    }
+
+    private ImageView rowIcon(LinearLayout row,int icon,String description){
+        ImageView view=new ImageView(this);view.setImageResource(icon);view.setPadding(dp(10),dp(10),dp(10),dp(10));view.setContentDescription(description);
+        view.setBackgroundResource(R.drawable.row_background);row.addView(view,new LinearLayout.LayoutParams(dp(44),dp(44)));return view;
+    }
+
+    /** Hides the row at once; the delete is sent when the undo bar goes away without 실행 취소. */
+    private void deleteFromList(View row,String id,String title){
+        if(busy)return;row.setVisibility(View.GONE);
+        Snackbar bar=snackbar("‘"+title+"’ 목록을 삭제했어요.",Snackbar.LENGTH_LONG).setAction("실행 취소",v->row.setVisibility(View.VISIBLE));
+        bar.addCallback(new Snackbar.Callback(){@Override public void onDismissed(Snackbar s,int event){if(event!=DISMISS_EVENT_ACTION)deletePlaylist(id);}});
+        bar.show();
+    }
+
+    private void savePlaylistOrder(List<String> order){
+        task(()->{if(api==null)local.reorderPlaylists(order);else api.request("PUT","/playlists/order",new JSONObject().put("playlistIds",new JSONArray(order)));return true;},
+            done->{},this::loadLibrary);
+    }
+
+    private void saveItemOrder(String id,List<String> order){
+        task(()->{if(api==null)local.reorder(id,order);else api.request("PUT","/playlists/"+id+"/items/order",new JSONObject().put("itemIds",new JSONArray(order)));return true;},
+            done->openPlaylist(id),()->openPlaylist(id));
+    }
+
+    /**
+     * Adds a handle that lifts the row while dragged; rows in between slide aside to show the drop place.
+     * Rows of one list share the "drag:" tag in {@code parent}; {@code onDrop} gets every tagged key, hidden ones included,
+     * so a row waiting for its undo bar keeps its place until the delete is sent.
+     */
+    private void draggable(LinearLayout parent,LinearLayout row,String key,String title,Consumer<List<String>> onDrop){
+        row.setTag("drag:"+key);
+        ImageView handle=rowIcon(row,R.drawable.ic_drag_handle,"순서 변경: "+title);
+        handle.setOnTouchListener(new View.OnTouchListener(){
+            final List<View> rows=new ArrayList<>();float startY;int from,target;
+            @Override public boolean onTouch(View v,android.view.MotionEvent e){
+                switch(e.getActionMasked()){
+                    case android.view.MotionEvent.ACTION_DOWN:
+                        if(busy)return false;rows.clear();
+                        for(int i=0;i<parent.getChildCount();i++){View child=parent.getChildAt(i);if(child.getVisibility()==View.VISIBLE&&String.valueOf(child.getTag()).startsWith("drag:"))rows.add(child);}
+                        from=target=rows.indexOf(row);startY=e.getRawY();v.getParent().requestDisallowInterceptTouchEvent(true);
+                        row.setElevation(dp(6));row.setAlpha(0.9f);return true;
+                    case android.view.MotionEvent.ACTION_MOVE:
+                        follow(e.getRawY()-startY);return true;
+                    case android.view.MotionEvent.ACTION_UP:case android.view.MotionEvent.ACTION_CANCEL:
+                        boolean drop=e.getActionMasked()==android.view.MotionEvent.ACTION_UP;if(drop)follow(e.getRawY()-startY);
+                        v.getParent().requestDisallowInterceptTouchEvent(false);row.setElevation(0);row.setAlpha(1f);
+                        for(View other:rows)other.setTranslationY(0);
+                        if(drop&&target!=from)moveRow(parent,row,rows.get(target),onDrop);
+                        return true;
+                }
+                return false;
+            }
+            /** Moves the lifted row by {@code dy} and slides the rows it passed to open the drop place. */
+            private void follow(float dy){
+                row.setTranslationY(dy);float center=row.getTop()+row.getHeight()/2f+dy;target=from;
+                for(int i=0;i<rows.size();i++){View other=rows.get(i);if(other==row)continue;float otherCenter=other.getTop()+other.getHeight()/2f;
+                if(i>from&&center>otherCenter)target=Math.max(target,i);if(i<from&&center<otherCenter)target=Math.min(target,i);}
+                for(int i=0;i<rows.size();i++){View other=rows.get(i);if(other==row)continue;
+                other.setTranslationY(i>from&&i<=target?-row.getHeight():i<from&&i>=target?row.getHeight():0);}
+            }
+        });
+        androidx.core.view.ViewCompat.addAccessibilityAction(row,"위로 이동",(v,a)->{View prev=neighbour(parent,row,-1);if(prev!=null)moveRow(parent,row,prev,onDrop);return true;});
+        androidx.core.view.ViewCompat.addAccessibilityAction(row,"아래로 이동",(v,a)->{View next=neighbour(parent,row,1);if(next!=null)moveRow(parent,row,next,onDrop);return true;});
+    }
+    private View neighbour(LinearLayout parent,View row,int step){
+        for(int i=parent.indexOfChild(row)+step;i>=0&&i<parent.getChildCount();i+=step){View child=parent.getChildAt(i);if(child.getVisibility()==View.VISIBLE&&String.valueOf(child.getTag()).startsWith("drag:"))return child;}
+        return null;
+    }
+    /** Puts {@code row} where {@code place} is now, then reports the new order. */
+    private void moveRow(LinearLayout parent,View row,View place,Consumer<List<String>> onDrop){
+        if(busy)return;int to=parent.indexOfChild(place);parent.removeView(row);parent.addView(row,to);
+        List<String> order=new ArrayList<>();
+        for(int i=0;i<parent.getChildCount();i++){String tag=String.valueOf(parent.getChildAt(i).getTag());if(tag.startsWith("drag:"))order.add(tag.substring(5));}
+        onDrop.accept(order);
     }
 
     private View mediaRow(LinearLayout parent,String title,String subtitle,View.OnClickListener action) {
@@ -819,12 +902,13 @@ public class MainActivity extends AppCompatActivity {
         row.setContentDescription(title+", "+subtitle);row.setOnClickListener(v->{if(!busy)action.onClick(v);});parent.addView(row);return row;
     }
 
-    private void trackRow(LinearLayout parent,int position,String title,String subtitle,String videoId,String artworkUrl,View.OnClickListener action) {
+    private View trackRow(LinearLayout parent,int position,String title,String subtitle,String videoId,String artworkUrl,View.OnClickListener action) {
         View row=mediaRow(parent,title,subtitle,action);
         TextView index=row.findViewById(R.id.row_index);index.setText(String.valueOf(position+1));index.setVisibility(View.VISIBLE);
         ((ImageView)row.findViewById(R.id.row_trailing)).setImageResource(R.drawable.ic_more);
         row.setContentDescription((position+1)+". "+title+", "+subtitle);
         artwork.load(row.findViewById(R.id.row_artwork),videoId,artworkUrl,null);
+        return row;
     }
 
     private EditText searchField(String hint, Consumer<String> change) {
