@@ -58,6 +58,25 @@ public class StorageCheckTest {
         }finally{worker.shutdownNow();}
     }
 
+    @Test public void versionOneListsUpgradeAndKeepTheirOrder() throws Exception {
+        Context context=InstrumentationRegistry.getInstrumentation().getTargetContext();String name="upgrade-check-"+System.nanoTime()+".db";
+        try(android.database.sqlite.SQLiteDatabase old=context.openOrCreateDatabase(name,Context.MODE_PRIVATE,null)){
+            old.execSQL("CREATE TABLE feedback(track_id TEXT PRIMARY KEY,reaction INTEGER NOT NULL CHECK(reaction IN(-1,1)))");
+            old.execSQL("CREATE TABLE playlists(id TEXT PRIMARY KEY,title TEXT NOT NULL,created_at INTEGER NOT NULL)");
+            old.execSQL("CREATE TABLE items(id TEXT PRIMARY KEY,playlist_id TEXT NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,track_id TEXT NOT NULL,track TEXT NOT NULL,position INTEGER NOT NULL,UNIQUE(playlist_id,track_id))");
+            old.execSQL("INSERT INTO playlists VALUES('a','A',1),('b','B',2),('c','C',3)");old.setVersion(1);
+        }
+        try(LocalStore store=new LocalStore(context,name)){
+            assertEquals(java.util.Arrays.asList("C","B","A"),titles(store.playlists()));
+            store.reorderPlaylists(java.util.Arrays.asList("a","c","b"));
+            assertEquals(java.util.Arrays.asList("A","C","B"),titles(store.playlists()));
+            try{store.reorderPlaylists(java.util.Arrays.asList("a","b"));fail("A partial order must be rejected");}catch(IllegalArgumentException expected){}
+            String created=store.create("D").getString("id");assertNotNull(created);
+            assertEquals(java.util.Arrays.asList("D","A","C","B"),titles(store.playlists()));
+        }finally{context.deleteDatabase(name);}
+    }
+    private static java.util.List<String> titles(JSONArray rows)throws Exception{java.util.List<String> out=new java.util.ArrayList<>();for(int i=0;i<rows.length();i++)out.add(rows.getJSONObject(i).getString("title"));return out;}
+
     @Test public void duplicateSaveReactionUndoAndRestart() throws Exception {
         Recommender.Conditions conditions=Recommender.parse("영어 잔잔한 팝 음악, 신나는 곡은 빼고");
         JSONObject encoded=TrackJson.conditions(conditions);
