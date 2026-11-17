@@ -391,7 +391,7 @@ public class HubFlowCheckTest {
         SharedPreferences settings=context.getSharedPreferences("settings",Context.MODE_PRIVATE),credentials=context.getSharedPreferences("server_credentials",Context.MODE_PRIVATE);
         Map<String,?> oldSettings=settings.getAll(),oldCredentials=credentials.getAll();
         CountDownLatch received=new CountDownLatch(1),release=new CountDownLatch(1);
-        AtomicBoolean running=new AtomicBoolean(true),connected=new AtomicBoolean();AtomicInteger connectionReads=new AtomicInteger(),publicReads=new AtomicInteger();AtomicReference<String> publicQuery=new AtomicReference<>();AtomicReference<Throwable> serverFailure=new AtomicReference<>();
+        AtomicBoolean running=new AtomicBoolean(true),connected=new AtomicBoolean();AtomicInteger connectionReads=new AtomicInteger();AtomicReference<Throwable> serverFailure=new AtomicReference<>();
         var worker=Executors.newSingleThreadExecutor();
         try(ServerSocket server=new ServerSocket(0,5,InetAddress.getByName("127.0.0.1"))) {
             server.setSoTimeout(500);String base="http://127.0.0.1:"+server.getLocalPort(),token="HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH";
@@ -408,10 +408,7 @@ public class HubFlowCheckTest {
                         case "/connections":
                             int read=connectionReads.incrementAndGet();content=connected.get()?"[{\"provider\":\"spotify\",\"connected\":true}]":"[]";
                             if(read==1){received.countDown();assertTrue("Release the old connection snapshot",release.await(15,TimeUnit.SECONDS));}break;
-                        default:
-                            if(!request[1].startsWith("/public/playlists?"))throw new AssertionError("Unexpected test path: "+request[1]);
-                            String query=Uri.parse("http://fixture"+request[1]).getQueryParameter("q");assertNotNull(query);assertTrue(query.length()<=100);
-                            publicQuery.set(query);publicReads.incrementAndGet();content="[]";
+                        default:throw new AssertionError("Unexpected test path: "+request[1]);
                     }
                     byte[] bytes=content.getBytes(StandardCharsets.UTF_8);
                     socket.getOutputStream().write(("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "+bytes.length+"\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.UTF_8));
@@ -444,18 +441,6 @@ public class HubFlowCheckTest {
                 try(ActivityScenario<HubActivity> cold=ActivityScenario.launch(new Intent(context,HubActivity.class).setData(Uri.parse("taptap://connected?provider=spotify&status=connected")))) {
                     ready(cold);assertEquals("A cold callback must read connections only once",3,connectionReads.get());
                     onView(withText("연결됨")).perform(scrollTo()).check(matches(isDisplayed()));assertEquals(token,credentials.getString(base,""));
-                }
-                String first100=String.join("",java.util.Collections.nCopies(100,"s")),oversized=first100+"x";
-                try(ActivityScenario<HubActivity> app=launch(context,"community")) {
-                    ready(app);assertEquals(1,publicReads.get());
-                    onView(withHint("공개 목록 검색")).perform(scrollTo(),replaceText(oversized),closeSoftKeyboard());
-                    onView(withHint("공개 목록 검색")).check(matches(withText(first100)));
-                    onView(withText("검색")).perform(scrollTo(),click());ready(app);assertEquals(first100,publicQuery.get());assertEquals(2,publicReads.get());
-                    app.onActivity(a->hubDraft(a,"query",oversized));app.recreate();ready(app);focused(app);
-                    onView(withHint("공개 목록 검색")).check(matches(withText(first100)));assertEquals(first100,publicQuery.get());assertEquals(3,publicReads.get());
-                    app.onActivity(a->hubDraft(a,"query",oversized));onView(withText("검색")).perform(scrollTo(),click());ready(app);
-                    onView(withText("검색어는 100자까지 입력해 주세요.")).perform(scrollTo()).check(matches(isDisplayed()));
-                    assertEquals("An invalid draft must not send or replace the last valid query",3,publicReads.get());assertEquals(first100,publicQuery.get());
                 }
                 assertNull("Test server failure",serverFailure.get());
             } finally {running.set(false);release.countDown();server.close();replies.get(2,TimeUnit.SECONDS);}
@@ -558,22 +543,8 @@ public class HubFlowCheckTest {
                 onView(withHint("영상 시작 위치 · 초")).inRoot(isDialog()).perform(replaceText("20"),closeSoftKeyboard());
                 onView(withText("저장")).inRoot(isDialog()).perform(click());readyMain(main);
                 assertEquals("Edited Sample",client.object("GET","/playlists/"+converted,null).getJSONArray("items").getJSONObject(0).getJSONObject("track").getString("title"));
-                onView(withText("공개 설정 · 공유 링크")).perform(scrollTo()).check(matches(isDisplayed()));
+                onView(withText("공개 설정 · 공유 링크")).check(doesNotExist());
             }
-            String shareId;
-            try(ActivityScenario<HubActivity> app=ActivityScenario.launch(new Intent(context,HubActivity.class).putExtra("mode","community").putExtra("playlistId",converted))) {
-                ready(app);onView(withText("커뮤니티에 공개")).perform(scrollTo(),click());ready(app);captureCommunity("native-publication-rules");onView(withText("동의하고 공개")).perform(scrollTo());captureCommunity("native-publication-rules-bottom");onView(withText("동의하고 공개")).perform(click());ready(app);
-                JSONObject publication=client.object("GET","/playlists/"+converted+"/publication",null);assertTrue(publication.getBoolean("public"));shareId=publication.getString("shareId");
-                onView(withText("공개 링크 공유")).perform(scrollTo()).check(matches(isDisplayed()));
-            }
-            try(ActivityScenario<HubActivity> app=launch(context,"community")) {
-                ready(app);onView(withHint("공개 목록 검색")).perform(scrollTo(),replaceText(title),closeSoftKeyboard());onView(withText("검색")).perform(scrollTo(),click());ready(app);
-                onView(withText("목록 열기")).perform(scrollTo(),click());ready(app);
-                onView(withText("즐겨찾기")).perform(scrollTo(),click());ready(app);
-                assertTrue(client.object("GET","/public/playlists/"+shareId,null).getBoolean("favourited"));
-                onView(withText("즐겨찾기 해제")).check(matches(isDisplayed()));
-            }
-            verifySecondAccountCommunity(context,base,title,shareId);client.connect();
             String zeroId=UUID.randomUUID().toString(),zeroTitle="길이 미확인 "+suffix.substring(0,8);
             JSONObject zero=client.object("POST","/conversions/youtube",new JSONObject().put("id",zeroId)
                 .put("url","https://www.youtube.com/watch?v=dQw4w9WgXcQ").put("durationSeconds",0)
@@ -659,22 +630,8 @@ public class HubFlowCheckTest {
                 onView(withText("1. Bridge song\nBridge artist · 가져온 곡")).perform(scrollTo()).check(matches(isDisplayed()));
                 String savedId=returnedId;main.onActivity(a->{try{var f=MainActivity.class.getDeclaredField("playlistId");f.setAccessible(true);assertEquals(savedId,f.get(a));}catch(ReflectiveOperationException e){throw new AssertionError(e);}});
                 main.recreate();readyReturnedMain(main);onView(withText(returnTitle)).perform(scrollTo()).check(matches(isDisplayed()));
-                onView(withId(R.id.nav_community)).perform(click());readyHub();onView(isRoot()).perform(closeSoftKeyboard());androidx.test.espresso.Espresso.pressBack();readyReturnedMain(main);
+                onView(withId(R.id.nav_account)).perform(click());readyHub();onView(isRoot()).perform(closeSoftKeyboard());androidx.test.espresso.Espresso.pressBack();readyReturnedMain(main);
                 onView(withText(returnTitle)).perform(scrollTo()).check(matches(isDisplayed()));
-                onView(withId(R.id.nav_community)).perform(click());readyHub();
-                onView(withHint("공개 목록 검색")).perform(scrollTo(),replaceText(title),closeSoftKeyboard());onView(withText("검색")).perform(scrollTo(),click());readyHub();
-                onView(withText("목록 열기")).perform(scrollTo(),click());readyHub();onView(withText("내 목록으로 복사")).perform(scrollTo(),click());
-                String copyTitle="복사 복귀 "+suffix.substring(0,8);
-                onView(withHint("복사할 목록 이름")).inRoot(isDialog()).perform(replaceText(copyTitle),closeSoftKeyboard());
-                onView(withText("복사")).inRoot(isDialog()).perform(click());readyHub();
-                String copiedId=null;JSONArray copiedLists=client.array("/playlists");
-                for(int i=0;i<copiedLists.length();i++)if(copyTitle.equals(copiedLists.getJSONObject(i).getString("title")))copiedId=copiedLists.getJSONObject(i).getString("id");
-                assertNotNull("The copy must have its own actual playlist",copiedId);assertNotEquals(returnedId,copiedId);
-                assertEquals(2,client.object("GET","/playlists/"+copiedId,null).getJSONArray("items").length());
-                onView(withText("내 목록으로")).inRoot(isDialog()).perform(click());readyReturnedMain(main);
-                onView(withText(copyTitle)).perform(scrollTo()).check(matches(isDisplayed()));
-                onView(withText("1. Edited Sample\nSample artist · 가져온 곡")).perform(scrollTo()).check(matches(isDisplayed()));
-                String actualCopy=copiedId;main.onActivity(a->{try{var f=MainActivity.class.getDeclaredField("playlistId");f.setAccessible(true);assertEquals(actualCopy,f.get(a));}catch(ReflectiveOperationException e){throw new AssertionError(e);}});
             }
             String accountOwner=client.identity();
             try(ActivityScenario<MainActivity> main=ActivityScenario.launch(MainActivity.class)) {
@@ -698,34 +655,6 @@ public class HubFlowCheckTest {
         } finally {
             try{if(registered)client.request("DELETE","/accounts/me",new JSONObject().put("password",password));else client.request("DELETE","/playlists/"+list,null);}catch(Exception ignored){}
             restore(settings,oldSettings);restore(credentials,oldCredentials);
-        }
-    }
-    private static void captureCommunity(String name)throws Exception{
-        var instrumentation=InstrumentationRegistry.getInstrumentation();instrumentation.waitForIdleSync();Context context=instrumentation.getTargetContext();java.io.File folder=new java.io.File(context.getExternalFilesDir(null),"native-community-check");assertTrue(folder.isDirectory()||folder.mkdirs());
-        android.graphics.Bitmap image=instrumentation.getUiAutomation().takeScreenshot();assertNotNull(image);try(var output=new java.io.FileOutputStream(new java.io.File(folder,name+".png"))){assertTrue(image.compress(android.graphics.Bitmap.CompressFormat.PNG,100,output));}finally{image.recycle();}
-    }
-    private static void verifySecondAccountCommunity(Context context,String base,String title,String shareId)throws Exception{
-        SharedPreferences credentials=context.getSharedPreferences("server_credentials",Context.MODE_PRIVATE);String originalOwner=credentials.getString(base,"");
-        String suffix=UUID.randomUUID().toString(),password="community-native-only-"+suffix;boolean registered=false;
-        assertTrue(credentials.edit().remove(base).commit());ApiClient viewer=new ApiClient(context,base);
-        try{
-            viewer.connect();JSONObject registration=viewer.object("POST","/accounts/register",new JSONObject().put("email","community-"+suffix+"@example.invalid").put("password",password).put("name","커뮤니티 검사"));viewer.replaceSession(registration.getString("token"));registered=true;
-            try(ActivityScenario<HubActivity> app=launch(context,"community")){
-                ready(app);onView(withHint("공개 목록 검색")).perform(scrollTo(),replaceText(title),closeSoftKeyboard());onView(withText("검색")).perform(scrollTo(),click());ready(app);
-                onView(withText("목록 열기")).perform(scrollTo(),click());ready(app);assertFalse(viewer.object("GET","/public/playlists/"+shareId,null).getBoolean("isOwner"));
-                onView(withText("신고 · 작성자 차단")).perform(scrollTo(),click());captureCommunity("native-community-safety-menu");onView(withText("이 목록 신고")).inRoot(isDialog()).perform(click());
-                onView(withText("신고 사유 선택")).perform(scrollTo(),click());onView(withText("스팸·광고")).inRoot(isDialog()).perform(click());captureCommunity("native-report-draft");
-                onView(withText("신고 내용 확인")).perform(scrollTo(),click());onView(withText("신고 저장")).inRoot(isDialog()).perform(click());ready(app);onView(withText("신고를 저장했어요.")).perform(scrollTo()).check(matches(isDisplayed()));
-                onView(withText("신고 · 작성자 차단")).perform(scrollTo(),click());onView(withText("작성자 차단")).inRoot(isDialog()).perform(click());onView(withText("작성자 차단")).inRoot(isDialog()).perform(click());ready(app);
-                assertEquals(1,viewer.array("/community/blocks").length());onView(withText("조건에 맞는 공개 목록이 없어요.")).perform(scrollTo()).check(matches(isDisplayed()));
-                try{viewer.object("GET","/public/playlists/"+shareId,null);fail("A blocked author's detail must not remain accessible");}catch(ApiClient.ApiError expected){assertEquals(404,expected.statusCode);}
-                onView(withText("커뮤니티 관리")).perform(scrollTo(),click());onView(withText("차단한 작성자")).inRoot(isDialog()).perform(click());ready(app);captureCommunity("native-blocked-authors");
-                onView(withText("차단 해제")).perform(scrollTo(),click());onView(withText("차단 해제")).inRoot(isDialog()).perform(click());ready(app);assertEquals(0,viewer.array("/community/blocks").length());
-                assertEquals(shareId,viewer.object("GET","/public/playlists/"+shareId,null).getString("shareId"));
-            }
-        }finally{
-            try{if(!viewer.identity().isEmpty()){viewer.request("DELETE","/accounts/me",registered?new JSONObject().put("password",password):null);viewer.clearSession();}}
-            finally{assertTrue(credentials.edit().putString(base,originalOwner).commit());}
         }
     }
     // Imported rows are tagged "importRow N"; edit fields exist only after the row is tapped open.

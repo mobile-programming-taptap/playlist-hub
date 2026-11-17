@@ -95,9 +95,6 @@ class AccountCommunityCheckTest {
             platforms.connection(owner,"youtube",new PlatformClient.Tokens("fixture-access","fixture-refresh","fixture-channel","",Instant.now().plusSeconds(3600)));
             platforms.start(owner,"youtube","Bearer "+token);
             platforms.create(owner,UUID.randomUUID().toString(),"import","youtube",Map.of("items",List.of()));
-            value("PUT","/community/rules/acceptance",token,Map.of("version",Store.COMMUNITY_RULES_VERSION,"accepted",true),200);
-            String share=value("PUT","/playlists/"+playlist+"/publication",token,Map.of("public",true),200).path("shareId").asString();
-            value("PUT","/public/playlists/"+share+"/favourite",otherToken,Map.of("favourite",true),200);
             String otherPlaylist=value("POST","/playlists",otherToken,Map.of("title","Other owner's data"),201).path("id").asString();
             value("DELETE","/accounts/me",null,null,401);
             value("DELETE","/accounts/me",token,null,204);
@@ -105,8 +102,6 @@ class AccountCommunityCheckTest {
                 assertEquals(0,db.queryForObject("SELECT COUNT(*) FROM "+table+" WHERE user_id=?",Integer.class,owner),table);
             assertEquals(0,db.queryForObject("SELECT COUNT(*) FROM users WHERE id=?",Integer.class,owner));
             assertEquals(0,db.queryForObject("SELECT COUNT(*) FROM playlist_items WHERE playlist_id=?",Integer.class,playlist));
-            value("GET","/public/playlists/"+share,null,null,404);
-            assertEquals(0,value("GET","/public/playlists?favourites=true",otherToken,null,200).size());
             String fresh=value("POST","/sessions",null,null,201).path("token").asString();
             value("DELETE","/accounts/me",token,null,401);
             assertEquals(0,value("GET","/playlists",fresh,null,200).size(),"A replay must not touch a replacement anonymous session.");
@@ -114,7 +109,7 @@ class AccountCommunityCheckTest {
         }
     }
 
-    @Test void accountMigrationDeviceSessionsPublicOwnershipAndExternalSnapshots() throws Exception {
+    @Test void accountMigrationDeviceSessionsAndExternalSnapshots() throws Exception {
         String database=System.getenv().getOrDefault("TAPTAP_TEST_DATABASE_URL","jdbc:h2:mem:community"+UUID.randomUUID()+";MODE=PostgreSQL;DB_CLOSE_DELAY=-1");
         String email="check-"+UUID.randomUUID()+"@example.test", password="Only-for-checks!2026";
         List<String> owners=new ArrayList<>(); ConfigurableApplicationContext context=start(database,"help&demo@example.test");
@@ -188,66 +183,14 @@ class AccountCommunityCheckTest {
             value("PUT",path+"/items/"+editable,reader,Map.of("title","Stolen","artist","Artist"),404);
             value("PUT",path+"/items/"+editable,second,Map.of("title","Bad time","artist","Artist","seconds",301),400);
             value("PUT",path+"/items/"+detail.path("items").get(0).path("id").asString(),second,Map.of("title","Catalogue change","artist","Artist"),409);
-            assertFalse(value("GET",path+"/publication",first,null,200).path("public").asBoolean());
-            value("PUT",path+"/publication",reader,Map.of("public",true),404);
-            value("PUT","/community/rules/acceptance",first,Map.of("version",Store.COMMUNITY_RULES_VERSION,"accepted",true),200);
-            String share=value("PUT",path+"/publication",first,Map.of("public",true),200).path("shareId").asString();
-            assertTrue(share.matches("[0-9a-f]{32}"));
-            JsonNode shared=value("GET","/public/playlists/"+share,null,null,200);
-            assertEquals(3,shared.path("size").asInt()); assertFalse(shared.has("email")); assertFalse(shared.has("userId"));
-            assertEquals("MusicBrainz",shared.path("items").get(0).path("track").path("source").asString());
-            HttpResponse<String> html=request("GET","/share/"+share,null,null); assertEquals(200,html.statusCode());
-            assertTrue(html.body().contains("&lt;script&gt;")); assertTrue(html.body().contains("&lt;img src=x onerror=alert(1)&gt;"));
-            assertFalse(html.body().contains("<script>")); assertTrue(html.headers().firstValue("Content-Security-Policy").isPresent());
-            assertTrue(html.body().contains("href=\"/privacy\""));
-            assertEquals(1,value("PUT","/public/playlists/"+share+"/favourite",first,Map.of("favourite",true),200).path("favourites").asInt());
-            assertEquals(1,value("PUT","/public/playlists/"+share+"/favourite",second,Map.of("favourite",true),200).path("favourites").asInt());
-            assertEquals(2,value("PUT","/public/playlists/"+share+"/favourite",reader,Map.of("favourite",true),200).path("favourites").asInt());
-            assertEquals(share,value("GET","/public/playlists?sort=popular",reader,null,200).get(0).path("shareId").asString());
-            assertEquals(1,value("GET","/public/playlists?favourites=true",reader,null,200).size());
-            value("GET","/public/playlists?favourites=true",null,null,401);
-            String newerPlaylist=value("POST","/playlists",first,Map.of("title","Newer public list"),201).path("id").asString();
-            String newerShare=value("PUT","/playlists/"+newerPlaylist+"/publication",first,Map.of("public",true),200).path("shareId").asString();
-            db.update("UPDATE public_playlists SET published_at=? WHERE share_id=?","2026-10-04T00:00:00.1Z",share);
-            db.update("UPDATE public_playlists SET published_at=? WHERE share_id=?","2026-10-04T00:00:00.11Z",newerShare);
-            JsonNode recent=value("GET","/public/playlists?sort=recent",reader,null,200);
-            assertEquals(newerShare,recent.get(0).path("shareId").asString(),"Fractional seconds must be compared as instants, not strings");
-            assertEquals(share,recent.get(1).path("shareId").asString());
-            assertEquals(share,value("GET","/public/playlists?sort=popular",reader,null,200).get(0).path("shareId").asString(),"Favourite count takes priority over recency");
-            value("PUT","/public/playlists/"+newerShare+"/favourite",first,Map.of("favourite",true),200);
-            value("PUT","/public/playlists/"+newerShare+"/favourite",reader,Map.of("favourite",true),200);
-            JsonNode popular=value("GET","/public/playlists?sort=popular",reader,null,200);
-            assertEquals(newerShare,popular.get(0).path("shareId").asString(),"Equal favourite counts use the actual newest instant");
-            assertEquals(share,popular.get(1).path("shareId").asString());
-            value("DELETE","/playlists/"+newerPlaylist,first,null,204);
-            Map<String,String> copyBody=Map.of("title","Copied public list","id",UUID.randomUUID().toString());
-            String copy=value("POST","/public/playlists/"+share+"/copy",reader,copyBody,201).path("id").asString();
-            assertEquals(copy,value("POST","/public/playlists/"+share+"/copy",reader,copyBody,201).path("id").asString());
-            assertEquals(1,value("GET","/playlists",reader,null,200).size());
-            JsonNode copied=value("GET","/playlists/"+copy,reader,null,200).path("items");
-            assertEquals(shared.path("items").get(0).path("track"),copied.get(0).path("track"));
-            assertEquals(shared.path("items").get(2).path("track"),copied.get(2).path("track"));
-            assertFalse(value("GET","/playlists/"+copy+"/publication",reader,null,200).path("public").asBoolean());
-            value("PUT",path+"/publication",first,Map.of("public",false),200);
-            value("GET","/public/playlists/"+share,null,null,404);
-            value("PUT","/public/playlists/"+share+"/favourite",reader,Map.of("favourite",true),404);
-            value("POST","/public/playlists/"+share+"/copy",reader,null,404);
-            assertEquals(0,value("GET","/public/playlists?favourites=true",reader,null,200).size());
-            String republished=value("PUT",path+"/publication",first,Map.of("public",true),200).path("shareId").asString(); assertNotEquals(share,republished);
-            value("PUT","/public/playlists/"+republished+"/favourite",reader,Map.of("favourite",true),200);
 
             Map<String,Object> oldSnapshot=new LinkedHashMap<>(cast(edited.path("track"))); oldSnapshot.put("checkedAt",Instant.now().minus(Duration.ofDays(31)).toString());
             db.update("UPDATE playlist_items SET track_json=? WHERE id=?",json.writeValueAsString(oldSnapshot),editable);
-            Map<String,Object> oldPublic=cast(value("GET","/public/playlists/"+republished,null,null,200));
-            @SuppressWarnings("unchecked") List<Map<String,Object>> publicItems=(List<Map<String,Object>>)oldPublic.get("items");
-            publicItems.get(2).put("track",oldSnapshot);
-            db.update("UPDATE public_playlists SET snapshot_json=? WHERE share_id=?",json.writeValueAsString(oldPublic),republished);
             store.purgeExpiredExternal();
             JsonNode expired=value("GET",path,first,null,200).path("items").get(2).path("track");
             assertTrue(expired.path("needsRefresh").asBoolean()); assertFalse(expired.has("title")); assertFalse(expired.has("artist")); assertFalse(expired.has("sourceRow"));
             assertEquals("dQw4w9WgXcQ",expired.path("sourceId").asString());
             assertFalse(json.readTree(db.queryForObject("SELECT track_json FROM playlist_items WHERE id=?",String.class,editable)).has("title"));
-            assertFalse(value("GET","/public/playlists/"+republished,null,null,200).path("items").get(2).path("track").has("title"));
             assertTrue(value("GET",path,first,null,200).path("items").get(0).path("track").has("title"),"Catalogue snapshots do not expire.");
             value("PUT",path+"/items/"+editable,first,Map.of("title","Expired edit","artist","Artist"),409);
             value("DELETE","/accounts/session",first,null,204);
@@ -255,15 +198,12 @@ class AccountCommunityCheckTest {
             String oldReader=reader;
             reader=value("POST","/accounts/register",reader,Map.of("email","reader-"+UUID.randomUUID()+"@example.test","password",password,"name","Reader"),201).path("token").asString();
             value("GET","/playlists",oldReader,null,401);
-            assertEquals(1,value("GET","/public/playlists?favourites=true",reader,null,200).size(),"Registration retains the anonymous favourites and copied lists.");
-            assertEquals(3,value("GET","/playlists/"+copy,reader,null,200).path("items").size());
 
             context.close(); context=start(database); db=context.getBean(JdbcTemplate.class);
             assertFalse(request("GET","/privacy",null,null).body().contains("mailto:"),"An unset operator address must not invent a contact channel.");
             assertEquals(owner,value("GET","/accounts/me",second,null,200).path("userId").asString());
             assertEquals(3,value("GET",path,second,null,200).path("items").size());
             assertEquals(1,value("GET","/me/feedback",second,null,200).path(track).asInt());
-            assertTrue(value("GET","/public/playlists/"+republished,reader,null,200).path("favourited").asBoolean());
             String third=value("POST","/accounts/login",null,Map.of("email",email,"password",password),200).path("token").asString();
             JsonNode fresh=value("POST","/accounts/register",null,Map.of("email","fresh-"+UUID.randomUUID()+"@example.test","password",password,"name","Fresh"),201);
             owners.add(fresh.path("userId").asString());
@@ -272,9 +212,6 @@ class AccountCommunityCheckTest {
             value("DELETE","/accounts/me",second,Map.of("password","wrong"),401);
             value("DELETE","/accounts/me",second,Map.of("password",password),204);
             value("GET","/accounts/me",second,null,401); value("GET","/accounts/me",third,null,401);
-            value("GET","/public/playlists/"+republished,null,null,404);
-            assertEquals(0,value("GET","/public/playlists?favourites=true",reader,null,200).size());
-            assertEquals(3,value("GET","/playlists/"+copy,reader,null,200).path("items").size(),"A copied private list belongs to its new owner.");
             assertEquals(0,db.queryForObject("SELECT COUNT(*) FROM recommendation_feedback WHERE user_id=?",Integer.class,owner));
             String missing="missing-"+UUID.randomUUID()+"@example.test";
             for(int i=0;i<8;i++)value("POST","/accounts/login",null,Map.of("email",missing,"password",password),401);

@@ -48,7 +48,7 @@ class PublicPagesCheckTest {
             assertTrue(deletion.body().contains("계정 소유권을 확인"));
             assertTrue(deletion.body().contains("7일 이내"));
             assertTrue(deletion.body().contains("보관 기간"));
-            assertTrue(deletion.body().contains("독립 목록"));
+            assertTrue(deletion.body().contains("이미 생성된 목록"));
             assertTrue(deletion.body().contains("즉시 적용"));
         }
     }

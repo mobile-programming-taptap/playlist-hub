@@ -79,7 +79,7 @@ final class TapTapUi {
     }
     static void consent(Context context,Set<AlertDialog> tracked,String base,Runnable accept,Runnable decline,Consumer<String> open){
         LinearLayout content=new LinearLayout(context);content.setOrientation(LinearLayout.VERTICAL);content.setPadding(dp(context,20),dp(context,8),dp(context,20),dp(context,8));
-        TextView explanation=new TextView(context);font(explanation,false);explanation.setTextColor(context.getColor(R.color.ink));explanation.setTextSize(14);explanation.setText("서버 기능은 직접 입력한 요청과 앱의 반응을 처리해요. 공개 목록을 이용하면 공개 동의, 신고 내용과 작성자 차단 목록도 보관해요. YouTube 기능을 이용하려면 아래 약관과 개인정보 안내를 확인하고 동의해 주세요. 동의하지 않아도 이 기기에 저장한 음악 목록은 사용할 수 있어요.");content.addView(explanation);
+        TextView explanation=new TextView(context);font(explanation,false);explanation.setTextColor(context.getColor(R.color.ink));explanation.setTextSize(14);explanation.setText("서버 기능은 직접 입력한 요청과 앱의 반응을 처리해요. YouTube 기능을 이용하려면 아래 약관과 개인정보 안내를 확인하고 동의해 주세요. 동의하지 않아도 이 기기에 저장한 음악 목록은 사용할 수 있어요.");content.addView(explanation);
         String[] titles={"TapTap 개인정보 처리 안내","계정·데이터 삭제 안내","YouTube 서비스 약관","Google 개인정보처리방침"};
         String[] urls={base+"/privacy",base+"/account-deletion","https://www.youtube.com/t/terms","https://policies.google.com/privacy"};
         for(int i=0;i<titles.length;i++){MaterialButton link=new MaterialButton(context);button(link);link.setText(titles[i]);String url=urls[i];link.setOnClickListener(v->open.accept(url));content.addView(link,new LinearLayout.LayoutParams(-1,-2));}
