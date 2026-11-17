@@ -231,4 +231,5 @@
         <item name="cornerRadius">12dp</item><item name="android:maxLines">2</item>
         <item name="strokeColor">@color/line</item><item name="android:textColor">@color/ink</item>
     </style>
+    <style name="ShapeAppearance.TapTap.Thumb" parent=""><item name="cornerFamily">rounded</item><item name="cornerSize">6dp</item></style>
 </resources>
