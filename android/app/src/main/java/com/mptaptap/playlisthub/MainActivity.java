@@ -829,7 +829,7 @@ public class MainActivity extends AppCompatActivity {
     /** Hides the row at once; the delete is sent when the undo bar goes away without 실행 취소. */
     private void deleteFromList(View row,String id,String title){
         if(busy)return;row.setVisibility(View.GONE);
-        Snackbar bar=snackbar("‘"+title+"’ 목록을 삭제했어요.",Snackbar.LENGTH_LONG).setAction("실행 취소",v->row.setVisibility(View.VISIBLE));
+        Snackbar bar=snackbar("‘"+title+"’ 목록을 삭제했어요.",5000).setAction("실행 취소",v->row.setVisibility(View.VISIBLE));
         bar.addCallback(new Snackbar.Callback(){@Override public void onDismissed(Snackbar s,int event){if(event!=DISMISS_EVENT_ACTION)deletePlaylist(id);}});
         bar.show();
     }

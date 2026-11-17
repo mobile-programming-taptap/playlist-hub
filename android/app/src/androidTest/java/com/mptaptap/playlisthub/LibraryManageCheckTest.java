@@ -44,7 +44,7 @@ public class LibraryManageCheckTest {
                 ready(app);onView(withId(R.id.nav_library)).perform(click());ready(app);
                 onView(withContentDescription("삭제: 검사 목록 B")).perform(scrollTo(),click());
                 onView(withText("검사 목록 B")).check(matches(withEffectiveVisibility(Visibility.GONE)));
-                onView(withText("실행 취소")).perform(click());
+                SystemClock.sleep(3500);onView(withText("실행 취소")).check(matches(isDisplayed())).perform(click());
                 onView(withText("검사 목록 B")).check(matches(isDisplayed()));
                 SystemClock.sleep(4500);assertTrue("Undo must keep the list",ids(data.playlists()).contains(created.get(1)));
                 onView(withContentDescription("삭제: 검사 목록 B")).perform(scrollTo(),click());
