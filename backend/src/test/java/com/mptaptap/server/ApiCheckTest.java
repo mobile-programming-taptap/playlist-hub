@@ -436,7 +436,7 @@ class ApiCheckTest {
                 String cappedUser=context.getBean(Store.class).user("Bearer "+cappedToken);
                 Map<String,String> cappedCreation=Map.of("title","한도 재시도 검사","id",UUID.randomUUID().toString());
                 JsonNode capped=value("POST","/playlists",cappedToken,cappedCreation,201);
-                for(int i=0;i<99;i++)db.update("INSERT INTO playlists VALUES (?,?,?,?)",UUID.randomUUID().toString(),cappedUser,"한도 검사 "+i,Instant.now().toString());
+                for(int i=0;i<99;i++)db.update("INSERT INTO playlists(id,user_id,title,created_at) VALUES (?,?,?,?)",UUID.randomUUID().toString(),cappedUser,"한도 검사 "+i,Instant.now().toString());
                 assertEquals(capped,value("POST","/playlists",cappedToken,cappedCreation,201));
                 value("POST","/playlists",cappedToken,Map.of("title","추가 목록","id",UUID.randomUUID().toString()),409);
                 value("POST","/playlists",cappedToken,Map.of("title","기존 생성 방식"),409);
