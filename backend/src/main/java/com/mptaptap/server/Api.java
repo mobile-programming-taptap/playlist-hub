@@ -46,6 +46,7 @@ public class Api {
     public record Item(String trackId) {}
     public record Items(List<String> trackIds) {}
     public record Order(List<String> itemIds) {}
+    public record ItemEdit(String title, String artist, Integer seconds) {}
 
     /** 외부 서비스 오류를 사용자가 읽을 수 있는 안내로 바꾼다. 조건 부족과 구분해서 쓴다. */
     private static String catalogueNotice(String reason) {
@@ -199,6 +200,11 @@ public class Api {
 
     @DeleteMapping("/playlists/{id}/items/{item}") @ResponseStatus(HttpStatus.NO_CONTENT)
     public void remove(@RequestHeader(value="Authorization", required=false) String auth, @PathVariable String id, @PathVariable String item) { store.remove(store.user(auth), id, item); }
+
+    @PutMapping("/playlists/{id}/items/{item}")
+    public Map<String, Object> edit(@RequestHeader(value="Authorization", required=false) String auth, @PathVariable String id, @PathVariable String item, @RequestBody ItemEdit body) {
+        return store.editExternal(store.user(auth), id, item, body.title(), body.artist(), body.seconds());
+    }
 
     private Track track(String id) {
         return catalogue.track(id);

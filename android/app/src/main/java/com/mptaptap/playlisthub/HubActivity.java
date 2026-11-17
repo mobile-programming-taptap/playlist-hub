@@ -43,11 +43,11 @@ import java.nio.charset.StandardCharsets;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-/** Account, explicit-source creation and community flows; no imported metadata reaches AI. */
+/** Account and explicit-source creation flows; no imported metadata reaches AI. */
 public final class HubActivity extends AppCompatActivity {
     private static final String[] PROVIDERS={"spotify","youtube"};
     private static final String[] PROVIDER_NAMES={"Spotify","YouTube Music"};
-    private static final String[] SAVED_TEXT={"screen","importId","targetProvider","transferId","transferKey","saveId","matchedSaveId","sourceKey","importRequestId","conversionRequestId","publicationId","shareId","videoUrl","timeline","timelineExpanded","linkExpanded","listUrl","listTitle","email","name","emailExpanded","kakaoAction","welcomeAction","sourceProvider","query","sort","copyId","copyTitle","copyShare","libraryProvider","libraryCursor","libraryRequestCursor","libraryReset","libraryLoaded","libraryConnect","batchActiveId","authorizationProvider","authorizationStatus","authorizationReason","authorizationNotice","authorizationNoticeProvider","authorizationRejected","rulesPurpose","rulesPlaylist","rulesVersion","publishing","reportShare","reportTitle","reportAuthor","reportTarget","reportReason","reportDetails","communityNotice"};
+    private static final String[] SAVED_TEXT={"screen","importId","targetProvider","transferId","transferKey","saveId","matchedSaveId","sourceKey","importRequestId","conversionRequestId","videoUrl","timeline","timelineExpanded","linkExpanded","listUrl","listTitle","email","name","emailExpanded","kakaoAction","welcomeAction","sourceProvider","libraryProvider","libraryCursor","libraryRequestCursor","libraryReset","libraryLoaded","libraryConnect","batchActiveId","authorizationProvider","authorizationStatus","authorizationReason","authorizationNotice","authorizationNoticeProvider","authorizationRejected"};
     private HubRequest requests;
     private String base,mode;
     private LinearLayout content;
@@ -76,12 +76,9 @@ public final class HubActivity extends AppCompatActivity {
         if(requests.data.length()==0) {
             if(saved!=null&&!changed&&requests.fingerprint(this,base).equals(saved.getString("hubOwner",requests.fingerprint(this,base)))) {
                 for(String key:SAVED_TEXT)if(saved.containsKey(key))put(key,saved.getString(key));
-                put("favourites",saved.getBoolean("favourites"));
                 restoreArray(saved,"edits");restoreArray(saved,"selections");restoreArray(saved,"libraryItems");restoreArray(saved,"librarySelections");restoreArray(saved,"batchImports");
             }
             if(!requests.data.has("screen"))put("screen",mode);
-            String playlist=getIntent().getStringExtra("playlistId");
-            if(playlist!=null&&!playlist.isEmpty()){put("publicationId",playlist);put("screen","publication");}
         }
         if(callback&&saved==null){requests.receiveAuthorization(this,base,getIntent().getData());if(value("libraryConnect").equals("true")){mode="create";put("libraryProvider",value("authorizationProvider"));}put("screen","account");}
         else if(requests.current()==null&&!requests.data.optBoolean("authorizationPending"))requests.restoreAuthorization(this,base);
@@ -97,7 +94,7 @@ public final class HubActivity extends AppCompatActivity {
         androidx.core.view.WindowInsetsControllerCompat bars=ViewCompat.getWindowInsetsController(root);if(bars!=null){bars.setAppearanceLightStatusBars(true);bars.setAppearanceLightNavigationBars(false);}
         LinearLayout header=new LinearLayout(this);header.setGravity(Gravity.CENTER_VERTICAL);header.setPadding(dp(12),dp(8),dp(16),dp(8));
         MaterialButton back=button("",this::back);back.setOnClickListener(v->back());back.setContentDescription("돌아가기");back.setIconResource(R.drawable.ic_previous);back.setIconTint(android.content.res.ColorStateList.valueOf(getColor(R.color.discover_ink)));back.setIconPadding(0);back.setPadding(0,0,0,0);back.setMinWidth(0);back.setStrokeWidth(0);back.setBackgroundTintList(android.content.res.ColorStateList.valueOf(android.graphics.Color.TRANSPARENT));header.addView(back,new LinearLayout.LayoutParams(dp(48),dp(48)));
-        headerTitle=text(mode.equals("account")?"내 계정":mode.equals("community")?"음악 발견":"목록 만들기",20,true);headerTitle.setTextColor(getColor(R.color.discover_ink));
+        headerTitle=text(mode.equals("account")?"내 계정":"목록 만들기",20,true);headerTitle.setTextColor(getColor(R.color.discover_ink));
         LinearLayout.LayoutParams titleSize=new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1);titleSize.setMarginStart(dp(8));header.addView(headerTitle,titleSize);
         MaterialButton history=button("기록",()->{put("screen","history");render();reload();});history.setContentDescription("이전 변환 · 가져오기 · 전송 기록");history.setTextSize(13);history.setMinWidth(0);history.setStrokeWidth(0);history.setBackgroundTintList(android.content.res.ColorStateList.valueOf(android.graphics.Color.TRANSPARENT));history.setTextColor(getColor(R.color.discover_ink));history.setVisibility(mode.equals("create")?View.VISIBLE:View.GONE);history.setTag("historyAction");header.addView(history);
         root.addView(header);if(mode.equals("welcome"))header.setVisibility(View.GONE);
@@ -107,7 +104,7 @@ public final class HubActivity extends AppCompatActivity {
         content=column();content.setPadding(dp(20),dp(12),dp(20),dp(24));scroll.addView(content);
         navigation=new BottomNavigationView(this);navigation.setId(R.id.navigation);navigation.inflateMenu(R.menu.bottom_nav);navigation.setLabelVisibilityMode(com.google.android.material.navigation.NavigationBarView.LABEL_VISIBILITY_LABELED);navigation.setSelectedItemId(tabId());root.addView(navigation,new LinearLayout.LayoutParams(-1,-2));
         if(mode.equals("welcome"))navigation.setVisibility(View.GONE);
-        navigation.setOnItemSelectedListener(item->{if(requests.busy())return false;int id=item.getItemId();if(id==R.id.nav_recommend||id==R.id.nav_library){setResult(RESULT_OK,new Intent().putExtra("selectTab",id==R.id.nav_library?"library":"recommend"));finish();return true;}mode=id==R.id.nav_account?"account":id==R.id.nav_community?"community":"create";put("screen",mode);render();scrollToTop();reload();return true;});
+        navigation.setOnItemSelectedListener(item->{if(requests.busy())return false;int id=item.getItemId();if(id==R.id.nav_recommend||id==R.id.nav_library){setResult(RESULT_OK,new Intent().putExtra("selectTab",id==R.id.nav_library?"library":"recommend"));finish();return true;}mode=id==R.id.nav_account?"account":"create";put("screen",mode);render();scrollToTop();reload();return true;});
         getOnBackPressedDispatcher().addCallback(this,new OnBackPressedCallback(true){@Override public void handleOnBackPressed(){back();}});
         requests.states().observe(this,state->{
             if(state==null)return;busy(state.loading);
@@ -132,7 +129,6 @@ public final class HubActivity extends AppCompatActivity {
         out.putBoolean("kakaoPending",requests.kakaoPending());
         requests.synchronize(this,base);out.putString("hubOwner",requests.fingerprint(this,base));
         for(String key:SAVED_TEXT)if(requests.data.has(key))out.putString(key,requests.data.optString(key));
-        out.putBoolean("favourites",requests.data.optBoolean("favourites"));
         JSONArray edited=new JSONArray(),edits=requests.data.optJSONArray("edits");
         if(edits!=null)for(int i=0;i<edits.length();i++){JSONObject row=edits.optJSONObject(i);if(row!=null&&row.optBoolean("edited"))edited.put(row);}
         out.putString("edits",edited.toString());
@@ -152,11 +148,6 @@ public final class HubActivity extends AppCompatActivity {
             else loadLibraryPage("",true);
         }
         else if(screen.equals("history"))send("history","GET","/imports/playlists?summary=true",null);
-        else if(screen.equals("community"))loadPublic();
-        else if(screen.equals("publicDetail"))send("publicDetail","GET","/public/playlists/"+Uri.encode(value("shareId")),null);
-        else if(screen.equals("publication"))send("publication","GET","/playlists/"+Uri.encode(value("publicationId"))+"/publication",null);
-        else if(screen.equals("communityRules")){put("publishing","false");send("communityRules","GET","/community/rules",null);}
-        else if(screen.equals("blockedAuthors"))send("blockedAuthors","GET","/community/blocks",null);
         else if(screen.equals("transfer")&&!value("transferId").isEmpty())send("transfer","GET","/transfers/"+Uri.encode(value("transferId")),null);
         else if((screen.equals("preview")||screen.equals("review")||screen.equals("sync"))&&!value("importId").isEmpty()) {
             if(screen.equals("review"))send("review","GET","/matches/"+Uri.encode(value("importId"))+"?targetProvider="+Uri.encode(value("targetProvider")),null);
@@ -165,13 +156,11 @@ public final class HubActivity extends AppCompatActivity {
     }
     private void back() {
         if(requests.busy()){if(requests.kakaoPending()){requests.cancelKakao(getApplicationContext());return;}message("처리가 끝날 때까지 잠시 기다려 주세요.");return;}
-        if(value("screen").equals(mode)||value("screen").equals("publication")){finish();return;}
-        if(value("screen").equals("report")){put("screen","publicDetail");render();if(requests.data.optJSONObject("publicDetail")==null)reload();return;}
-        if(value("screen").equals("communityRules")&&value("rulesPurpose").equals("publication")){put("publishing","false");put("screen","publication");render();reload();return;}
+        if(value("screen").equals(mode)){finish();return;}
         put("screen",mode);render();reload();
     }
     private void render() {
-        headerTitle.setText(mode.equals("account")?"내 계정":mode.equals("community")?"음악 발견":"목록 만들기");((View)headerTitle.getParent()).findViewWithTag("historyAction").setVisibility(mode.equals("create")?View.VISIBLE:View.GONE);
+        headerTitle.setText(mode.equals("account")?"내 계정":"목록 만들기");((View)headerTitle.getParent()).findViewWithTag("historyAction").setVisibility(mode.equals("create")?View.VISIBLE:View.GONE);
         controls.clear();connectionNotices.clear();content.removeAllViews();retry=null;status=text("",14,false);status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);status.setVisibility(View.GONE);content.addView(status);
         if(mode.equals("welcome")){welcome();busy(requests.busy());return;}
         if(base.isEmpty()) {heading("TapTap 시작하기");paragraph("이용 안내를 확인하면 계정과 음악 서비스 기능을 사용할 수 있어요. 연결은 앱이 자동으로 처리해요.");
@@ -182,12 +171,6 @@ public final class HubActivity extends AppCompatActivity {
             case "account":account();break;
             case "library":library();break;
             case "batch":batchResult();break;
-            case "community":community();break;
-            case "publicDetail":publicDetail();break;
-            case "publication":publication();break;
-            case "communityRules":communityRules();break;
-            case "report":report();break;
-            case "blockedAuthors":blockedAuthors();break;
             case "history":history();break;
             case "preview":preview();break;
             case "review":review();break;
@@ -197,7 +180,6 @@ public final class HubActivity extends AppCompatActivity {
         }
         busy(requests.busy());
         if((value("screen").equals("library")||value("screen").equals("account")&&value("authorizationNoticeProvider").isEmpty())&&!value("authorizationNotice").isEmpty())message(value("authorizationNotice"));
-        if(java.util.Arrays.asList("community","publicDetail","blockedAuthors").contains(value("screen"))&&!value("communityNotice").isEmpty())message(value("communityNotice"));
     }
 
     private void create() {
@@ -636,113 +618,6 @@ public final class HubActivity extends AppCompatActivity {
         addButton(content,"이 변경 내용을 반영",()->dialog().setTitle("가져온 목록에 반영할까요?").setMessage("위에서 확인한 추가·삭제·정보 변경을 반영해요.").setPositiveButton("반영",(d,w)->send("syncApplied","POST","/sync/"+Uri.encode(value("importId"))+"/apply",json("confirmed",true,"previewId",preview.optString("previewId")))).setNegativeButton("취소",null).show());
     }
 
-    private void community() {
-        heading("다른 사람의 음악 목록");paragraph("새로운 취향을 발견하고 마음에 드는 목록을 모아보세요.");
-        addButton(content,"커뮤니티 관리",()->{String owner=requests.fingerprint(this,base);dialog().setTitle("커뮤니티 관리").setItems(new String[]{"커뮤니티 운영 규칙","차단한 작성자"},(d,which)->{if(!communityOwner(owner))return;if(which==0)beginRules(false);else{put("screen","blockedAuthors");render();reload();}}).setNegativeButton("닫기",null).show();});
-        EditText query=field(content,"공개 목록 검색","query",100,false);put("query",query.getText().toString());
-        addPrimaryButton(content,"검색",this::loadPublic);LinearLayout sorting=new LinearLayout(this);sorting.setPadding(0,dp(8),0,0);content.addView(sorting);
-        MaterialButton popular=button("인기순",()->{put("sort","popular");loadPublic();}),recent=button("최신순",()->{put("sort","recent");loadPublic();});
-        MaterialButton selected=value("sort").equals("recent")?recent:popular;selected.setStrokeColor(android.content.res.ColorStateList.valueOf(getColor(R.color.deck_accent)));selected.setTextColor(getColor(R.color.deck_accent));
-        sorting.addView(popular,new LinearLayout.LayoutParams(0,-2,1));LinearLayout.LayoutParams recentSize=new LinearLayout.LayoutParams(0,-2,1);recentSize.setMarginStart(dp(8));sorting.addView(recent,recentSize);
-        CheckBox favourites=new CheckBox(this);favourites.setText("즐겨찾기한 목록만");TapTapUi.checkbox(favourites);favourites.setChecked(requests.data.optBoolean("favourites"));
-        favourites.setOnCheckedChangeListener((v,checked)->{put("favourites",checked);loadPublic();});controls.add(favourites);content.addView(favourites);
-        JSONArray rows=requests.data.optJSONArray("publicRows");if(rows==null)return;
-        if(rows.length()==0)paragraph("조건에 맞는 공개 목록이 없어요.");
-        for(int i=0;i<rows.length();i++) {
-            JSONObject row=rows.optJSONObject(i);if(row==null)continue;LinearLayout box=card(content);box.addView(text(row.optString("title"),17,true));
-            box.addView(text(row.optString("author")+" · "+row.optInt("size")+"곡 · 즐겨찾기 "+row.optInt("favourites"),13,false));
-            addButton(box,"목록 열기",()->{put("shareId",row.optString("shareId"));send("publicDetail","GET","/public/playlists/"+Uri.encode(row.optString("shareId")),null);});
-        }
-    }
-    private void loadPublic(){String query=value("query");if(query.length()>100){message("검색어는 100자까지 입력해 주세요.");return;}send("community","GET","/public/playlists?q="+Uri.encode(query)+"&sort="+(value("sort").equals("recent")?"recent":"popular")+"&favourites="+requests.data.optBoolean("favourites"),null);}
-    private void publicDetail() {
-        JSONObject detail=requests.data.optJSONObject("publicDetail");if(detail==null){paragraph("공개 목록을 확인하고 있어요.");return;}
-        heading(detail.optString("title"));paragraph(detail.optString("author")+" · "+detail.optInt("size")+"곡 · 즐겨찾기 "+detail.optInt("favourites"));
-        addButton(content,detail.optBoolean("favourited")?"즐겨찾기 해제":"즐겨찾기",()->send("favourite","PUT","/public/playlists/"+Uri.encode(value("shareId"))+"/favourite",json("favourite",!detail.optBoolean("favourited"))));
-        addButton(content,"내 목록으로 복사",()->{
-            LinearLayout box=column();box.setPadding(dp(20),0,dp(20),0);EditText title=new AppCompatEditText(this);title.setHint("복사할 목록 이름");title.setText(detail.optString("title"));title.setFilters(new InputFilter[]{new InputFilter.LengthFilter(80)});box.addView(title);
-            dialog().setTitle("내 목록으로 복사").setView(box).setPositiveButton("복사",(d,w)->{
-                String name=title.getText().toString().trim();if(name.isEmpty()){message("목록 이름을 입력해 주세요.");return;}
-                if(!name.equals(value("copyTitle"))||!value("shareId").equals(value("copyShare"))||value("copyId").isEmpty()){put("copyId",UUID.randomUUID().toString());put("copyTitle",name);put("copyShare",value("shareId"));}
-                send("copied","POST","/public/playlists/"+Uri.encode(value("shareId"))+"/copy",json("id",value("copyId"),"title",name));
-            }).setNegativeButton("취소",null).show();
-        });
-        addButton(content,"공개 목록 링크 공유",()->share(base+"/share/"+Uri.encode(value("shareId"))));
-        if(!detail.optBoolean("isOwner"))addButton(content,"신고 · 작성자 차단",this::communityActions);
-        JSONArray items=detail.optJSONArray("items");if(items!=null)for(int i=0;i<items.length();i++){JSONObject item=items.optJSONObject(i),track=item==null?null:item.optJSONObject("track");paragraph((i+1)+". "+song(track));}
-    }
-    private void publication() {
-        JSONObject publication=requests.data.optJSONObject("publication");heading("목록 공개 설정");if(publication==null){paragraph("공개 설정을 확인하고 있어요.");return;}
-        boolean published=publication.optBoolean("public");if(publication.optBoolean("moderationHidden")){paragraph("운영 규칙에 따라 공개가 중단된 목록이에요. 내 목록에서는 계속 볼 수 있어요.");return;}paragraph(published?"공개 링크로 이 목록을 볼 수 있어요.":"현재 나만 볼 수 있는 비공개 목록이에요.");
-        addButton(content,published?"비공개로 전환":"커뮤니티에 공개",()->{
-            if(published)send("publication","PUT","/playlists/"+Uri.encode(value("publicationId"))+"/publication",json("public",false));
-            else beginRules(true);
-        });
-        if(published&&publication.optString("sharePath").startsWith("/share/")){String url=base+publication.optString("sharePath");addButton(content,"공개 링크 열기",()->open(url));addButton(content,"공개 링크 공유",()->share(url));}
-    }
-
-    private static final String[] REPORT_REASONS={"spam","harassment","hate","sexual","violence","copyright","other"};
-    private static final String[] REPORT_LABELS={"스팸·광고","괴롭힘·개인정보 침해","혐오·차별","성적·아동 유해 콘텐츠","폭력·위협","저작권 침해","기타"};
-    private boolean communityOwner(String owner){
-        String selected=serverBase();if(owner.equals(requests.fingerprint(this,selected)))return true;
-        base=selected;requests.synchronize(this,base);put("screen",mode);render();message("계정이 변경되었어요. 새 계정에서 다시 요청해 주세요.");return false;
-    }
-    private void beginRules(boolean publishing){
-        put("rulesPurpose",publishing?"publication":"read");put("rulesPlaylist",publishing?value("publicationId"):"");put("publishing","false");
-        requests.data.remove("communityRules");put("screen","communityRules");render();send("communityRules","GET","/community/rules",null);
-    }
-    private void communityRules(){
-        heading("커뮤니티 운영 규칙");JSONObject rules=requests.data.optJSONObject("communityRules");
-        if(rules==null){paragraph("현재 운영 규칙을 확인하고 있어요.");return;}
-        JSONArray rows=rules.optJSONArray("rules");if(rules.optString("version").isEmpty()||rows==null||rows.length()==0){paragraph("운영 규칙을 확인하지 못했어요. 다시 확인한 뒤 공개할 수 있어요.");addButton(content,"규칙 다시 확인",this::reload);return;}
-        for(int i=0;i<rows.length();i++){LinearLayout box=card(content);box.addView(text((i+1)+". "+rows.optString(i),14,false));}
-        if(value("rulesPurpose").equals("publication")){
-            paragraph("공개하면 목록 이름, 작성자와 곡 정보가 커뮤니티와 공유 링크에 표시돼요. 운영 규칙에 따라 공개가 중단될 수 있어요.");
-            addPrimaryButton(content,"동의하고 공개",()->{
-                if(value("rulesPlaylist").isEmpty()||!value("rulesPlaylist").equals(value("publicationId"))){message("공개할 목록을 다시 선택해 주세요.");return;}
-                put("publishing","true");send("rulesAccepted","PUT","/community/rules/acceptance",json("version",rules.optString("version"),"accepted",true));
-            });
-            addButton(content,"취소 · 비공개 유지",this::back);
-        }else addButton(content,"음악 발견으로 돌아가기",this::back);
-    }
-    private void communityActions(){
-        JSONObject detail=requests.data.optJSONObject("publicDetail");if(detail==null||detail.optBoolean("isOwner"))return;
-        String owner=requests.fingerprint(this,base),share=value("shareId");
-        dialog().setTitle("신고 · 작성자 차단").setItems(new String[]{"이 목록 신고","작성자 신고","작성자 차단"},(d,which)->{
-            if(!communityOwner(owner))return;
-            if(which<2){
-                put("reportShare",share);put("reportTitle",detail.optString("title"));put("reportAuthor",detail.optString("author"));put("reportTarget",which==0?"playlist":"author");put("reportReason","");put("reportDetails","");put("communityNotice","");put("screen","report");render();scrollToTop();
-            }else dialog().setTitle("이 작성자를 차단할까요?").setMessage("이 작성자의 목록을 검색, 인기 목록과 즐겨찾기에서 숨기고 열거나 복사할 수 없게 해요. 이미 복사한 내 목록과 외부 공유 링크는 유지돼요.")
-                    .setPositiveButton("작성자 차단",(confirm,w)->{if(communityOwner(owner))send("authorBlocked","POST","/public/playlists/"+Uri.encode(share)+"/block-author",null);}).setNegativeButton("취소",null).show();
-        }).setNegativeButton("취소",null).show();
-    }
-    private String reportReasonLabel(){for(int i=0;i<REPORT_REASONS.length;i++)if(REPORT_REASONS[i].equals(value("reportReason")))return REPORT_LABELS[i];return "";}
-    private void report(){
-        heading(value("reportTarget").equals("author")?"작성자 신고":"음악 목록 신고");paragraph(value("reportTitle")+" · "+value("reportAuthor"));
-        String reason=reportReasonLabel();addButton(content,reason.isEmpty()?"신고 사유 선택":"신고 사유 · "+reason,()->{
-            String owner=requests.fingerprint(this,base);dialog().setTitle("신고 사유").setItems(REPORT_LABELS,(d,which)->{if(communityOwner(owner)){put("reportReason",REPORT_REASONS[which]);render();}}).setNegativeButton("취소",null).show();
-        });
-        createField(content,"추가 설명 · 선택","어떤 내용인지 알려주세요 (최대 500자)","reportDetails",500,true);
-        addPrimaryButton(content,"신고 내용 확인",()->{
-            if(reportReasonLabel().isEmpty()){message("신고 사유를 선택해 주세요.");return;}
-            String owner=requests.fingerprint(this,base),share=value("reportShare");JSONObject body=json("target",value("reportTarget"),"reason",value("reportReason"),"details",value("reportDetails").trim());
-            dialog().setTitle("이 내용으로 신고할까요?").setMessage((value("reportTarget").equals("author")?"작성자":"목록")+" · "+reportReasonLabel()+"\n"+(value("reportDetails").trim().isEmpty()?"추가 설명 없음":value("reportDetails").trim()))
-                    .setPositiveButton("신고 저장",(d,w)->{if(communityOwner(owner))send("reported","POST","/public/playlists/"+Uri.encode(share)+"/reports",body);}).setNegativeButton("취소",null).show();
-        });
-        addButton(content,"취소 · 목록으로",this::back);
-    }
-    private void blockedAuthors(){
-        heading("차단한 작성자");paragraph("차단한 작성자의 목록은 앱에서 숨겨져요. 차단을 해제하면 다시 볼 수 있어요.");
-        JSONArray rows=requests.data.optJSONArray("blockedAuthors");if(rows==null){paragraph("차단 목록을 확인하고 있어요.");return;}
-        if(rows.length()==0)paragraph("차단한 작성자가 없어요.");
-        for(int i=0;i<rows.length();i++){
-            JSONObject row=rows.optJSONObject(i);if(row==null)continue;LinearLayout box=card(content);box.addView(text(row.optString("author"),16,true));
-            addButton(box,"차단 해제",()->{String owner=requests.fingerprint(this,base);dialog().setTitle("작성자 차단을 해제할까요?").setMessage("이 작성자의 공개 목록을 다시 검색하고 열 수 있어요.")
-                    .setPositiveButton("차단 해제",(d,w)->{if(communityOwner(owner))send("authorUnblocked","DELETE","/community/blocks/"+Uri.encode(row.optString("blockId")),null);}).setNegativeButton("취소",null).show();});
-        }
-        addButton(content,"음악 발견으로 돌아가기",this::back);
-    }
-
     private void delivered(String route,JSONObject value) {
         switch(route) {
             case "guest":enterApp();return;
@@ -830,22 +705,7 @@ public final class HubActivity extends AppCompatActivity {
             case "transfer":put("transfer",value);put("screen","transfer");scheduleTransferRefresh();break;
             case "sync":put("sync",value);put("screen","sync");break;
             case "syncApplied":put("imported",value);put("screen","preview");put("edits",new JSONArray());break;
-            case "community":put("publicRows",value.optJSONArray("rows"));put("screen","community");break;
-            case "publicDetail":put("publicDetail",value);put("screen","publicDetail");break;
-            case "favourite":JSONObject detail=requests.data.optJSONObject("publicDetail");if(detail!=null){set(detail,"favourited",value.optBoolean("favourite"));set(detail,"favourites",value.optInt("favourites"));}break;
-            case "publication":put("publishing","false");put("publication",value);put("screen","publication");break;
-            case "communityRules":put("communityRules",value);put("rulesVersion",value.optString("version"));put("screen","communityRules");break;
-            case "rulesAccepted":
-                if(!value("publishing").equals("true")||!value("rulesPlaylist").equals(value("publicationId"))||!value("rulesVersion").equals(value.optString("version"))||!value.optBoolean("accepted")){put("publishing","false");render();message("현재 운영 규칙을 다시 확인해 주세요.");return;}
-                send("publication","PUT","/playlists/"+Uri.encode(value("rulesPlaylist"))+"/publication",json("public",true));return;
-            case "reported":
-                for(String key:new String[]{"reportReason","reportDetails"})requests.data.remove(key);put("communityNotice","신고를 저장했어요.");put("screen","publicDetail");
-                if(requests.data.optJSONObject("publicDetail")==null){render();reload();return;}break;
-            case "authorBlocked":
-                requests.data.remove("publicDetail");requests.data.remove("publicRows");put("communityNotice","작성자를 차단했어요. 이 작성자의 목록을 숨겼어요.");put("screen","community");render();loadPublic();return;
-            case "blockedAuthors":put("blockedAuthors",value.optJSONArray("rows"));put("screen","blockedAuthors");break;
-            case "authorUnblocked":put("communityNotice","작성자 차단을 해제했어요.");send("blockedAuthors","GET","/community/blocks",null);return;
-            case "matchedSaved":case "saved":case "copied": {
+            case "matchedSaved":case "saved": {
                 if(route.equals("matchedSaved"))put("matchedSaveId",value.optString("id"));
                 if(route.equals("saved"))put("saveId",value.optString("id"));
                 String savedPlaylist=value.optString("id"),savedBase=base,savedOwner=requests.fingerprint(this,base);
@@ -876,8 +736,6 @@ public final class HubActivity extends AppCompatActivity {
         if(route.equals("identity")){put("screen",mode);render();message(error.getMessage());addButton(content,"현재 계정으로 다시 확인",this::reload);return;}
         if(route.equals("historyDeleted")&&error instanceof ApiClient.ApiError&&((ApiClient.ApiError)error).statusCode==404){delivered(route,new JSONObject());return;}
         String message=error instanceof ApiClient.ApiError?error.getMessage():"서버와 연결하지 못했어요. 연결 상태를 확인하고 다시 시도해 주세요.";
-        if(error instanceof ApiClient.ApiError&&(route.equals("rulesAccepted")&&(((ApiClient.ApiError)error).statusCode==400||((ApiClient.ApiError)error).statusCode==409)||route.equals("publication")&&value("publishing").equals("true")&&((ApiClient.ApiError)error).statusCode==409)){put("publishing","false");message("운영 규칙이 바뀌었어요. 현재 규칙을 다시 확인해 주세요.");showRecovery("규칙 다시 확인",()->beginRules(true));return;}
-        if(route.equals("publication")&&value("publishing").equals("true")&&error instanceof ApiClient.ApiError&&((ApiClient.ApiError)error).statusCode==403){put("publishing","false");message(message);showRecovery("공개 설정 다시 확인",()->{put("screen","publication");render();reload();});return;}
         if(route.equals("batchImport")){JSONObject row=find(array("batchImports"),"requestId",value("batchActiveId"));if(row!=null){set(row,"status","FAILED");set(row,"notice",message);}put("screen","batch");render();message("가져오기를 멈췄어요. 저장한 목록은 유지되며 남은 목록만 다시 가져올 수 있어요.");return;}
         if(error instanceof ApiClient.ApiError&&((ApiClient.ApiError)error).statusCode==409&&message.contains("다시 연결")){message(message);showRecovery("음악 서비스 다시 연결",()->{mode="account";put("screen","account");render();reload();});return;}
         if(route.equals("library")){put("screen","library");render();message(message);return;}
@@ -933,10 +791,9 @@ public final class HubActivity extends AppCompatActivity {
     private String providerName(String provider){for(int i=0;i<PROVIDERS.length;i++)if(PROVIDERS[i].equals(provider))return PROVIDER_NAMES[i];return "지원하지 않는 음악 서비스";}
     private String serverBase(){String selected=getSharedPreferences("settings",MODE_PRIVATE).getString("server","");if(!selected.isEmpty())try{return ApiClient.validate(selected);}catch(IllegalArgumentException ignored){}return "";}
     private MaterialAlertDialogBuilder dialog(){return TapTapUi.dialog(this,dialogs);}
-    private int tabId(){return mode.equals("account")?R.id.nav_account:mode.equals("community")?R.id.nav_community:R.id.nav_create;}
+    private int tabId(){return mode.equals("account")?R.id.nav_account:R.id.nav_create;}
     private boolean open(String url){return open(url,this::message);}
     private boolean open(String url,java.util.function.Consumer<String> onFailure){try{Uri uri=Uri.parse(url);if(uri.getHost()==null||!("https".equals(uri.getScheme())||"http".equals(uri.getScheme())&&ApiClient.localHost(uri.getHost())))throw new IllegalArgumentException();startActivity(new Intent(Intent.ACTION_VIEW,uri).addCategory(Intent.CATEGORY_BROWSABLE));return true;}catch(ActivityNotFoundException e){onFailure.accept("주소를 열 앱이나 브라우저가 없어요.");}catch(Exception e){onFailure.accept("연결 주소를 확인할 수 없어요.");}return false;}
-    private void share(String url){try{startActivity(Intent.createChooser(new Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT,url),"공개 목록 공유"));}catch(ActivityNotFoundException e){message("공유할 앱을 찾지 못했어요.");}}
     private String song(JSONObject track){if(track==null)return "곡 정보 확인 필요";String title=track.optString("title");return (title.isEmpty()?"곡명 확인 필요":title)+(track.optString("artist").isEmpty()?"":" · "+track.optString("artist"));}
     private JSONArray previewEntries(JSONObject imported){if(imported==null)return new JSONArray();JSONArray entries=imported.optJSONArray("entries");if(entries==null)entries=imported.optJSONArray("items");return entries==null?new JSONArray():entries;}
     private JSONObject edit(int index,JSONObject original){JSONArray edits=array("edits");JSONObject edit=find(edits,"sourceIndex",index);if(edit==null){edit=json("sourceIndex",index,"title",original.optString("title"),"artist",original.optString("artist"));edits.put(edit);}return edit;}

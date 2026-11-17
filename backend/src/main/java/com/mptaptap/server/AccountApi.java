@@ -59,7 +59,7 @@ public class AccountApi {
         } else store.deleteAccount(auth,body.password(),request.getRemoteAddr());}
     }
 
-    @RestControllerAdvice(assignableTypes={AccountApi.class,CommunityApi.class})
+    @RestControllerAdvice(assignableTypes=AccountApi.class)
     static class Errors {
         @ExceptionHandler(IllegalArgumentException.class) @ResponseStatus(HttpStatus.BAD_REQUEST)
         public Map<String,String> invalid(IllegalArgumentException error) {
