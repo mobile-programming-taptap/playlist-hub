@@ -837,10 +837,8 @@ public final class HubActivity extends AppCompatActivity {
             return;
         }
         message(message);
-        showRetry();
     }
     private void clearRetry(){if(retry!=null){content.removeView(retry);controls.remove(retry);retry=null;}}
-    private void showRetry(){showRecovery("같은 요청 다시 시도",()->requests.retry(getApplicationContext(),base));}
     private void showRecovery(String label,Runnable action){clearRetry();retry=button(label,action);content.addView(retry,new LinearLayout.LayoutParams(-1,-2));}
     private void beginSource(String source,String idKey){String key=UUID.nameUUIDFromBytes(source.getBytes(StandardCharsets.UTF_8)).toString();if(!key.equals(value("sourceKey"))){clearSource();put("sourceKey",key);}if(value(idKey).isEmpty())put(idKey,UUID.randomUUID().toString());}
     private void clearSource(){for(String key:new String[]{"importId","imported","importRequestId","conversionRequestId","saveId","transferId","transferKey","transfer","review","sync"})requests.data.remove(key);put("edits",new JSONArray());put("selections",new JSONArray());}

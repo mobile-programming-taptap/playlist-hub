@@ -95,14 +95,13 @@ public class HubFlowCheckTest {
                     for(int attempt=1;attempt<=3;attempt++){
                         assertEquals(attempt,starts.get());assertNull(serverFailure.get());
                         onView(withText(failureMessage)).check(matches(isDisplayed()));
-                        // Espresso rejects multiple matching buttons, reproducing the reported accumulation.
-                        onView(withText("같은 요청 다시 시도")).perform(scrollTo()).check(matches(isEnabled()));
+                        onView(withText("같은 요청 다시 시도")).check(doesNotExist());
                         assertNull("Unavailable configuration must not launch a browser",launched.get());
-                        onView(withText("같은 요청 다시 시도")).perform(click());ready(app);
+                        onView(withText("YouTube Music 계정 연결")).perform(scrollTo(),click());ready(app);
                     }
                     assertEquals(4,starts.get());onView(withText("연결 주소를 확인할 수 없어요.")).perform(scrollTo()).check(matches(isDisplayed()));
                     app.onActivity(a->{try{var f=HubActivity.class.getDeclaredField("requests");f.setAccessible(true);assertFalse(((HubRequest)f.get(a)).data.optBoolean("authorizationPending"));}catch(Exception e){throw new AssertionError(e);}});
-                    assertNull(launched.get());onView(withText("같은 요청 다시 시도")).perform(scrollTo(),click());ready(app);
+                    assertNull(launched.get());onView(withText("YouTube Music 계정 연결")).perform(scrollTo(),click());ready(app);
                     assertEquals(5,starts.get());assertNotNull(launched.get());assertEquals(authorizationUrl,launched.get().getDataString());assertEquals(1,monitor.getHits());
                     onView(withText("같은 요청 다시 시도")).check(doesNotExist());
                     connected.set(true);app.moveToState(Lifecycle.State.CREATED);app.moveToState(Lifecycle.State.RESUMED);ready(app);
@@ -587,7 +586,8 @@ public class HubFlowCheckTest {
                     onView(withText("영상에서 곡 목록 가져오기")).perform(scrollTo(),click());ready(app);
                     assertNull("Test server failure",serverFailure.get());assertEquals(2,automatic.get());assertEquals(0,manual.get());
                     onView(withText(failureMessage)).perform(scrollTo()).check(matches(isDisplayed()));onView(withHint("영상 설명의 시간표 붙여넣기")).check(matches(withText(draft)));
-                    onView(withText("같은 요청 다시 시도")).perform(scrollTo(),click());ready(app);
+                    onView(withText("같은 요청 다시 시도")).check(doesNotExist());
+                    onView(withText("영상에서 곡 목록 가져오기")).perform(scrollTo(),click());ready(app);
                     assertNull("Test server failure",serverFailure.get());assertEquals(3,automatic.get());
                     openRow(1);onView(withHint("곡명")).check(matches(withText("자동으로 가져온 곡")));
                     onView(withContentDescription("돌아가기")).perform(closeSoftKeyboard(),click());ready(app);
