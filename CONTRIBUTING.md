@@ -13,7 +13,7 @@ git pull --ff-only origin main
 git switch -c fix/recommendation-retry
 ```
 
-브랜치 이름에는 목적을 담습니다. 예를 들어 기능은 `feat/playlist-import`, 버그 수정은 `fix/recommendation-retry`, 문서는 `docs/setup-guide`를 사용합니다. 서로 의존하지 않는 작업은 각각 `main`에서 분기합니다.
+브랜치 이름은 `타입/설명` 형식으로 목적을 담습니다. 예를 들어 기능은 `feat/playlist-import`, 버그 수정은 `fix/recommendation-retry`, 문서는 `docs/setup-guide`를 사용합니다. 관련 이슈가 있으면 `feat/12-playlist-import`처럼 이슈 번호를 앞에 붙입니다. 서로 의존하지 않는 작업은 각각 `main`에서 분기합니다.
 
 ## 검사와 커밋
 
@@ -27,12 +27,50 @@ git switch -c fix/recommendation-retry
 - 화면을 바꿨다면 에뮬레이터에서 사용자가 누르는 순서대로 확인합니다.
 - 추천·외부 연동을 바꿨다면 필요한 실서비스 검사를 임시 계정이나 테스트 데이터로 실행합니다. 모의 응답 검사와 실제 API 호출 결과를 PR에 구분해 적습니다.
 - `git status --short`와 `git diff`를 확인하고 필요한 파일만 스테이징합니다. API 키, `.env`, `local.properties`, 개인 DB, APK·JAR, 실행 로그는 커밋 대상에서 제외합니다.
-- 커밋은 변경 목적별로 나눕니다. 예를 들어 `fix(ai): preserve retry after lookup failure`처럼 수정한 동작을 제목에 적습니다.
+- 커밋은 변경 목적별로 나눕니다.
+
+### 커밋 메시지
+
+제목은 `타입: 한글 요약` 형식으로 적습니다. scope와 마침표는 붙이지 않고, "추가·수정·구현·제거"처럼 명사로 끝냅니다.
+
+| 타입 | 용도 |
+| --- | --- |
+| `feat` | 새 기능 |
+| `fix` | 버그 수정, 기능 제거 |
+| `docs` | 문서 |
+| `chore` | 빌드·배포·설정·스크립트 |
+| `test` | 테스트만 추가·수정 |
+| `refactor` | 동작 변화 없는 구조 개선 |
+
+```
+fix: 설치 직후 열기 시 welcome 화면을 건너뛰는 문제 수정
+
+- mode 없이 HubActivity가 열리면 action과 관계없이 welcome으로 시작한다.
+- 앱 내부 진입은 항상 mode나 OAuth 콜백 데이터를 넘기므로 기존 동작은 유지된다.
+```
+
+본문은 필요할 때만 `- ` 목록이나 "~한다." 문장으로 적습니다.
 
 ## PR 올리기
 
 1. 작업 브랜치에서 `git push -u origin HEAD`를 실행합니다.
 2. GitHub에서 PR을 만들고 **base는 `main`**, **compare는 작업 브랜치**로 지정합니다.
-3. 본문에 변경 이유, 사용자가 체감하는 변경, 실행한 검사와 결과를 적습니다. UI 변경에는 화면 캡처나 짧은 영상을 첨부합니다. 확인하지 못한 환경이나 검사가 있으면 함께 적습니다.
+3. 제목은 `[FEAT] 플레이리스트 가져오기 구현`처럼 대문자 타입 태그와 한글 요약으로 적습니다. 본문은 아래 형식을 따릅니다. UI 변경에는 화면 캡처나 짧은 영상을 첨부합니다.
+
+```markdown
+## 변경 사항
+- 변경 이유와 사용자가 체감하는 변경을 "~합니다"로 적습니다.
+
+## 검증
+- 실행한 검사와 결과 (모의 응답과 실제 API 호출 결과 구분)
+
+## 미검증
+- 확인하지 못한 환경이나 검사
+
+## 리뷰 포인트 (필요할 때)
+- 겹치는 PR, 선행 작업, 판단이 필요한 부분
+
+Closes #이슈번호 (관련 PR만 있으면 Refs #번호)
+```
 4. GitHub Actions의 `checks`가 통과한 뒤 병합합니다. CI는 서버·DB 검사와 Android 빌드·lint를 확인합니다. 계측 테스트 APK는 빌드하며, 에뮬레이터 실행과 외부 API 실연동 결과는 별도로 확인합니다.
 5. 병합 후 GitHub에서 작업 브랜치를 삭제합니다. 다음 작업은 다시 최신 `main`에서 시작합니다.
