@@ -48,7 +48,7 @@ public final class HubActivity extends AppCompatActivity {
     private static final String[] SAVED_TEXT={"screen","exportStopped","exportConnect","exportSourceUrl","exportExpanded","importId","targetProvider","transferId","transferKey","saveId","matchedSaveId","sourceKey","importRequestId","conversionRequestId","videoUrl","timeline","timelineExpanded","linkExpanded","importExpanded","listUrl","listTitle","email","name","emailExpanded","kakaoAction","welcomeAction","sourceProvider","libraryProvider","libraryCursor","libraryRequestCursor","libraryReset","libraryLoaded","libraryConnect","batchActiveId","authorizationProvider","authorizationStatus","authorizationReason","authorizationNotice","authorizationNoticeProvider","authorizationRejected"};
     private HubRequest requests;
     private String base,mode;
-    private LinearLayout content;
+    private LinearLayout content,bottomBar;
     private TextView headerTitle;
     private BottomNavigationView navigation;
     private TextView status;
@@ -98,7 +98,7 @@ public final class HubActivity extends AppCompatActivity {
         MaterialButton history=button("기록",()->{put("screen","history");render();reload();});history.setContentDescription("이전 변환 · 가져오기 · 전송 기록");history.setTextSize(13);history.setMinWidth(0);history.setStrokeWidth(0);history.setBackgroundTintList(android.content.res.ColorStateList.valueOf(android.graphics.Color.TRANSPARENT));history.setTextColor(getColor(R.color.discover_ink));history.setVisibility(mode.equals("create")?View.VISIBLE:View.GONE);history.setTag("historyAction");header.addView(history);
         root.addView(header);if(mode.equals("welcome"))header.setVisibility(View.GONE);
         progress=new LinearProgressIndicator(this);progress.setIndeterminate(true);progress.setVisibility(View.GONE);root.addView(progress,new LinearLayout.LayoutParams(-1,dp(3)));
-        NestedScrollView scroll=new NestedScrollView(this);scroll.setFillViewport(true);root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
+        NestedScrollView scroll=new NestedScrollView(this);scroll.setFillViewport(true);root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));bottomBar=column();bottomBar.setPadding(dp(20),0,dp(20),dp(12));bottomBar.setVisibility(View.GONE);root.addView(bottomBar,new LinearLayout.LayoutParams(-1,-2));
         scroll.setBackground(TapTapUi.rounded(this,R.color.background,28,false));scroll.setClipToOutline(true);
         content=column();content.setPadding(dp(20),dp(12),dp(20),dp(24));scroll.addView(content);
         navigation=new BottomNavigationView(this);navigation.setId(R.id.navigation);navigation.inflateMenu(R.menu.bottom_nav);navigation.setLabelVisibilityMode(com.google.android.material.navigation.NavigationBarView.LABEL_VISIBILITY_LABELED);navigation.setSelectedItemId(tabId());root.addView(navigation,new LinearLayout.LayoutParams(-1,-2));
@@ -161,7 +161,7 @@ public final class HubActivity extends AppCompatActivity {
     }
     private void render() {
         headerTitle.setText(mode.equals("account")?"내 계정":"목록 만들기");((View)headerTitle.getParent()).findViewWithTag("historyAction").setVisibility(mode.equals("create")?View.VISIBLE:View.GONE);
-        controls.clear();connectionNotices.clear();content.removeAllViews();retry=null;status=text("",14,false);status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);status.setVisibility(View.GONE);content.addView(status);
+        controls.clear();connectionNotices.clear();content.removeAllViews();bottomBar.removeAllViews();bottomBar.setVisibility(View.GONE);retry=null;status=text("",14,false);status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);status.setVisibility(View.GONE);content.addView(status);
         if(mode.equals("welcome")){welcome();busy(requests.busy());return;}
         if(base.isEmpty()) {heading("TapTap 시작하기");paragraph("이용 안내를 확인하면 계정과 음악 서비스 기능을 사용할 수 있어요. 연결은 앱이 자동으로 처리해요.");
             addPrimaryButton(content,"서비스 이용 시작",()->{setResult(RESULT_OK,new Intent().putExtra("connectServer",true).putExtra("mode",mode));finish();});
@@ -322,6 +322,27 @@ public final class HubActivity extends AppCompatActivity {
             if(value("exportStopped").equals("true"))addPrimaryButton(content,"이어서 찾기",()->{put("exportStopped","false");render();nextExportMatch(next);});
             else{MaterialButton stop=button("중단",()->{put("exportStopped","true");render();});content.addView(stop,new LinearLayout.LayoutParams(-1,-2));}
         }
+        if(items==null)return;
+        field(content,"새 목록 이름","listTitle",80,false);
+        JSONArray selections=array("selections");ExportReview.Groups groups=ExportReview.group(items,selections);
+        if(!groups.needsReview().isEmpty()){content.addView(text("확인이 필요한 곡 ("+groups.needsReview().size()+")",16,true));
+            for(JSONObject item:groups.needsReview()){int index=item.optInt("sourceIndex");LinearLayout box=card(content);box.addView(text((index+1)+". "+song(item.optJSONObject("source")),15,true));
+                JSONArray candidates=item.optJSONArray("candidates");JSONObject top=candidates==null||candidates.length()==0?null:candidates.optJSONObject(0);JSONObject track=top==null?null:top.optJSONObject("track");
+                box.addView(text(item.optString("status").equals("NOT_SEARCHED")?"후보 조회 전 · 이어서 찾기를 눌러 주세요":track==null?"후보 없음":"추천 후보: "+song(track)+(track.optString("album").isEmpty()?"":" · "+track.optString("album")),13,false));
+                LinearLayout actions=new LinearLayout(this);box.addView(actions,new LinearLayout.LayoutParams(-1,-2));
+                if(track!=null){MaterialButton pick=button("이 곡으로",()->{select(index,track,false);render();});actions.addView(pick,new LinearLayout.LayoutParams(0,-2,1));}
+                if(candidates!=null&&candidates.length()>0){MaterialButton other=button("다른 후보",()->chooseCandidate(item,index));actions.addView(other,new LinearLayout.LayoutParams(0,-2,1));}
+                MaterialButton skip=button("제외",()->{select(index,null,true);render();});actions.addView(skip,new LinearLayout.LayoutParams(0,-2,1));
+            }}
+        if(!groups.excluded().isEmpty()){content.addView(text("찾지 못한 곡 ("+groups.excluded().size()+") · 제외됨",16,true));
+            for(JSONObject item:groups.excluded()){int index=item.optInt("sourceIndex");LinearLayout box=card(content);box.addView(text((index+1)+". "+song(item.optJSONObject("source")),15,true));box.addView(text("전송에서 제외됨",13,false));addButton(box,"다른 후보",()->chooseCandidate(item,index));}}
+        if(!groups.selected().isEmpty()){boolean open=value("exportExpanded").equals("true");
+            MaterialButton toggle=button("선택된 곡 ("+groups.selected().size()+")",()->{put("exportExpanded",String.valueOf(!value("exportExpanded").equals("true")));render();});toggle.setContentDescription("선택된 곡 "+groups.selected().size()+"곡 "+(open?"접기":"펼치기"));content.addView(toggle,new LinearLayout.LayoutParams(-1,-2));
+            if(open)for(JSONObject item:groups.selected()){int index=item.optInt("sourceIndex");JSONObject chosen=ExportReview.find(selections,index);LinearLayout box=card(content);box.addView(text((index+1)+". "+song(item.optJSONObject("source")),13,false));box.addView(text(selectionLabel(item,chosen),15,true));
+                addButton(box,"다른 후보",()->chooseCandidate(item,index));
+                if(value("targetProvider").equals("youtube"))addButton(box,"선택한 YouTube 영상 확인",()->open("https://www.youtube.com/watch?v="+Uri.encode(chosen.optString("targetId"))));}
+        }
+        MaterialButton send=button(ExportReview.sendLabel(target,review,selections),this::approveTransfer);TapTapUi.primary(send);if(!ExportReview.canSend(review,selections)){controls.remove(send);send.setEnabled(false);}bottomBar.addView(send,new LinearLayout.LayoutParams(-1,-2));bottomBar.setVisibility(View.VISIBLE);
     }
     private void batchResult() {
         heading("가져오기 결과");JSONArray queue=array("batchImports");int completed=0;boolean remaining=false;
@@ -620,7 +641,7 @@ public final class HubActivity extends AppCompatActivity {
         if(!excluded&&(track==null||track.optString("externalId").isEmpty())){message("선택할 수 있는 곡을 확인하지 못했어요.");return;}
         JSONArray selections=array("selections");JSONObject selection=find(selections,"sourceIndex",index);
         if(selection==null){selection=new JSONObject();set(selection,"sourceIndex",index);selections.put(selection);}
-        set(selection,"targetId",excluded?"":track.optString("externalId"));set(selection,"excluded",excluded);set(selection,"label",excluded?"":song(track));
+        set(selection,"targetId",excluded?"":track.optString("externalId"));set(selection,"excluded",excluded);set(selection,"label",excluded?"":song(track));set(selection,"auto",false);
     }
     private void approveTransfer(){approveTransfer(false);}
     private void approveTransfer(boolean local) {
@@ -769,7 +790,7 @@ public final class HubActivity extends AppCompatActivity {
             case "savedForMatch":
                 put("saveId",value.optString("id"));setResult(RESULT_OK,new Intent().putExtra("playlistId",value.optString("id")));put("selections",new JSONArray());send("review","POST","/matches",json("importId",value("importId"),"targetProvider",provider("targetProvider")));return;
             case "reviewSaved":
-                put("review",value);dialog().setTitle("확인한 곡을 전송할까요?").setMessage("선택한 곡으로 "+providerName(provider("targetProvider"))+"에 ‘"+value("listTitle").trim()+"’ 목록을 만들어요. 제외한 곡은 보내지 않아요.")
+                put("review",value);dialog().setTitle("확인한 곡을 전송할까요?").setMessage("선택한 곡으로 "+providerName(provider("targetProvider"))+"에 ‘"+value("listTitle").trim()+"’ 목록을 만들어요. 제외한 곡은 보내지 않아요."+(value("screen").equals("export")?"\n자동 선택 "+ExportReview.autoCount(array("selections"))+"곡 포함":""))
                     .setPositiveButton("전송",(d,w)->{String key=transferKey();if(!key.equals(value("transferKey"))||value("transferId").isEmpty()){put("transferKey",key);put("transferId",UUID.randomUUID().toString());}transferPolls=0;put("screen","transfer");render();send("transfer","POST","/transfers",json("id",value("transferId"),"importId",value("importId"),"targetProvider",provider("targetProvider"),"title",value("listTitle").trim(),"confirmed",true));}).setNegativeButton("취소",null).show();return;
             case "transfer":put("transfer",value);put("screen","transfer");scheduleTransferRefresh();break;
             case "sync":put("sync",value);put("screen","sync");break;
