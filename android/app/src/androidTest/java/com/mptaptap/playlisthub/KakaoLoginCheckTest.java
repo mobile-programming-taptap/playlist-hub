@@ -63,6 +63,16 @@ public class KakaoLoginCheckTest {
         }
     }
 
+    @Test public void externalLaunchWithoutMainActionStartsOnWelcome() throws Exception {
+        try(Fixture fixture=new Fixture();ActivityScenario<HubActivity> app=ActivityScenario.launch(new Intent(fixture.context,HubActivity.class))){
+            onView(withText("카카오 로그인")).check(matches(isDisplayed()));
+            onView(withText("게스트로 시작하기")).perform(scrollTo()).check(matches(isDisplayed()));
+            onView(withId(R.id.navigation)).check(matches(withEffectiveVisibility(ViewMatchers.Visibility.GONE)));
+            onView(withText("서비스 이용 안내를 확인해 주세요")).check(doesNotExist());
+            onView(withText("목록 만들기")).check(doesNotExist());
+        }
+    }
+
     @Test public void guestEntryDoesNotReuseARegisteredAccountOrDeleteItsData() throws Exception {
         try(Fixture fixture=new Fixture()){
             fixture.signedIn.set(true);fixture.credentials.edit().putString(fixture.base,fixture.kakaoOwner).commit();

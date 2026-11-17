@@ -135,18 +135,14 @@ class DynamicCatalogueCheckTest {
             assertTrue(unverified.path("notice").asString().contains("실제 곡 정보를 확인한 곡은 0곡"));
             assertFalse(unverified.path("notice").asString().contains("조건을 줄이면"));
             assertEquals(6,aiRequests.size());assertEquals(4,queries.size());
-            value("PUT","/community/rules/acceptance",token,Map.of("version",Store.COMMUNITY_RULES_VERSION,"accepted",true),200);
-            String share=value("PUT",path+"/publication",token,Map.of("public",true),200).path("shareId").asString();
-            JsonNode saved=value("GET",path,token,null,200),published=value("GET","/public/playlists/"+share,null,null,200);
-            assertEquals(track,saved.path("items").get(0).path("track"));assertEquals(track,published.path("items").get(0).path("track"));
+            JsonNode saved=value("GET",path,token,null,200);
+            assertEquals(track,saved.path("items").get(0).path("track"));
             app.close();app=null;app=start(database,username,password,aiEndpoint,mbEndpoint);
             assertEquals(before+2,value("GET","/catalogue",token,null,200).size());
             assertEquals(1,value("GET","/me/feedback",token,null,200).path(firstId).asInt());
             assertEquals(List.of(firstId),ids(value("GET","/me/saved-tracks",token,null,200)));
-            assertEquals(saved,value("GET",path,token,null,200));assertEquals(published,value("GET","/public/playlists/"+share,null,null,200));
-            HttpResponse<String> html=request("GET","/share/"+share,null,null);
-            assertEquals(200,html.statusCode());assertTrue(html.body().contains("Take Five"));assertTrue(html.body().contains("https://musicbrainz.org/recording/"+firstId));
-            assertEquals(6,aiRequests.size(),"Reading durable catalogue, feedback and saved/shared snapshots makes no AI call.");
+            assertEquals(saved,value("GET",path,token,null,200));
+            assertEquals(6,aiRequests.size(),"Reading durable catalogue, feedback and saved snapshots makes no AI call.");
         } finally {
             if(app!=null)app.close();ai.stop(0);mb.stop(0);
             JdbcTemplate cleanup=new JdbcTemplate(new DriverManagerDataSource(database,username,password));

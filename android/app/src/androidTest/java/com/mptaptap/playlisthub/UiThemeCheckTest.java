@@ -62,8 +62,8 @@ import static org.junit.Assert.*;
 /** UI-only fixtures: these checks do not authenticate, recommend, import or transfer real music. */
 @RunWith(AndroidJUnit4.class)
 public class UiThemeCheckTest {
-    private static final String[] HUB_SCREENS={"create","library","batch","history","account","preview","review","transfer","sync","community","publicDetail","publication","communityRules","report","blockedAuthors"};
-    private static final String[] HUB_HEADINGS={"음악을 한곳에","내 플레이리스트","가져오기 결과","이전 음악 목록과 전송","UI 검사용 계정","UI 검사용 영상 목록","옮길 곡 확인","플레이리스트 전송 결과","원본 목록의 변경 내용","다른 사람의 음악 목록","UI 검사용 공개 목록","목록 공개 설정","커뮤니티 운영 규칙","음악 목록 신고","차단한 작성자"};
+    private static final String[] HUB_SCREENS={"create","library","batch","history","account","preview","review","transfer","sync"};
+    private static final String[] HUB_HEADINGS={"음악을 한곳에","내 플레이리스트","가져오기 결과","이전 음악 목록과 전송","UI 검사용 계정","UI 검사용 영상 목록","옮길 곡 확인","플레이리스트 전송 결과","원본 목록의 변경 내용"};
 
     @Test public void allHubScreensAndTheirPopupContentUseTheSharedTone() throws Exception {
         try(UiFixture fixture=new UiFixture(true);
@@ -90,8 +90,6 @@ public class UiThemeCheckTest {
             onView(withId(R.id.import_header)).perform(scrollTo(),click());onView(withText("원문과 시간 보기")).perform(scrollTo(),click());checkPopup("popup-source",false);dismissPopup();
             app.onActivity(activity->{JSONObject data=((HubRequest)get(activity,"requests")).data;put(data,"screen","review");invoke(activity,"render");});idle();
             onView(withText("후보 선택 또는 제외")).perform(scrollTo(),click());checkPopup("popup-candidates",false);dismissPopup();
-            app.onActivity(activity->{JSONObject data=((HubRequest)get(activity,"requests")).data;put(data,"screen","publicDetail");invoke(activity,"render");});idle();
-            onView(withText("내 목록으로 복사")).perform(scrollTo(),click());checkPopup("popup-copy",true);dismissPopup();
             assertNull(fixture.failure.get());assertEquals("UI fixtures must never write to a service",0,fixture.writes);
         }
     }
@@ -100,11 +98,10 @@ public class UiThemeCheckTest {
         try(UiFixture fixture=new UiFixture(true);ActivityScenario<MainActivity> app=ActivityScenario.launch(MainActivity.class)) {
             ready(MainActivity.class);app.onActivity(activity->{assertSelected(activity,R.id.nav_recommend);assertMainHeader(activity);});capture("main-request");
             onView(withId(R.id.nav_create)).perform(click());ready(HubActivity.class);onActive(HubActivity.class,activity->assertSelected(activity,R.id.nav_create));
-            onView(withId(R.id.nav_community)).perform(click());ready(HubActivity.class);
-            AtomicReference<HubActivity> old=new AtomicReference<>();onActive(HubActivity.class,activity->{assertSelected(activity,R.id.nav_community);old.set(activity);activity.recreate();});
+            onView(withId(R.id.nav_account)).perform(click());ready(HubActivity.class);
+            AtomicReference<HubActivity> old=new AtomicReference<>();onActive(HubActivity.class,activity->{assertSelected(activity,R.id.nav_account);old.set(activity);activity.recreate();});
             waitUntil(()->{HubActivity current=active(HubActivity.class);return current!=null&&current!=old.get()&&!((HubRequest)get(current,"requests")).busy();});
-            onActive(HubActivity.class,activity->{assertSelected(activity,R.id.nav_community);assertEquals("community",get(activity,"mode"));});capture("navigation-community-restored");
-            onView(withId(R.id.nav_account)).perform(click());ready(HubActivity.class);onActive(HubActivity.class,activity->assertSelected(activity,R.id.nav_account));capture("navigation-account");
+            onActive(HubActivity.class,activity->{assertSelected(activity,R.id.nav_account);assertEquals("account",get(activity,"mode"));});capture("navigation-account-restored");
             onView(withId(R.id.nav_library)).perform(click());ready(MainActivity.class);app.onActivity(activity->{assertSelected(activity,R.id.nav_library);assertTrue(activity.findViewById(R.id.library_scroll).isShown());});capture("navigation-library");
             onView(withId(R.id.nav_recommend)).perform(click());ready(MainActivity.class);app.onActivity(activity->{assertSelected(activity,R.id.nav_recommend);assertMainHeader(activity);});
             assertNull(fixture.failure.get());assertEquals(0,fixture.writes);
@@ -154,16 +151,10 @@ public class UiThemeCheckTest {
         put(data,"review",json("items",array(json("sourceIndex",0,"source",song,"status","NEEDS_REVIEW","candidates",array(json("track",song)))),"nextOffset",-1));
         put(data,"transfer",json("provider","youtube","status","COMPLETED","items",array(json("sourceIndex",0,"status","ADDED"))));
         put(data,"sync",json("added",array(song),"removed",new JSONArray(),"changed",new JSONArray(),"after",json("items",array(item))));
-        put(data,"publicRows",publicRows());put(data,"shareId","ui-share");put(data,"publicDetail",json("title","UI 검사용 공개 목록","author","UI 검사용 작성자","size",1,"favourites",2,"items",array(item)));
-        put(data,"publication",json("public",false));put(data,"publicationId","ui-list");
-        put(data,"communityRules",json("version","community-v1","rules",new JSONArray().put("서로의 취향을 존중하고 괴롭힘·혐오 표현을 게시하지 마세요.").put("권리가 있는 음악 정보만 공유하고 개인정보를 게시하지 마세요.")));put(data,"rulesPurpose","publication");put(data,"rulesPlaylist","ui-list");
-        put(data,"reportShare","ui-share");put(data,"reportTitle","UI 검사용 공개 목록");put(data,"reportAuthor","UI 검사용 작성자");put(data,"reportTarget","playlist");put(data,"reportReason","spam");put(data,"reportDetails","");
-        put(data,"blockedAuthors",array(json("blockId","ui-block","author","UI 검사용 차단 작성자")));
     }
 
     private static JSONObject profile(){return json("name","UI 검사용 계정","email","ui-theme@example.invalid");}
     private static JSONObject configuration(){return json("providers",array(json("provider","spotify","configured",false,"setupMessage","UI 검사용 연결 안내"),json("provider","youtube","configured",true)));}
-    private static JSONArray publicRows(){return array(json("title","UI 검사용 공개 목록","author","UI 검사용 작성자","size",1,"favourites",2,"shareId","ui-share"));}
 
     private static void checkHub(HubActivity activity,String screen) {
         assertEquals(screen,((HubRequest)get(activity,"requests")).data.optString("screen"));
@@ -272,7 +263,6 @@ public class UiThemeCheckTest {
                 else if(path.equals("/connections/config"))body=configuration().toString();
                 else if(path.equals("/connections")||path.equals("/catalogue")||path.equals("/me/saved-tracks")||path.equals("/playlists"))body="[]";
                 else if(path.equals("/me/feedback"))body="{}";
-                else if(path.startsWith("/public/playlists?"))body=publicRows().toString();
                 else throw new AssertionError("Unexpected UI fixture read: "+path);
                 byte[] reply=body.getBytes(StandardCharsets.UTF_8);socket.getOutputStream().write(("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "+reply.length+"\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.UTF_8));socket.getOutputStream().write(reply);socket.getOutputStream().flush();
             }catch(SocketTimeoutException waiting){}catch(Throwable error){if(running.get())failure.compareAndSet(null,error);return;}},"ui-theme-read-only-fixture");responder.start();

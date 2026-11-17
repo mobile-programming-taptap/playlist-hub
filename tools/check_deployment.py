@@ -148,24 +148,14 @@ def main():
             list_id = str(uuid4())
             api("POST", "/playlists", {"id": list_id, "title": "HTTPS persistence"}, 201)
             api("POST", "/playlists/" + list_id + "/items", {"trackId": catalogue[0]["id"]})
-            rules = api("GET", "/community/rules")
-            assert api("GET", "/community/rules/acceptance")["accepted"] is False
-            api("PUT", "/playlists/" + list_id + "/publication", {"public": True}, 409)
-            api("PUT", "/community/rules/acceptance", {"version": rules["version"], "accepted": True})
-            publication = api("PUT", "/playlists/" + list_id + "/publication", {"public": True})
-            share_id = publication["shareId"]
-            assert api("GET", "/public/playlists/" + share_id)["isOwner"] is True
-            api("GET", "/moderation/reports", expected=503)
+            # The discovery feature (public lists, rules, reports, blocks, moderation) was removed.
+            for removed in ("/public/playlists", "/community/rules", "/moderation/reports"):
+                api("GET", removed, expected=404)
             original_token, token = token, None
             token = api("POST", "/sessions", expected=201)["token"]
             reader_token = token
-            report = api("POST", "/public/playlists/" + share_id + "/reports", {"target": "playlist", "reason": "other"}, 201)
-            block = api("POST", "/public/playlists/" + share_id + "/block-author")
-            api("GET", "/public/playlists/" + share_id, expected=404)
             token = None
             api("GET", "/playlists/" + list_id, expected=401)
-            content, headers = api("GET", publication["sharePath"], html=True)
-            assert "HTTPS persistence" in content and headers.get("Content-Security-Policy")
             token = original_token
             plain = build_opener(ProxyHandler({}), NoRedirect())
             try:
@@ -182,7 +172,6 @@ def main():
             docker("cp", containers["caddy"] + ":/data/caddy/pki/authorities/local/root.crt", str(private / "restart-root.crt"))
             assert original_certificate == (private / "restart-root.crt").read_bytes()
             assert api("GET", "/playlists/" + list_id) == before
-            assert api("GET", "/public/playlists/" + share_id)["size"] == 1
             backup = docker("exec", containers["database"], "pg_dump", "-U", env["DATABASE_USER"],
                             "-d", "taptap", "--no-owner", "--no-privileges")
             assert backup, "The disposable database backup must not be empty"
@@ -201,19 +190,7 @@ def main():
             ready()
             assert docker("exec", containers["app"], "printenv", "DATABASE_URL").endswith("/" + restored_database)
             assert api("GET", "/playlists/" + list_id) == before
-            assert api("GET", "/public/playlists/" + share_id)["size"] == 1
-            assert api("GET", "/community/rules/acceptance")["accepted"] is True
-            token = reader_token
-            assert api("GET", "/community/blocks")[0]["blockId"] == block["blockId"]
-            duplicate = api("POST", "/public/playlists/" + share_id + "/reports", {"target": "playlist", "reason": "other"})
-            assert duplicate["reportId"] == report["reportId"] and duplicate["status"] == "OPEN" and duplicate["duplicate"] is True
-            api("GET", "/public/playlists/" + share_id, expected=404)
-            api("DELETE", "/community/blocks/" + block["blockId"], expected=204)
-            api("GET", "/public/playlists/" + share_id)
-            token = original_token
             proof["backupRestoredIntoFreshDatabase"] = True
-            api("PUT", "/playlists/" + list_id + "/publication", {"public": False})
-            api("GET", "/share/" + share_id, expected=404)
             api("DELETE", "/accounts/me", {"password": password}, 204)
             token = reader_token
             api("DELETE", "/accounts/me", expected=204)
@@ -253,12 +230,11 @@ def main():
             proof["checks"] = ["Production Compose validates without printing private settings",
                                "App and database expose no host ports", "App uses a read-only filesystem and UID 10001",
                                "Container JAR hash and expected packaged host JAR match", "TLS hostname and private CA verification", "Anonymous introduction, privacy and external account-deletion mail draft without cookies",
-                               "HTTP redirects to HTTPS", "Bearer auth, strict AI-unconfigured error, playlist and anonymous public share through TLS",
-                               "App, database and Caddy restart retain session, playlist, share and CA",
-                               "PostgreSQL pg_dump restored into a new database retains session, playlist and public share",
-                               "Current posting rules gate publication; persisted report, personal block and rules acceptance survive backup restore",
-                               "Personal blocks hide authenticated detail while public web sharing remains available; unconfigured moderation returns 503",
-                               "Unpublication and account deletion", "Spoofed X-Forwarded-For cannot bypass login IP limits",
+                               "HTTP redirects to HTTPS", "Bearer auth, strict AI-unconfigured error and playlist through TLS",
+                               "Removed discovery routes (public lists, rules, moderation) return 404",
+                               "App, database and Caddy restart retain session, playlist and CA",
+                               "PostgreSQL pg_dump restored into a new database retains session and playlist",
+                               "Account deletion", "Spoofed X-Forwarded-For cannot bypass login IP limits",
                                "A different client can log in after the first client reaches its IP limit"]
             proof["passed"] = True
         finally:

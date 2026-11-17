@@ -127,7 +127,7 @@ public class MainActivity extends AppCompatActivity {
         String selectedTab=data.getStringExtra("selectTab");if("library".equals(selectedTab)||"recommend".equals(selectedTab)){((BottomNavigationView)findViewById(R.id.navigation)).setSelectedItemId("library".equals(selectedTab)?R.id.nav_library:R.id.nav_recommend);return;}
         if(data.getBooleanExtra("connectServer",false)){
             String mode=data.getStringExtra("mode");
-            if(!"account".equals(mode)&&!"create".equals(mode)&&!"community".equals(mode))return;
+            if(!"account".equals(mode)&&!"create".equals(mode))return;
             pendingHubMode=mode;pendingHubSettings=true;returningFromHub=false;
             if(hubServerAddress==null&&(getApplicationInfo().flags&android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE)!=0
                     &&("ranchu".equals(android.os.Build.HARDWARE)||"goldfish".equals(android.os.Build.HARDWARE)))hubServerAddress="http://10.0.2.2:8080";
@@ -215,8 +215,8 @@ public class MainActivity extends AppCompatActivity {
         findViewById(R.id.next).setOnClickListener(v -> pager.setCurrentItem(pager.getCurrentItem() + 1, true));
         ((BottomNavigationView)findViewById(R.id.navigation)).setOnItemSelectedListener(item -> {
             hideKeyboard();
-            if(item.getItemId()==R.id.nav_create||item.getItemId()==R.id.nav_community||item.getItemId()==R.id.nav_account){
-                openHub(item.getItemId()==R.id.nav_create?"create":item.getItemId()==R.id.nav_community?"community":"account",null);return false;
+            if(item.getItemId()==R.id.nav_create||item.getItemId()==R.id.nav_account){
+                openHub(item.getItemId()==R.id.nav_create?"create":"account",null);return false;
             }
             librarySelected = item.getItemId() == R.id.nav_library; stopPlayer();
             findViewById(R.id.recommend_page).setVisibility(librarySelected ? View.GONE : View.VISIBLE);
@@ -763,7 +763,6 @@ public class MainActivity extends AppCompatActivity {
                 .setPositiveButton("삭제", (d,w) -> deletePlaylist(id)).setNegativeButton("취소", null).show()),deleteSize);
             box.addView(actions);
             MaterialButton share=button("목록 텍스트 공유", v -> sharePlaylist(data)); share.setEnabled(items.length()>0); box.addView(share);
-            if(api!=null)box.addView(button("공개 설정 · 공유 링크",v->openHub("community",id)));
             if (items.length() == 0) box.addView(text("아직 곡이 없어요. 추천 화면에서 음악을 담아보세요.", 16, false));
             for (int i=0;i<items.length();i++) {
                 JSONObject row = items.optJSONObject(i);
