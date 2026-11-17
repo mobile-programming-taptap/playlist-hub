@@ -54,18 +54,6 @@ python3 tools/check_deployment.py --production-contact-check
 
 Google OAuth 앱의 홈페이지와 개인정보 안내 주소는 같은 실제 도메인으로 등록하고 소유권을 확인합니다. 공개된 페이지와 안내 링크·처리 설명은 [Google의 민감한 범위 검증 안내](https://developers.google.com/identity/protocols/oauth2/production-readiness/sensitive-scope-verification)의 준비 항목입니다. 이 페이지를 제공하는 것만으로 Google 검증·OAuth 승인이나 공개 배포가 완료되는 것은 아닙니다. 제한된 테스트 사용자 설정과 공개 서비스 검증은 구분합니다.
 
-## 공개 목록 신고 검토
-
-목록 공개 전에는 서버의 현재 이용 규칙(`GET /community/rules`)을 사용자가 확인하고 명시적으로 동의해야 합니다. `PUT /community/rules/acceptance`에 현재 `version`과 `accepted:true`를 전달한 사용자만 공개할 수 있으며, 규칙 버전이 바뀌면 다시 동의해야 합니다. 동의하지 않아도 개인 목록을 사용할 수 있습니다.
-
-앱의 목록·작성자 신고는 DB에 `OPEN` 상태로 저장합니다. 자동 알림·자동 삭제·사람의 검토 완료를 주장하지 않습니다. 신고에는 신고자·대상 내부 식별자, 원래 공개 링크·목록 식별자, 사유, 선택 설명(500자 이내), 상태·시각을 보관하며 AI 추천·개인화에 사용하지 않습니다. 새 신고는 사용자당 24시간 동안 10건으로 제한하고 중복 요청은 기존 신고를 반환합니다. 공개 해제·목록 삭제만으로 미처리 신고를 없애지 않으며, 신고자나 대상 계정 삭제 시 관련 신고는 함께 삭제합니다. 차단과 규칙 동의도 해당 계정 삭제 시 정리합니다.
-
-운영 검토 API를 사용할 환경에서는 비공개 환경 파일에 별도 `MODERATION_ADMIN_SECRET`을 설정합니다. 허용 형식은 영문·숫자·`_`·`-` 32~256자입니다. 실제 값을 앱·문서·쿼리 문자열·공유 URL에 넣지 않습니다. 비어 있거나 형식이 잘못되면 검토 API는 503을 반환하며 신고는 저장된 `OPEN` 상태로 남습니다. 실제 운영에는 담당자와 검토 절차가 별도로 필요하며 이 설정은 공개 운영 승인이나 운영자 배정을 뜻하지 않습니다.
-
-검토 요청은 HTTPS에서 `X-TapTap-Moderation-Key` 헤더로만 인증합니다. 키가 없거나 다르면 401을 반환합니다. `GET /moderation/reports?status=OPEN`은 오래된 신고부터 최대 100건을 반환하며 `DISMISSED`·`HIDDEN`도 조회할 수 있습니다. 응답에는 신고 ID·원래 공유 ID·대상 종류·사유·설명·상태·생성 시각만 포함하고 사용자 이메일·내부 계정 ID는 노출하지 않습니다. `POST /moderation/reports/{reportId}/decision`의 본문은 `{"action":"dismiss"}` 또는 `{"action":"hide"}`입니다. `hide`는 목록 신고면 같은 소유자가 가진 원본 목록을 공개되지 않도록 표시하고, 작성자 신고면 해당 작성자의 현재 공개 목록들만 숨깁니다. 이미 비공개인 원본도 재공개는 거부하며, 이미 다른 사용자가 독립 복사한 목록을 삭제하지 않습니다. 응답의 `hiddenPublications`는 이번에 실제로 숨긴 공개본 수입니다. 같은 결정을 다시 요청하면 중복 처리하지 않고 다른 결정으로 뒤집는 요청은 409를 반환합니다.
-
-개인 작성자 차단은 로그인한 사용자의 앱 검색·순위·즐겨찾기·상세·복사에서 대상을 숨깁니다. 차단 관리에서 해제할 수 있으며, 개인 차단을 비로그인 공개 웹 링크 전체 폐쇄로 표시하지 않습니다.
-
 ## 설정 확인과 실행
 
 비공개 환경 파일을 Compose의 변수 치환과 앱 실행에 함께 사용한다. `DOMAIN`과 DB 비밀번호가 비어 있으면 설정 검사가 실패한다. `config --quiet`는 키 값을 출력하지 않고 설정 형식만 검사한다. [Compose 환경 파일](https://docs.docker.com/compose/how-tos/environment-variables/variable-interpolation/)
