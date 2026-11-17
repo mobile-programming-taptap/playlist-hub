@@ -45,7 +45,7 @@ import org.json.JSONObject;
 public final class HubActivity extends AppCompatActivity {
     private static final String[] PROVIDERS={"spotify","youtube"};
     private static final String[] PROVIDER_NAMES={"Spotify","YouTube Music"};
-    private static final String[] SAVED_TEXT={"screen","importId","targetProvider","transferId","transferKey","saveId","matchedSaveId","sourceKey","importRequestId","conversionRequestId","videoUrl","timeline","timelineExpanded","linkExpanded","importExpanded","listUrl","listTitle","email","name","emailExpanded","kakaoAction","welcomeAction","sourceProvider","libraryProvider","libraryCursor","libraryRequestCursor","libraryReset","libraryLoaded","libraryConnect","batchActiveId","authorizationProvider","authorizationStatus","authorizationReason","authorizationNotice","authorizationNoticeProvider","authorizationRejected"};
+    private static final String[] SAVED_TEXT={"screen","exportStopped","exportConnect","exportSourceUrl","exportExpanded","importId","targetProvider","transferId","transferKey","saveId","matchedSaveId","sourceKey","importRequestId","conversionRequestId","videoUrl","timeline","timelineExpanded","linkExpanded","importExpanded","listUrl","listTitle","email","name","emailExpanded","kakaoAction","welcomeAction","sourceProvider","libraryProvider","libraryCursor","libraryRequestCursor","libraryReset","libraryLoaded","libraryConnect","batchActiveId","authorizationProvider","authorizationStatus","authorizationReason","authorizationNotice","authorizationNoticeProvider","authorizationRejected"};
     private HubRequest requests;
     private String base,mode;
     private LinearLayout content;
@@ -79,7 +79,7 @@ public final class HubActivity extends AppCompatActivity {
             }
             if(!requests.data.has("screen"))put("screen",mode);
         }
-        if(callback&&saved==null){requests.receiveAuthorization(this,base,getIntent().getData());if(value("libraryConnect").equals("true")){mode="create";put("libraryProvider",value("authorizationProvider"));}put("screen","account");}
+        if(callback&&saved==null){requests.receiveAuthorization(this,base,getIntent().getData());if(value("exportConnect").equals("true"))mode="create";if(value("libraryConnect").equals("true")){mode="create";put("libraryProvider",value("authorizationProvider"));}put("screen","account");}
         else if(requests.current()==null&&!requests.data.optBoolean("authorizationPending"))requests.restoreAuthorization(this,base);
         if(saved!=null&&saved.getBoolean("kakaoPending")&&!requests.kakaoPending())put("kakaoInterrupted",true);
         LinearLayout root=new LinearLayout(this);root.setOrientation(LinearLayout.VERTICAL);root.setBackgroundResource(R.drawable.discover_background);
@@ -147,6 +147,7 @@ public final class HubActivity extends AppCompatActivity {
             else loadLibraryPage("",true);
         }
         else if(screen.equals("history"))send("history","GET","/imports/playlists?summary=true",null);
+        else if(screen.equals("export")&&!value("importId").isEmpty()){put("exportStopped","true");send("exportReview","GET","/matches/"+Uri.encode(value("importId"))+"?targetProvider="+Uri.encode(value("targetProvider")),null);}
         else if(screen.equals("transfer")&&!value("transferId").isEmpty())send("transfer","GET","/transfers/"+Uri.encode(value("transferId")),null);
         else if((screen.equals("preview")||screen.equals("review")||screen.equals("sync"))&&!value("importId").isEmpty()) {
             if(screen.equals("review"))send("review","GET","/matches/"+Uri.encode(value("importId"))+"?targetProvider="+Uri.encode(value("targetProvider")),null);
@@ -169,6 +170,7 @@ public final class HubActivity extends AppCompatActivity {
         switch(value("screen")) {
             case "account":account();break;
             case "library":library();break;
+            case "export":export();break;
             case "batch":batchResult();break;
             case "history":history();break;
             case "preview":preview();break;
@@ -248,7 +250,8 @@ public final class HubActivity extends AppCompatActivity {
         LinearLayout tools=new LinearLayout(this);tools.setGravity(Gravity.CENTER_VERTICAL);content.addView(tools);
         TextView counter=text(array("librarySelections").length()+"개 선택",14,true);counter.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);tools.addView(counter,new LinearLayout.LayoutParams(0,-2,1));
         MaterialButton refresh=button("목록 새로고침",()->loadLibraryPage("",true));refresh.setTextSize(13);refresh.setMinWidth(0);refresh.setStrokeWidth(0);refresh.setBackgroundTintList(android.content.res.ColorStateList.valueOf(android.graphics.Color.TRANSPARENT));refresh.setTextColor(getColor(R.color.muted));tools.addView(refresh);
-        addPrimaryButton(content,"선택한 목록 가져오기",this::startLibraryImport);
+        addPrimaryButton(content,"선택한 목록 앱에 저장",this::startLibraryImport);
+        addButton(content,"다른 플랫폼으로 보내기",this::startExport);
         JSONArray rows=array("libraryItems");
         if(rows.length()==0)paragraph(value("libraryLoaded").equals("true")?"연결된 계정에 가져올 플레이리스트가 없어요.":"계정을 연결하면 내 플레이리스트를 불러올 수 있어요.");
         for(int i=0;i<rows.length();i++) {
@@ -293,6 +296,32 @@ public final class HubActivity extends AppCompatActivity {
             send("batchImport","POST","/imports/playlists",json("id",row.optString("requestId"),"provider",row.optString("provider"),"url",row.optString("url"),"title",row.optString("title")));return;
         }
         requests.data.remove("batchActiveId");put("librarySelections",new JSONArray());render();
+    }
+    private void startExport() {
+        JSONArray selected=array("librarySelections");String source=value("libraryProvider");
+        if(selected.length()!=1){message("보내기는 한 번에 한 목록씩 할 수 있어요.");return;}
+        String target="";for(String provider:PROVIDERS)if(!provider.equals(source))target=provider;
+        if(!supportedProvider(source)||target.isEmpty()){message("음악 서비스를 다시 선택해 주세요.");return;}
+        JSONObject row=selected.optJSONObject(0);String title=row==null?"":row.optString("title").trim();if(title.isEmpty())title="가져온 음악";
+        if(title.length()>80){title=title.substring(0,80);if(Character.isHighSurrogate(title.charAt(title.length()-1)))title=title.substring(0,title.length()-1);}
+        clearSource();requests.data.remove("sourceKey");put("targetProvider",target);put("listTitle",title);put("exportSourceUrl",row==null?"":row.optString("sourceUrl"));put("exportStopped","false");put("exportExpanded","false");
+        send("exportAccount","GET","/accounts/me",null);
+    }
+    private void beginExportImport() {
+        put("importRequestId",UUID.randomUUID().toString());put("screen","export");render();scrollToTop();
+        send("exportImport","POST","/imports/playlists",json("id",value("importRequestId"),"provider",value("libraryProvider"),"url",value("exportSourceUrl"),"title",value("listTitle").trim()));
+    }
+    private void nextExportMatch(int offset){send("exportMatch","POST","/matches",json("importId",value("importId"),"targetProvider",value("targetProvider"),"offset",offset));}
+    private void export() {
+        JSONObject review=requests.data.optJSONObject("review");String target=providerName(value("targetProvider"));
+        heading(target+(value("targetProvider").equals("spotify")?"로":"으로")+" 보내기");
+        if(value("importId").isEmpty()){paragraph("목록을 가져오고 있어요");return;}
+        JSONArray items=review==null?null:review.optJSONArray("items");int total=items==null?previewEntries(requests.data.optJSONObject("imported")).length():items.length(),next=review==null?0:review.optInt("nextOffset",-1);
+        if(next>=0) {
+            paragraph(total+"곡 중 "+next+"곡 찾는 중");
+            if(value("exportStopped").equals("true"))addPrimaryButton(content,"이어서 찾기",()->{put("exportStopped","false");render();nextExportMatch(next);});
+            else{MaterialButton stop=button("중단",()->{put("exportStopped","true");render();});content.addView(stop,new LinearLayout.LayoutParams(-1,-2));}
+        }
     }
     private void batchResult() {
         heading("가져오기 결과");JSONArray queue=array("batchImports");int completed=0;boolean remaining=false;
@@ -654,6 +683,11 @@ public final class HubActivity extends AppCompatActivity {
                     else put("authorizationNotice",connected?providerName(authorizationProvider)+" 연결을 확인했어요.":"음악 계정 연결을 확인하지 못했어요. 다시 연결해 주세요.");
                     requests.forgetAuthorization(this);requests.data.remove("authorizationProvider");requests.data.remove("authorizationStatus");requests.data.remove("authorizationReason");
                 }
+                if(value("exportConnect").equals("true")){
+                    put("exportConnect","false");JSONObject connection=find(value.optJSONArray("connections"),"provider",value("targetProvider"));
+                    if(connection!=null&&connection.optBoolean("connected")){beginExportImport();return;}
+                    put("screen","library");render();if(value("authorizationNotice").isEmpty())message("음악 계정 연결을 마치지 못했어요. 다시 연결해 주세요.");return;
+                }
                 if(value("libraryConnect").equals("true")){
                     put("libraryConnect","false");JSONObject connection=find(value.optJSONArray("connections"),"provider",value("libraryProvider"));
                     if(connection!=null&&connection.optBoolean("connected")){openLibrary(value("libraryProvider"));return;}
@@ -688,6 +722,25 @@ public final class HubActivity extends AppCompatActivity {
                 String next=value.optString("nextCursor");if(rows.length()>=200||next.equals(value("libraryRequestCursor")))next="";
                 put("libraryItems",rows);put("libraryCursor",next);put("libraryLoaded","true");put("screen","library");break;
             }
+            case "exportAccount": {
+                JSONObject connection=find(value.optJSONArray("connections"),"provider",value("targetProvider"));
+                if(connection!=null&&connection.optBoolean("connected")){beginExportImport();return;}
+                put("exportConnect","true");authorize(value("targetProvider"));return;
+            }
+            case "exportImport": {
+                JSONArray items=value.optJSONArray("items");
+                if(!value.optBoolean("saved")||items==null||items.length()==0){put("screen","library");render();message("가져올 곡이 없어요.");return;}
+                put("imported",value);put("importId",value.optString("id"));if(value("listTitle").trim().isEmpty())put("listTitle",value.optString("title"));
+                if(!value.optString("localPlaylistId").isEmpty()){put("saveId",value.optString("localPlaylistId"));setResult(RESULT_OK,new Intent().putExtra("playlistId",value.optString("localPlaylistId")));}
+                put("screen","export");render();nextExportMatch(0);return;
+            }
+            case "exportMatch": {
+                put("review",value);put("selections",ExportReview.autoSelect(value.optJSONArray("items"),array("selections")));
+                int next=value.optInt("nextOffset",-1);put("screen","export");
+                if(next>=0&&!value("exportStopped").equals("true")){render();nextExportMatch(next);return;}
+                break;
+            }
+            case "exportReview":put("review",value);put("selections",ExportReview.autoSelect(value.optJSONArray("items"),array("selections")));put("screen","export");break;
             case "batchImport": {
                 JSONObject row=find(array("batchImports"),"requestId",value("batchActiveId"));
                 if(row==null||!row.optString("requestId").equals(value.optString("id"))){failure(route,new IllegalStateException("가져오기 결과를 확인하지 못했어요."));return;}
@@ -755,8 +808,10 @@ public final class HubActivity extends AppCompatActivity {
         if(route.equals("batchImport")){JSONObject row=find(array("batchImports"),"requestId",value("batchActiveId"));if(row!=null){set(row,"status","FAILED");set(row,"notice",message);}put("screen","batch");render();message("가져오기를 멈췄어요. 저장한 목록은 유지되며 남은 목록만 다시 가져올 수 있어요.");return;}
         if(error instanceof ApiClient.ApiError&&((ApiClient.ApiError)error).statusCode==409&&message.contains("다시 연결")){message(message);showRecovery("음악 서비스 다시 연결",()->{mode="account";put("screen","account");render();reload();});return;}
         if(route.equals("library")){put("screen","library");render();message(message);return;}
+        if(route.equals("exportMatch")||route.equals("exportReview")){put("exportStopped","true");put("screen","export");render();message(message);return;}
+        if(route.equals("exportImport")||route.equals("exportAccount")){put("screen","library");render();message(message);return;}
         if(route.equals("auth")){
-            put("libraryConnect","false");
+            put("libraryConnect","false");put("exportConnect","false");
             authorizationMessage(message);
             return;
         }

@@ -305,6 +305,76 @@ public class HubFlowCheckTest {
         } finally {running.set(false);worker.shutdownNow();restore(settings,oldSettings);restore(credentials,oldCredentials);}
     }
 
+    @Test public void libraryExportImportsMatchesAllPagesAndStopsForReview() throws Exception {
+        var instrumentation=InstrumentationRegistry.getInstrumentation();Context context=instrumentation.getTargetContext();
+        if(android.os.Build.VERSION.SDK_INT>=37)instrumentation.getUiAutomation().grantRuntimePermission(context.getPackageName(),android.Manifest.permission.ACCESS_LOCAL_NETWORK);
+        SharedPreferences settings=context.getSharedPreferences("settings",Context.MODE_PRIVATE),credentials=context.getSharedPreferences("server_credentials",Context.MODE_PRIVATE);
+        Map<String,?> oldSettings=settings.getAll(),oldCredentials=credentials.getAll();
+        AtomicBoolean running=new AtomicBoolean(true);AtomicReference<Throwable> serverFailure=new AtomicReference<>();AtomicReference<String> importId=new AtomicReference<>();
+        AtomicInteger imports=new AtomicInteger(),matches=new AtomicInteger(),accountReads=new AtomicInteger(),reviewReads=new AtomicInteger();
+        String fullUrl="https://www.youtube.com/playlist?list=PLfull",emptyUrl="https://www.youtube.com/playlist?list=PLempty";
+        var worker=Executors.newSingleThreadExecutor();
+        try(ServerSocket server=new ServerSocket(0,5,InetAddress.getByName("127.0.0.1"))) {
+            server.setSoTimeout(500);String base="http://127.0.0.1:"+server.getLocalPort(),token="PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP";
+            var replies=worker.submit(()->{
+                JSONObject review=null;
+                while(running.get())try(Socket socket=server.accept()) {
+                    socket.setSoTimeout(5000);DataInputStream input=new DataInputStream(socket.getInputStream());String[] request=httpLine(input).split(" ");
+                    String header;int length=0;while(!(header=httpLine(input)).isEmpty()){if(header.toLowerCase(java.util.Locale.ROOT).startsWith("content-length:"))length=Integer.parseInt(header.substring(header.indexOf(':')+1).trim());}
+                    byte[] bodyBytes=new byte[length];input.readFully(bodyBytes);JSONObject body=length==0?new JSONObject():new JSONObject(new String(bodyBytes,StandardCharsets.UTF_8));
+                    String method=request[0],path=request[1];JSONObject response;int status=200;
+                    if(path.equals("/health"))response=new JSONObject().put("status","ok");
+                    else if(path.startsWith("/connections/youtube/playlists"))response=new JSONObject().put("provider","youtube").put("nextCursor","").put("items",new JSONArray()
+                            .put(new JSONObject().put("id","full").put("title","보낼 목록").put("itemCount",3).put("privacyStatus","private").put("sourceUrl",fullUrl))
+                            .put(new JSONObject().put("id","empty").put("title","빈 목록").put("itemCount",0).put("privacyStatus","private").put("sourceUrl",emptyUrl)));
+                    else if(path.equals("/accounts/me")){accountReads.incrementAndGet();response=new JSONObject().put("connections",new JSONArray().put(new JSONObject().put("provider","spotify").put("connected",true)).put(new JSONObject().put("provider","youtube").put("connected",true)));}
+                    else if(path.equals("/imports/playlists")) {
+                        assertEquals("POST",method);imports.incrementAndGet();assertEquals("youtube",body.getString("provider"));importId.set(body.getString("id"));
+                        if(body.getString("url").equals(emptyUrl))response=new JSONObject().put("id",importId.get()).put("provider","youtube").put("title","빈 목록").put("items",new JSONArray()).put("saved",false);
+                        else{JSONArray items=new JSONArray();for(int i=0;i<3;i++)items.put(new JSONObject().put("sourceIndex",i).put("track",new JSONObject().put("platform","youtube").put("externalId","vvvvvvvvvv"+i).put("title","원본 곡 "+i).put("artist","검사 가수")));
+                            response=new JSONObject().put("id",importId.get()).put("provider","youtube").put("title","보낼 목록").put("items",items).put("localPlaylistId",importId.get()).put("saved",true);}
+                    } else if(path.equals("/matches")) {
+                        assertEquals("POST",method);int call=matches.incrementAndGet();assertEquals(importId.get(),body.getString("importId"));assertEquals("spotify",body.getString("targetProvider"));
+                        boolean last=call>1;JSONArray rows=new JSONArray();for(int i=0;i<3;i++){JSONObject source=new JSONObject().put("title","원본 곡 "+i).put("artist","검사 가수");JSONObject target=new JSONObject().put("platform","spotify").put("externalId","sp"+i).put("title","대상 곡 "+i).put("artist","검사 가수");
+                            boolean searched=last||i<2;rows.put(new JSONObject().put("sourceIndex",i).put("source",source).put("candidates",searched?new JSONArray().put(new JSONObject().put("track",target)):new JSONArray()).put("status",!searched?"NOT_SEARCHED":i==1?"NEEDS_REVIEW":"MATCHED").put("selected",searched&&i!=1?target:JSONObject.NULL).put("approved",false));}
+                        if(call==1){assertEquals(0,body.optInt("offset",0));review=new JSONObject().put("importId",importId.get()).put("targetProvider","spotify").put("items",rows).put("nextOffset",2);response=review;}
+                        else if(call==2){assertEquals(2,body.getInt("offset"));status=503;response=new JSONObject().put("message","검색 한도를 넘었어요.");}
+                        else{assertEquals(3,call);assertEquals(2,body.getInt("offset"));review=new JSONObject().put("importId",importId.get()).put("targetProvider","spotify").put("items",rows).put("nextOffset",-1);response=review;}
+                    } else if(path.equals("/matches/"+importId.get()+"?targetProvider=spotify")){assertEquals("GET",method);reviewReads.incrementAndGet();assertNotNull(review);response=review;}
+                    else throw new AssertionError("Unexpected test request: "+method+" "+path);
+                    byte[] bytes=response.toString().getBytes(StandardCharsets.UTF_8);socket.getOutputStream().write(("HTTP/1.1 "+status+(status==200?" OK":" Service Unavailable")+"\r\nContent-Type: application/json\r\nContent-Length: "+bytes.length+"\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.UTF_8));socket.getOutputStream().write(bytes);socket.getOutputStream().flush();
+                }catch(SocketTimeoutException timeout){
+                    // Await the next explicit user action on this loopback fixture.
+                }catch(Throwable error){if(running.get())serverFailure.compareAndSet(null,error);return;}
+            });
+            try {
+                assertTrue(settings.edit().putString("server",base).putString("serviceConsent:"+base,ApiClient.CONSENT_VERSION).commit());assertTrue(credentials.edit().putString(base,token).commit());
+                try(ActivityScenario<HubActivity> app=launch(context,"create")) {
+                    ready(app);focused(app);
+                    onView(withText("내 플레이리스트 선택")).perform(scrollTo(),click());ready(app);assertNull("Test server failure",serverFailure.get());
+                    onView(withContentDescription("선택: 보낼 목록")).perform(scrollTo(),click());onView(withContentDescription("선택: 빈 목록")).perform(scrollTo(),click());
+                    onView(withText("다른 플랫폼으로 보내기")).perform(scrollTo(),click());ready(app);
+                    onView(withText("보내기는 한 번에 한 목록씩 할 수 있어요.")).perform(scrollTo()).check(matches(isDisplayed()));assertEquals(0,imports.get());assertEquals(0,accountReads.get());
+                    onView(withContentDescription("선택: 보낼 목록")).perform(scrollTo(),click());
+                    onView(withText("다른 플랫폼으로 보내기")).perform(scrollTo(),click());ready(app);assertNull("Test server failure",serverFailure.get());
+                    onView(withText("가져올 곡이 없어요.")).perform(scrollTo()).check(matches(isDisplayed()));assertEquals(1,imports.get());assertEquals(0,matches.get());
+                    onView(withText("다른 플랫폼으로 보내기")).perform(scrollTo()).check(matches(isDisplayed()));
+                    onView(withContentDescription("선택: 빈 목록")).perform(scrollTo(),click());onView(withContentDescription("선택: 보낼 목록")).perform(scrollTo(),click());
+                    onView(withText("다른 플랫폼으로 보내기")).perform(scrollTo(),click());ready(app);assertNull("Test server failure",serverFailure.get());
+                    assertEquals(2,imports.get());
+                    // The first page of this fixture only reports offsets; the export flow follows nextOffset without a tap and stops at the failed page.
+                    waitUntil(()->matches.get()>=2);ready(app);
+                    onView(withText("이어서 찾기")).perform(scrollTo()).check(matches(isDisplayed()));assertEquals(2,matches.get());
+                    app.recreate();ready(app);focused(app);assertNull("Test server failure",serverFailure.get());
+                    onView(withText("이어서 찾기")).perform(scrollTo()).check(matches(isDisplayed()));assertEquals("Restoring must not resume matching on its own",2,matches.get());assertEquals(1,reviewReads.get());
+                    onView(withText("이어서 찾기")).perform(scrollTo(),click());ready(app);assertNull("Test server failure",serverFailure.get());
+                    assertEquals(3,matches.get());onView(withText("이어서 찾기")).check(doesNotExist());onView(withText("중단")).check(doesNotExist());
+                    assertEquals(2,accountReads.get());
+                }
+            } finally {running.set(false);server.close();replies.get(2,TimeUnit.SECONDS);}
+        } finally {running.set(false);worker.shutdownNow();restore(settings,oldSettings);restore(credentials,oldCredentials);}
+    }
+
     @Test public void automaticVideoImportKeepsManualDraftSeparateAndAllowsRecovery() throws Exception {
         var instrumentation=InstrumentationRegistry.getInstrumentation();Context context=instrumentation.getTargetContext();
         if(android.os.Build.VERSION.SDK_INT>=37)instrumentation.getUiAutomation().grantRuntimePermission(context.getPackageName(),android.Manifest.permission.ACCESS_LOCAL_NETWORK);

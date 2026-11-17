@@ -130,7 +130,7 @@ public class AccountPlaylistCheckTest {
                     app.recreate();ready(app);focused(app);
                     app.onActivity(a->assertEquals("The retained model must keep both choices after rotation",2,requestData(a).optJSONArray("librarySelections").length()));
                     onView(withContentDescription("선택: "+titleA)).check(matches(isChecked()));onView(withContentDescription("선택: "+titleB)).check(matches(isChecked()));onView(withContentDescription("선택: "+titleC)).check(matches(not(isChecked())));
-                    onView(withText("선택한 목록 가져오기")).perform(closeSoftKeyboard(),scrollTo(),click());assertTrue(firstReceived.await(5,TimeUnit.SECONDS));
+                    onView(withText("선택한 목록 앱에 저장")).perform(closeSoftKeyboard(),scrollTo(),click());assertTrue(firstReceived.await(5,TimeUnit.SECONDS));
                     app.recreate();focused(app);onView(isAssignableFrom(LinearProgressIndicator.class)).check(matches(withEffectiveVisibility(Visibility.VISIBLE)));
                     assertEquals(1,firstImports.get());assertEquals(0,secondImports.get());releaseFirst.countDown();waitUntil(()->secondImports.get()==1);ready(app);
                     assertNull("Test server failure",serverFailure.get());onView(withText("가져오기 결과")).perform(closeSoftKeyboard(),scrollTo()).check(matches(isDisplayed()));
