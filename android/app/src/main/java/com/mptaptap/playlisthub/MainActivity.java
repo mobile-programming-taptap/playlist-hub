@@ -769,11 +769,11 @@ public class MainActivity extends AppCompatActivity {
                 JSONObject row = items.optJSONObject(i);
                 if(row.has("trackId") && row.isNull("trackId") && row.optJSONObject("track")!=null){
                     JSONObject external=row.optJSONObject("track");String item=row.optString("id");int index=i;
-                    box.addView(button((i+1)+". "+external.optString("title","다시 확인 필요")+"\n"+external.optString("artist")+" · 가져온 곡",v->externalItemActions(id,item,external,index,items.length())));continue;
+                    trackRow(box,i,external.optString("title","다시 확인 필요"),external.optString("artist")+" · 가져온 곡",external.optString("youtubeVideoId"),external.optString("artworkUrl"),v->externalItemActions(id,item,external,index,items.length()));continue;
                 }
                 try {
                     Track track = TrackJson.read(row.getJSONObject("track")); String item = row.getString("id"); int index=i;
-                    box.addView(button((i+1) + ". " + track.title + "\n" + track.artist, v -> itemActions(id, item, track, index, items.length())));
+                    trackRow(box,i,track.title,track.artist,track.youtubeVideoId,track.artworkUrl,v -> itemActions(id, item, track, index, items.length()));
                 } catch (Exception e) { box.addView(text("곡 정보를 불러오지 못했어요.", 14, false)); }
             }
             restoreLibraryScroll();
@@ -808,9 +808,24 @@ public class MainActivity extends AppCompatActivity {
             JSONObject row=lists.optJSONObject(i);
             if (!Track.matches(row.optString("title"), query)) continue;
             String id=row.optString("id"); count++;
-            MaterialButton playlist=button(row.optString("title") + "\n" + row.optInt("size") + "곡", v -> openPlaylist(id));playlist.setIconResource(R.drawable.ic_library);rows.addView(playlist);
+            View playlist=mediaRow(rows,row.optString("title"),row.optInt("size") + "곡", v -> openPlaylist(id));
+            ImageView thumb=playlist.findViewById(R.id.row_artwork);thumb.setScaleType(ImageView.ScaleType.CENTER);thumb.setImageResource(R.drawable.ic_library);
         }
         if (count==0) rows.addView(text(query.trim().isEmpty() ? "아직 저장한 목록이 없어요.\n추천 곡에서 ‘목록에 저장’을 눌러보세요." : "검색한 이름의 목록이 없어요.", 16, false));
+    }
+
+    private View mediaRow(LinearLayout parent,String title,String subtitle,View.OnClickListener action) {
+        View row=LayoutInflater.from(this).inflate(R.layout.item_media_row,parent,false);
+        ((TextView)row.findViewById(R.id.row_title)).setText(title);((TextView)row.findViewById(R.id.row_subtitle)).setText(subtitle);
+        row.setContentDescription(title+", "+subtitle);row.setOnClickListener(v->{if(!busy)action.onClick(v);});parent.addView(row);return row;
+    }
+
+    private void trackRow(LinearLayout parent,int position,String title,String subtitle,String videoId,String artworkUrl,View.OnClickListener action) {
+        View row=mediaRow(parent,title,subtitle,action);
+        TextView index=row.findViewById(R.id.row_index);index.setText(String.valueOf(position+1));index.setVisibility(View.VISIBLE);
+        ((ImageView)row.findViewById(R.id.row_trailing)).setImageResource(R.drawable.ic_more);
+        row.setContentDescription((position+1)+". "+title+", "+subtitle);
+        artwork.load(row.findViewById(R.id.row_artwork),videoId,artworkUrl,null);
     }
 
     private EditText searchField(String hint, Consumer<String> change) {
