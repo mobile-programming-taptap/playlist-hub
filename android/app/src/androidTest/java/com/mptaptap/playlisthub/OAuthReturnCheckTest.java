@@ -88,6 +88,22 @@ public class OAuthReturnCheckTest {
         }
     }
 
+    @Test public void authorizationErrorAppearsDirectlyBelowTheAccountConnectButton() throws Exception {
+        try(Fixture fixture=new Fixture();ActivityScenario<HubActivity> app=fixture.account()){
+            ready(app);
+            onView(withText("브라우저에서 연결")).perform(scrollTo(),click());
+            ready(app);
+            onView(withText("YouTube Music 연결 설정을 확인해 주세요.")).check((view,error)->{
+                if(error!=null)throw error;
+                var card=(android.view.ViewGroup)view.getParent();
+                var previous=(android.widget.TextView)card.getChildAt(card.indexOfChild(view)-1);
+                assertEquals("브라우저에서 연결",previous.getText().toString());
+                assertEquals(android.view.View.VISIBLE,view.getVisibility());
+            });
+            onView(withText("같은 요청 다시 시도")).check(doesNotExist());
+        }
+    }
+
     @Test public void anonymousDeletionUsesNoProofAndFailuresCannotDeleteAReplacementOwner() throws Exception {
         try(Fixture fixture=new Fixture()){
             fixture.anonymous.set(true);fixture.rejectedDeletion.set(true);
@@ -138,6 +154,8 @@ public class OAuthReturnCheckTest {
                 while(!(header=input.readLine()).isEmpty()){if(header.equals("Authorization: Bearer "+activeToken))authenticated=true;if(header.toLowerCase(java.util.Locale.ROOT).startsWith("content-length:"))length=Integer.parseInt(header.substring(header.indexOf(':')+1).trim());}
                 if(!line[1].equals("/health")&&!line[1].equals("/sessions"))assertTrue(authenticated);assertEquals(0,length);String body;int status=200;
                 switch(line[1]){
+                    case "/connections/youtube/start":
+                        assertEquals("POST",line[0]);status=503;body="{\"message\":\"YouTube Music 연결 설정을 확인해 주세요.\"}";break;
                     case "/health":body="{\"status\":\"ok\"}";break;
                     case "/sessions":assertEquals("POST",line[0]);assertEquals("",activeToken);sessions++;activeToken=repeat('N');anonymous.set(true);body="{\"token\":\""+activeToken+"\"}";break;
                     case "/accounts/me":
