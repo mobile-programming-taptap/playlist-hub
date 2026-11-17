@@ -61,6 +61,14 @@ final class ExportReview {
         return (source==null?(index+1)+"번째 곡":song(source))+" · "+(state.equals("FAILED")?"실패 · 다시 시도할 수 있어요":state.equals("ADDED")?"전송 완료":state.equals("PENDING")?"전송 대기":"전송 결과 확인 필요");
     }
 
+    /** The Bundle copy of user/auto choices; keeps the auto flag so the confirm dialog still counts auto picks after restore. */
+    static JSONArray savedSelections(JSONArray selections) {
+        JSONArray saved=new JSONArray();if(selections==null)return saved;
+        for(int i=0;i<selections.length();i++){JSONObject row=selections.optJSONObject(i);if(row==null)continue;
+            try{saved.put(new JSONObject().put("sourceIndex",row.optInt("sourceIndex")).put("targetId",row.optString("targetId")).put("excluded",row.optBoolean("excluded")).put("auto",row.optBoolean("auto")));}
+            catch(JSONException error){throw new IllegalStateException(error);}}
+        return saved;
+    }
     static JSONObject find(JSONArray rows,int index){if(rows!=null)for(int i=0;i<rows.length();i++){JSONObject row=rows.optJSONObject(i);if(row!=null&&row.optInt("sourceIndex",i)==index)return row;}return null;}
     private static JSONArray copy(JSONArray rows){JSONArray result=new JSONArray();if(rows!=null)for(int i=0;i<rows.length();i++)result.put(rows.opt(i));return result;}
     private static JSONObject selection(int index,String targetId,boolean excluded,String label) {

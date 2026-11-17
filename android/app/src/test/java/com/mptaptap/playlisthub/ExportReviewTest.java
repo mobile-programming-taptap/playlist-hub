@@ -54,4 +54,9 @@ public class ExportReviewTest {
         assertEquals("A · B · 전송 완료",ExportReview.transferLine(new JSONObject().put("sourceIndex",0).put("status","ADDED"),items()));
         assertEquals("8번째 곡 · 전송 대기",ExportReview.transferLine(new JSONObject().put("sourceIndex",7).put("status","PENDING"),items()));
     }
+    @Test public void savedSelectionsKeepAutoFlag()throws Exception{
+        JSONArray selections=ExportReview.autoSelect(items(),new JSONArray());
+        JSONArray saved=new JSONArray(ExportReview.savedSelections(selections).toString());
+        assertEquals(1,ExportReview.autoCount(saved));assertEquals("sp1",find(saved,0).getString("targetId"));assertTrue(find(saved,2).getBoolean("excluded"));
+    }
 }
