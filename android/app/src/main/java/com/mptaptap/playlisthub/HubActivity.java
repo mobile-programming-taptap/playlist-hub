@@ -11,6 +11,7 @@ import android.text.InputFilter;
 import android.text.InputType;
 import android.text.TextWatcher;
 import android.view.Gravity;
+import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.CheckBox;
@@ -269,11 +270,15 @@ public final class HubActivity extends AppCompatActivity {
         if(rows.length()==0)paragraph(value("libraryLoaded").equals("true")?"연결된 계정에 가져올 플레이리스트가 없어요.":"계정을 연결하면 내 플레이리스트를 불러올 수 있어요.");
         for(int i=0;i<rows.length();i++) {
             JSONObject row=rows.optJSONObject(i);if(row==null)continue;String id=row.optString("id"),title=row.optString("title","이름 없는 플레이리스트");
-            LinearLayout box=card(content),line=new LinearLayout(this);line.setGravity(Gravity.CENTER_VERTICAL);box.addView(line);
-            CheckBox check=new CheckBox(this);TapTapUi.checkbox(check);check.setContentDescription("선택: "+title);check.setChecked(find(array("librarySelections"),"id",id)!=null);controls.add(check);line.addView(check,new LinearLayout.LayoutParams(dp(48),-2));
-            LinearLayout labels=column();line.addView(labels,new LinearLayout.LayoutParams(0,-2,1));labels.addView(text(title,16,true));int count=row.optInt("itemCount",-1);String privacy=row.optString("privacyStatus");
-            labels.addView(text((count<0?"곡 수 확인 필요":count+"곡")+" · "+(privacy.equals("private")?"비공개":privacy.equals("public")?"공개":privacy.equals("unlisted")?"일부 공개":"공개 상태 확인 필요"),13,false));
-            labels.setOnClickListener(v->{if(!requests.busy())check.setChecked(!check.isChecked());});
+            View line=LayoutInflater.from(this).inflate(R.layout.item_media_row,content,false);content.addView(line);
+            android.widget.ImageView thumb=line.findViewById(R.id.row_artwork);thumb.setScaleType(android.widget.ImageView.ScaleType.CENTER);thumb.setImageResource(R.drawable.ic_library);
+            line.findViewById(R.id.row_trailing).setVisibility(View.GONE);
+            CheckBox check=line.findViewById(R.id.row_check);check.setVisibility(View.VISIBLE);TapTapUi.checkbox(check);check.setContentDescription("선택: "+title);check.setChecked(find(array("librarySelections"),"id",id)!=null);controls.add(check);
+            int count=row.optInt("itemCount",-1);String privacy=row.optString("privacyStatus");
+            ((TextView)line.findViewById(R.id.row_title)).setText(title);
+            ((TextView)line.findViewById(R.id.row_subtitle)).setText((count<0?"곡 수 확인 필요":count+"곡")+" · "+(privacy.equals("private")?"비공개":privacy.equals("public")?"공개":privacy.equals("unlisted")?"일부 공개":"공개 상태 확인 필요"));
+            line.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);controls.add(line);
+            line.setOnClickListener(v->{if(!requests.busy())check.setChecked(!check.isChecked());});
             check.setOnCheckedChangeListener((v,checked)->{
                 JSONArray selected=array("librarySelections");
                 if(checked&&selected.length()>=20){check.setChecked(false);message("한 번에 20개 목록까지 선택할 수 있어요.");return;}
@@ -492,14 +497,17 @@ public final class HubActivity extends AppCompatActivity {
         for(int i=0;i<entries.length();i++) {
             JSONObject row=entries.optJSONObject(i);if(row==null)continue;int index=row.optInt("sourceIndex",i);
             JSONObject track=row.optJSONObject("track"),edit=edit(index,track==null?row:track);
-            boolean timeline=imported.has("entries");LinearLayout box=card(content);
-            box.addView(text((index+1)+". "+(timeline?row.optString("timestamp"):"가져온 곡"),15,true));
+            boolean timeline=imported.has("entries");View item=LayoutInflater.from(this).inflate(R.layout.item_import_track,content,false);content.addView(item);LinearLayout box=item.findViewById(R.id.import_body);
+            View header=item.findViewById(R.id.import_header);TextView heading=item.findViewById(R.id.import_title),meta=item.findViewById(R.id.import_meta);
+            String label=timeline?row.optString("timestamp"):"가져온 곡";((TextView)item.findViewById(R.id.import_index)).setText(String.valueOf(index+1));
+            Runnable summary=()->{String title=edit.optString("title").trim(),artist=edit.optString("artist").trim();heading.setText(title.isEmpty()?"곡명 입력 필요":title);meta.setText(artist.isEmpty()?label:artist+" · "+label);};summary.run();
             if(timeline&&!row.optString("sourceRow").isEmpty())addButton(box,"원문과 시간 보기",()->dialog().setTitle("영상 설명 원문").setMessage(row.optString("sourceRow")).setPositiveButton("닫기",null).show());
-            if(row.optBoolean("needsReview"))box.addView(text("곡명과 아티스트를 확인해 주세요.",13,false));
-            CheckBox include=new CheckBox(this);include.setText("이 곡 포함");TapTapUi.checkbox(include);
+            if(row.optBoolean("needsReview"))item.findViewById(R.id.import_badge).setVisibility(View.VISIBLE);
+            CheckBox include=item.findViewById(R.id.import_include);TapTapUi.checkbox(include);include.setContentDescription((index+1)+"번 곡 포함");
             if(timeline&&row.optInt("seconds",row.optInt("startSeconds",-1))<0&&!edit.has("excluded"))set(edit,"excluded",true);
-            include.setChecked(!edit.optBoolean("excluded"));include.setOnCheckedChangeListener((v,checked)->{set(edit,"excluded",!checked);set(edit,"edited",true);});controls.add(include);box.addView(include);
-            rowField(box,"곡명",edit,"title");rowField(box,"아티스트",edit,"artist");
+            include.setChecked(!edit.optBoolean("excluded"));header.setAlpha(edit.optBoolean("excluded")?0.5f:1f);
+            include.setOnCheckedChangeListener((v,checked)->{set(edit,"excluded",!checked);set(edit,"edited",true);header.setAlpha(checked?1f:0.5f);});controls.add(include);
+            rowField(box,"곡명",edit,"title").addTextChangedListener(watcher(text->summary.run()));rowField(box,"아티스트",edit,"artist").addTextChangedListener(watcher(text->summary.run()));
             if(timeline){if(!edit.has("seconds"))set(edit,"seconds",row.optInt("seconds",row.optInt("startSeconds",-1)));EditText time=rowField(box,"시작 시간 (초)",edit,"seconds");time.setInputType(InputType.TYPE_CLASS_NUMBER|InputType.TYPE_NUMBER_FLAG_SIGNED);}
             String sourceUrl=row.optString("sourceUrl",track==null?"":track.optString("sourceUrl"));
             if(timeline)addButton(box,"원본 영상의 이 시간 열기",()->{

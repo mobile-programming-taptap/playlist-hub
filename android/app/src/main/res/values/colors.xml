@@ -11,5 +11,6 @@
     <color name="deck_accent">#D9FF00</color><color name="like_green">#23C768</color><color name="dislike_red">#F83E60</color>
     <color name="card_surface">@color/deck_surface</color><color name="card_ink">#FFFFFF</color>
     <color name="card_muted">@color/deck_muted</color><color name="card_teal">@color/deck_accent</color>
+    <color name="row_pressed">#24FFFFFF</color>
     <color name="card_line">#343D42</color><color name="control_play">#11171B</color>
 </resources>

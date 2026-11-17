@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Spotify-style list row shared by 내 목록, its tracks and the playlist import picker. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="72dp" android:orientation="horizontal" android:gravity="center_vertical"
+    android:paddingStart="4dp" android:paddingEnd="4dp" android:paddingTop="6dp" android:paddingBottom="6dp"
+    android:background="@drawable/row_background" android:clickable="true" android:focusable="true">
+    <TextView android:id="@+id/row_index" android:layout_width="28dp" android:layout_height="wrap_content" android:gravity="center" android:textColor="@color/muted" android:textSize="13sp" android:visibility="gone" android:importantForAccessibility="no" />
+    <com.google.android.material.imageview.ShapeableImageView android:id="@+id/row_artwork" android:layout_width="52dp" android:layout_height="52dp" android:layout_marginStart="4dp"
+        android:scaleType="centerCrop" android:src="@drawable/ic_artwork_placeholder" android:background="@color/surface" android:importantForAccessibility="no" app:shapeAppearanceOverlay="@style/ShapeAppearance.TapTap.Thumb" />
+    <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:layout_marginStart="12dp" android:layout_marginEnd="8dp" android:orientation="vertical">
+        <TextView android:id="@+id/row_title" android:layout_width="match_parent" android:layout_height="wrap_content" android:maxLines="1" android:ellipsize="end" android:textColor="@color/ink" android:textSize="16sp" android:fontFamily="@font/pretendard_semibold" app:fontFamily="@font/pretendard_semibold" />
+        <TextView android:id="@+id/row_subtitle" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="4dp" android:maxLines="1" android:ellipsize="end" android:textColor="@color/muted" android:textSize="13sp" android:fontFamily="@font/pretendard" app:fontFamily="@font/pretendard" />
+    </LinearLayout>
+    <CheckBox android:id="@+id/row_check" android:layout_width="48dp" android:layout_height="48dp" android:visibility="gone" />
+    <ImageView android:id="@+id/row_trailing" android:layout_width="40dp" android:layout_height="40dp" android:padding="10dp" android:src="@drawable/ic_chevron_right" android:importantForAccessibility="no" />
+</LinearLayout>
