@@ -67,7 +67,9 @@ public final class HubActivity extends AppCompatActivity {
     @Override protected void onCreate(Bundle saved) {
         super.onCreate(saved);EdgeToEdge.enable(this);
         requests=new ViewModelProvider(this).get(HubRequest.class);
-        mode=saved==null?getIntent().getStringExtra("mode"):saved.getString("hubMode",getIntent().getStringExtra("mode"));if(mode==null)mode=Intent.ACTION_MAIN.equals(getIntent().getAction())?"welcome":"create";
+        mode=saved==null?getIntent().getStringExtra("mode"):saved.getString("hubMode",getIntent().getStringExtra("mode"));
+        // In-app entries always pass a mode or callback data; an external launch may omit ACTION_MAIN (e.g. the installer's "Open").
+        if(mode==null)mode="welcome";
         boolean callback=getIntent().getData()!=null;if(callback&&saved==null)mode="account";
         base=serverBase();
         boolean changed=requests.synchronize(this,base);
