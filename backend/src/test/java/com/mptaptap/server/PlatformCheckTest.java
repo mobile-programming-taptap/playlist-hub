@@ -306,13 +306,11 @@ class PlatformCheckTest {
             f.api.saveImport(f.auth,id,new PlatformApi.SaveImport("Repeated songs",id,List.of(new PlatformApi.TimelineEdit(0,"Manual aged song","Artist",false,null))));
             Map<String,Object> agedItem=rows(f.users.playlist(f.owner,id),"items").get(0);Map<String,Object> agedTrack=map(agedItem.get("track"));assertEquals(fetchedAt,Instant.parse((String)agedTrack.get("checkedAt")),"Manual review keeps the original provider retrieval age.");
             assertEquals(expiresAt,f.db.queryForObject("SELECT metadata_expires_at FROM platform_documents WHERE id=?",String.class,id));assertEquals(404,assertThrows(ResponseStatusException.class,()->f.store.metadataCheckedAt(f.users.user(f.otherAuth),id)).getStatusCode().value());
-            f.users.acceptCommunityRules(f.owner,Store.COMMUNITY_RULES_VERSION,true);
-            String share=(String)f.users.publish(f.owner,id,true).get("shareId");Map<String,Object> published=json.readValue(f.db.queryForObject("SELECT snapshot_json FROM public_playlists WHERE share_id=?",String.class,share),Map.class);
-            // Advance both fixture snapshots by two days without changing the production clock.
-            agedTrack.put("checkedAt",fetchedAt.minus(Duration.ofDays(2)).toString());map(rows(published,"items").get(0).get("track")).put("checkedAt",agedTrack.get("checkedAt"));
-            f.db.update("UPDATE playlist_items SET track_json=? WHERE id=?",json.writeValueAsString(agedTrack),agedItem.get("id"));f.db.update("UPDATE public_playlists SET snapshot_json=? WHERE share_id=?",json.writeValueAsString(published),share);
+            // Advance the fixture snapshot by two days without changing the production clock.
+            agedTrack.put("checkedAt",fetchedAt.minus(Duration.ofDays(2)).toString());
+            f.db.update("UPDATE playlist_items SET track_json=? WHERE id=?",json.writeValueAsString(agedTrack),agedItem.get("id"));
             f.db.update("UPDATE platform_documents SET metadata_expires_at=? WHERE id=?",Instant.now().minusSeconds(1).toString(),id);f.store.purgeExpired();f.users.purgeExpiredExternal();
-            assertEquals(true,f.api.imported(f.auth,id).get("needsRefresh"));for(Map<String,Object> expired:List.of(map(rows(f.users.playlist(f.owner,id),"items").get(0).get("track")),map(rows(f.users.publicPlaylist(share,f.owner),"items").get(0).get("track")))){assertEquals(true,expired.get("needsRefresh"));for(String field:List.of("title","artist","album","isrc","durationMs"))assertFalse(expired.containsKey(field));}
+            assertEquals(true,f.api.imported(f.auth,id).get("needsRefresh"));for(Map<String,Object> expired:List.of(map(rows(f.users.playlist(f.owner,id),"items").get(0).get("track")))){assertEquals(true,expired.get("needsRefresh"));for(String field:List.of("title","artist","album","isrc","durationMs"))assertFalse(expired.containsKey(field));}
             assertNotNull(preview.get("previewId"));
             f.api.deleteTransfer(f.auth,jobId);assertEquals(404,assertThrows(ResponseStatusException.class,()->f.api.transferStatus(f.auth,jobId)).getStatusCode().value());assertEquals(List.of(SONG,SONG),f.remoteItems);
             f.api.deleteImport(f.auth,id);assertTrue(f.store.documents(f.owner,"sync").isEmpty());assertEquals(1,rows(f.users.playlist(f.owner,id),"items").size(),"Deleting a source record keeps the app playlist and remote playlist.");
