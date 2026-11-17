@@ -131,9 +131,7 @@ public final class HubActivity extends AppCompatActivity {
         JSONArray edited=new JSONArray(),edits=requests.data.optJSONArray("edits");
         if(edits!=null)for(int i=0;i<edits.length();i++){JSONObject row=edits.optJSONObject(i);if(row!=null&&row.optBoolean("edited"))edited.put(row);}
         out.putString("edits",edited.toString());
-        JSONArray selections=new JSONArray(),chosen=requests.data.optJSONArray("selections");
-        if(chosen!=null)for(int i=0;i<chosen.length();i++){JSONObject row=chosen.optJSONObject(i);if(row!=null)selections.put(json("sourceIndex",row.optInt("sourceIndex"),"targetId",row.optString("targetId"),"excluded",row.optBoolean("excluded")));}
-        out.putString("selections",selections.toString());
+        out.putString("selections",ExportReview.savedSelections(requests.data.optJSONArray("selections")).toString());
         for(String key:new String[]{"libraryItems","librarySelections","batchImports"})if(requests.data.has(key))out.putString(key,array(key).toString());
         super.onSaveInstanceState(out);
     }
@@ -320,7 +318,7 @@ public final class HubActivity extends AppCompatActivity {
         if(next>=0) {
             paragraph(total+"곡 중 "+next+"곡 찾는 중");
             if(value("exportStopped").equals("true"))addPrimaryButton(content,"이어서 찾기",()->{put("exportStopped","false");render();nextExportMatch(next);});
-            else{MaterialButton stop=button("중단",()->{put("exportStopped","true");render();});content.addView(stop,new LinearLayout.LayoutParams(-1,-2));}
+            else{MaterialButton stop=button("중단",()->{});controls.remove(stop);stop.setOnClickListener(v->{put("exportStopped","true");render();});content.addView(stop,new LinearLayout.LayoutParams(-1,-2));}
         }
         if(items==null)return;
         field(content,"새 목록 이름","listTitle",80,false);
@@ -725,7 +723,7 @@ public final class HubActivity extends AppCompatActivity {
                 else if(value("deletingKind").equals("transfer")&&value("deletingId").equals(value("transferId"))){requests.data.remove("transferId");requests.data.remove("transferKey");requests.data.remove("transfer");}
                 requests.data.remove("deletingKind");requests.data.remove("deletingId");requests.data.remove("history");put("screen","history");render();reload();return;
             case "auth":
-                try{requests.rememberAuthorization(this,base,value("authorizationProvider"),value("screen").equals("library"));}
+                try{requests.rememberAuthorization(this,base,value("authorizationProvider"),value("screen").equals("library")&&!value("exportConnect").equals("true"));}
                 catch(IllegalStateException error){authorizationMessage(error.getMessage());return;}
                 if(open(value.optString("authorizationUrl"),this::authorizationMessage))authorizationMessage("브라우저에서 연결을 마친 뒤 돌아와 주세요.");
                 else{requests.forgetAuthorization(this);put("libraryConnect","false");put("authorizationPending",false);}
