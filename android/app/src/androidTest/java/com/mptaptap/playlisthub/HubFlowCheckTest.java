@@ -36,15 +36,12 @@ import org.json.JSONObject;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import static androidx.test.espresso.Espresso.onView;
-import static androidx.test.espresso.Espresso.onData;
 import static androidx.test.espresso.action.ViewActions.*;
 import static androidx.test.espresso.assertion.ViewAssertions.matches;
 import static androidx.test.espresso.assertion.ViewAssertions.doesNotExist;
 import static androidx.test.espresso.matcher.ViewMatchers.*;
 import static androidx.test.espresso.matcher.RootMatchers.isDialog;
 import static org.hamcrest.Matchers.allOf;
-import static org.hamcrest.Matchers.is;
-import static org.hamcrest.Matchers.instanceOf;
 import static org.junit.Assert.*;
 import static org.junit.Assume.assumeTrue;
 
@@ -254,9 +251,9 @@ public class HubFlowCheckTest {
                 assertTrue(settings.edit().putString("server",base).putString("serviceConsent:"+base,ApiClient.CONSENT_VERSION).commit());assertTrue(credentials.edit().putString(base,token).commit());
                 try(ActivityScenario<HubActivity> app=launch(context,"create")) {
                     ready(app);focused(app);app.onActivity(a->assertFalse("Cold creation must wait for an explicit field tap",a.getCurrentFocus() instanceof android.widget.EditText));
-                    onView(isAssignableFrom(android.widget.Spinner.class)).check((view,error)->{if(error!=null)throw error;var choices=((android.widget.Spinner)view).getAdapter();assertEquals(2,choices.getCount());assertEquals("Spotify",choices.getItem(0));assertEquals("YouTube Music",choices.getItem(1));});
+                    onView(providerOption("Spotify")).check(matches(isChecked()));onView(providerOption("YouTube Music")).check(matches(isNotChecked()));
                     app.onActivity(a->hubDraft(a,"sourceProvider","apple_music"));app.recreate();ready(app);focused(app);
-                    onView(isAssignableFrom(android.widget.Spinner.class)).check(doesNotExist());
+                    onView(providerOption("Spotify")).check(doesNotExist());
                     onView(withText("이전에 선택한 서비스는 지원하지 않아요. 음악 서비스를 다시 선택해 주세요.")).perform(scrollTo()).check(matches(isDisplayed()));
                     onView(withText("링크로 직접 가져오기")).perform(closeSoftKeyboard(),scrollTo(),click());
                     onView(withText("플레이리스트 가져오기")).perform(closeSoftKeyboard(),scrollTo(),click());ready(app);
@@ -265,12 +262,16 @@ public class HubFlowCheckTest {
                     onView(withHint("플레이리스트 주소")).perform(scrollTo(),replaceText(sourceUrl),closeSoftKeyboard());
                     onView(withHint("새 목록 이름")).perform(scrollTo(),replaceText(listTitle),closeSoftKeyboard());onView(withText("플레이리스트 가져오기")).perform(scrollTo(),click());ready(app);
                     assertNull("Test server failure",serverFailure.get());onView(withText(notice)).perform(scrollTo()).check(matches(isDisplayed()));
-                    onView(withText("3. 가져온 곡")).perform(scrollTo()).check(matches(isDisplayed()));onView(withText("5. 가져온 곡")).perform(scrollTo()).check(matches(isDisplayed()));
-                    onView(allOf(withHint("곡명"),hasSibling(withText("1. 가져온 곡")))).perform(scrollTo(),replaceText("수정한 곡 A"),closeSoftKeyboard());
-                    onView(withText("선택한 곡을 앱 목록에 저장")).perform(scrollTo(),click());ready(app);
+                    onView(importRow(3)).perform(scrollTo()).check(matches(isDisplayed()));onView(importRow(5)).perform(scrollTo()).check(matches(isDisplayed()));
+                    onView(saveButton()).check(matches(withText("선택한 곡을 앱 목록에 저장 (3곡)")));
+                    onView(withText("전체 선택")).perform(scrollTo(),click());onView(saveButton()).check(matches(withText("선택한 곡을 앱 목록에 저장 (0곡)")));
+                    onView(withText("전체 선택")).perform(scrollTo(),click());onView(rowCheck(3)).perform(scrollTo(),click());onView(saveButton()).check(matches(withText("선택한 곡을 앱 목록에 저장 (2곡)")));onView(withText("전체 선택")).check(matches(isNotChecked()));
+                    onView(rowCheck(3)).perform(scrollTo(),click());onView(withText("전체 선택")).check(matches(isChecked()));
+                    onView(rowEditor(1,"곡명")).check(doesNotExist());openRow(1);
+                    onView(rowEditor(1,"곡명")).perform(scrollTo(),replaceText("수정한 곡 A"),closeSoftKeyboard());
+                    onView(saveButton()).perform(scrollTo(),click());ready(app);
                     onView(withText("내 목록에 저장했어요")).inRoot(isDialog()).check(matches(isDisplayed()));onView(withText("계속 보기")).inRoot(isDialog()).perform(click());assertEquals(1,saves.get());assertEquals(3,savedRows.get().length());
-                    onView(isAssignableFrom(android.widget.Spinner.class)).check((view,error)->{if(error!=null)throw error;var choices=((android.widget.Spinner)view).getAdapter();assertEquals(2,choices.getCount());assertEquals("Spotify",choices.getItem(0));assertEquals("YouTube Music",choices.getItem(1));});
-                    onView(isAssignableFrom(android.widget.Spinner.class)).perform(scrollTo(),click());onData(allOf(is(instanceOf(String.class)),is("YouTube Music"))).perform(click());
+                    onView(providerOption("YouTube Music")).perform(scrollTo(),click()).check(matches(isChecked()));onView(providerOption("Spotify")).check(matches(isNotChecked()));
                     onView(withText("대상 플랫폼의 곡 후보 찾기")).perform(scrollTo(),click());ready(app);assertNull("Test server failure",serverFailure.get());
                     onView(withText("일치 후보 있음 · 선택해 주세요")).perform(scrollTo()).check(matches(isDisplayed()));
                     onView(withText("확인 필요 · 곡과 버전을 비교해 주세요")).perform(scrollTo()).check(matches(isDisplayed()));
@@ -370,13 +371,13 @@ public class HubFlowCheckTest {
                     onView(withText(failureMessage)).perform(scrollTo()).check(matches(isDisplayed()));onView(withHint("영상 설명의 시간표 붙여넣기")).check(matches(withText(draft)));
                     onView(withText("같은 요청 다시 시도")).perform(scrollTo(),click());ready(app);
                     assertNull("Test server failure",serverFailure.get());assertEquals(3,automatic.get());
-                    onView(withHint("곡명")).check(matches(withText("자동으로 가져온 곡")));
+                    openRow(1);onView(withHint("곡명")).check(matches(withText("자동으로 가져온 곡")));
                     onView(withContentDescription("돌아가기")).perform(closeSoftKeyboard(),click());ready(app);
                     onView(withText("직접 입력 닫기")).perform(scrollTo(),click());app.recreate();ready(app);focused(app);
                     onView(withHint("영상 설명의 시간표 붙여넣기")).check(matches(withEffectiveVisibility(Visibility.GONE)));
                     onView(withText("직접 시간표 입력")).perform(closeSoftKeyboard(),scrollTo(),click());onView(withHint("영상 설명의 시간표 붙여넣기")).check(matches(withText(draft)));
                     onView(withText("입력한 시간표로 만들기")).perform(scrollTo(),click());ready(app);
-                    assertNull("Test server failure",serverFailure.get());assertEquals(1,manual.get());onView(withHint("곡명")).check(matches(withText("직접 입력 곡")));
+                    assertNull("Test server failure",serverFailure.get());assertEquals(1,manual.get());openRow(1);onView(withHint("곡명")).check(matches(withText("직접 입력 곡")));
                     app.recreate();ready(app);focused(app);onView(withHint("곡명")).check(matches(withText("직접 입력 곡")));
                     assertNull("Test server failure",serverFailure.get());assertEquals(3,automatic.get());assertEquals(1,manual.get());assertNotEquals(automaticId.get(),manualId.get());assertEquals(token,credentials.getString(base,""));
                 }
@@ -501,14 +502,14 @@ public class HubFlowCheckTest {
                 onView(withHint("YouTube 영상 주소")).check(matches(withText("https://www.youtube.com/watch?v=dQw4w9WgXcQ")));
                 onView(withText("입력한 시간표로 만들기")).perform(closeSoftKeyboard(),scrollTo(),click());ready(app);
                 onView(withHint("새 목록 이름")).perform(scrollTo(),replaceText(title),closeSoftKeyboard());
-                onView(allOf(withHint("곡명"),hasSibling(withText("1. 00:00")))).perform(scrollTo(),replaceText("Reviewed Sample"),closeSoftKeyboard());
-                onView(allOf(withHint("시작 시간 (초)"),hasSibling(withText("1. 00:00")))).perform(scrollTo(),replaceText("-1"),closeSoftKeyboard());
+                openRow(1);onView(rowEditor(1,"곡명")).perform(scrollTo(),replaceText("Reviewed Sample"),closeSoftKeyboard());
+                onView(rowEditor(1,"시작 시간 (초)")).perform(scrollTo(),replaceText("-1"),closeSoftKeyboard());
                 timelineOpen(null);onView(withText("시작 시간이 영상 범위를 벗어났어요. 시간을 수정하거나 곡을 제외해 주세요.")).perform(scrollTo()).check(matches(isDisplayed()));
-                onView(allOf(withHint("시작 시간 (초)"),hasSibling(withText("1. 00:00")))).perform(scrollTo(),replaceText("21601"),closeSoftKeyboard());
+                onView(rowEditor(1,"시작 시간 (초)")).perform(scrollTo(),replaceText("21601"),closeSoftKeyboard());
                 timelineOpen(null);onView(withText("시작 시간이 영상 범위를 벗어났어요. 시간을 수정하거나 곡을 제외해 주세요.")).perform(scrollTo()).check(matches(isDisplayed()));
-                onView(allOf(withHint("시작 시간 (초)"),hasSibling(withText("1. 00:00")))).perform(scrollTo(),replaceText("10"),closeSoftKeyboard());
+                onView(rowEditor(1,"시작 시간 (초)")).perform(scrollTo(),replaceText("10"),closeSoftKeyboard());
                 timelineOpen("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=10s");
-                onView(withText("선택한 곡을 앱 목록에 저장")).perform(scrollTo(),click());ready(app);
+                onView(saveButton()).perform(scrollTo(),click());ready(app);
             }
             JSONArray lists=client.array("/playlists");String converted=null;
             for(int i=0;i<lists.length();i++)if(lists.getJSONObject(i).getString("title").equals(title))converted=lists.getJSONObject(i).getString("id");
@@ -520,8 +521,8 @@ public class HubFlowCheckTest {
             try(ActivityScenario<HubActivity> app=launch(context,"create")) {
                 ready(app);onView(withContentDescription("이전 변환 · 가져오기 · 전송 기록")).perform(click());ready(app);
                 onView(withText("목록 검토 · 변경 확인")).perform(scrollTo(),click());ready(app);
-                onView(allOf(withHint("곡명"),hasSibling(withText("1. 00:00")))).check(matches(withText("Reviewed Sample")));
-                onView(allOf(withHint("시작 시간 (초)"),hasSibling(withText("1. 00:00")))).check(matches(withText("10")));
+                openRow(1);onView(rowEditor(1,"곡명")).check(matches(withText("Reviewed Sample")));
+                onView(rowEditor(1,"시작 시간 (초)")).check(matches(withText("10")));
                 timelineOpen("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=10s");
                 onView(withHint("새 목록 이름")).perform(scrollTo(),replaceText("미제출 기록 초안"),closeSoftKeyboard());app.recreate();ready(app);
                 onView(withHint("새 목록 이름")).check(matches(withText("미제출 기록 초안")));
@@ -555,17 +556,17 @@ public class HubFlowCheckTest {
             try(ActivityScenario<HubActivity> app=launch(context,"create")) {
                 ready(app);onView(withContentDescription("이전 변환 · 가져오기 · 전송 기록")).perform(click());ready(app);
                 onView(allOf(withText("목록 검토 · 변경 확인"),hasSibling(withText("사용자 타임라인")))).perform(scrollTo(),click());ready(app);
-                timelineOpen("1. 01:00","https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=60s");
-                onView(allOf(withHint("시작 시간 (초)"),hasSibling(withText("1. 01:00")))).perform(scrollTo(),replaceText("21601"),closeSoftKeyboard());
-                timelineOpen("1. 01:00",null);
-                onView(withText("선택한 곡을 앱 목록에 저장")).perform(scrollTo(),click());ready(app);
+                openRow(1);timelineOpen("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=60s");
+                onView(rowEditor(1,"시작 시간 (초)")).perform(scrollTo(),replaceText("21601"),closeSoftKeyboard());
+                timelineOpen(null);
+                onView(saveButton()).perform(scrollTo(),click());ready(app);
                 assertFalse("Out-of-range times must not be saved",client.object("GET","/imports/playlists/"+zeroId,null).getBoolean("saved"));
-                onView(allOf(withHint("시작 시간 (초)"),hasSibling(withText("1. 01:00")))).perform(scrollTo(),replaceText("21600"),closeSoftKeyboard());
-                timelineOpen("1. 01:00","https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=21600s");
-                onView(allOf(withHint("시작 시간 (초)"),hasSibling(withText("1. 01:00")))).perform(scrollTo(),replaceText("90"),closeSoftKeyboard());
-                onView(allOf(withHint("곡명"),hasSibling(withText("1. 01:00")))).perform(scrollTo(),replaceText("Reviewed unknown length"),closeSoftKeyboard());
+                onView(rowEditor(1,"시작 시간 (초)")).perform(scrollTo(),replaceText("21600"),closeSoftKeyboard());
+                timelineOpen("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=21600s");
+                onView(rowEditor(1,"시작 시간 (초)")).perform(scrollTo(),replaceText("90"),closeSoftKeyboard());
+                onView(rowEditor(1,"곡명")).perform(scrollTo(),replaceText("Reviewed unknown length"),closeSoftKeyboard());
                 onView(withHint("새 목록 이름")).perform(scrollTo(),replaceText(zeroTitle),closeSoftKeyboard());
-                onView(withText("선택한 곡을 앱 목록에 저장")).perform(scrollTo(),click());ready(app);
+                onView(saveButton()).perform(scrollTo(),click());ready(app);
             }
             JSONObject savedZero=client.object("GET","/imports/playlists/"+zeroId,null);
             assertEquals(0,savedZero.getInt("durationSeconds"));
@@ -576,12 +577,12 @@ public class HubFlowCheckTest {
             try(ActivityScenario<HubActivity> app=launch(context,"create")) {
                 ready(app);onView(withContentDescription("이전 변환 · 가져오기 · 전송 기록")).perform(click());ready(app);
                 onView(allOf(withText("목록 검토 · 변경 확인"),hasSibling(withText(zeroTitle)))).perform(scrollTo(),click());ready(app);
-                onView(allOf(withHint("시작 시간 (초)"),hasSibling(withText("1. 01:00")))).check(matches(withText("90")));
-                onView(allOf(withHint("곡명"),hasSibling(withText("1. 01:00")))).check(matches(withText("Reviewed unknown length")));
-                timelineOpen("1. 01:00","https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=90s");
+                openRow(1);onView(rowEditor(1,"시작 시간 (초)")).check(matches(withText("90")));
+                onView(rowEditor(1,"곡명")).check(matches(withText("Reviewed unknown length")));
+                timelineOpen("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=90s");
                 app.recreate();ready(app);focused(app);
-                onView(allOf(withHint("시작 시간 (초)"),hasSibling(withText("1. 01:00")))).check(matches(withText("90")));
-                timelineOpen("1. 01:00","https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=90s");
+                onView(rowEditor(1,"시작 시간 (초)")).check(matches(withText("90")));
+                timelineOpen("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=90s");
             }
             String knownId=UUID.randomUUID().toString(),knownTitle="길이 확인 "+suffix.substring(0,8);
             JSONObject known=client.object("POST","/conversions/youtube",new JSONObject().put("id",knownId)
@@ -591,15 +592,15 @@ public class HubFlowCheckTest {
                 ready(app);onView(withContentDescription("이전 변환 · 가져오기 · 전송 기록")).perform(click());ready(app);
                 onView(allOf(withText("목록 검토 · 변경 확인"),hasSibling(withText("사용자 타임라인")))).perform(scrollTo(),click());ready(app);
                 onView(withHint("새 목록 이름")).perform(scrollTo(),replaceText(knownTitle),closeSoftKeyboard());
-                onView(allOf(withHint("시작 시간 (초)"),hasSibling(withText("1. 01:00")))).perform(scrollTo(),replaceText("180"),closeSoftKeyboard());
-                timelineOpen("1. 01:00",null);
+                openRow(1);onView(rowEditor(1,"시작 시간 (초)")).perform(scrollTo(),replaceText("180"),closeSoftKeyboard());
+                timelineOpen(null);
                 onView(withText("시작 시간이 영상 범위를 벗어났어요. 시간을 수정하거나 곡을 제외해 주세요.")).perform(scrollTo()).check(matches(isDisplayed()));
-                onView(withText("선택한 곡을 앱 목록에 저장")).perform(scrollTo(),click());ready(app);
+                onView(saveButton()).perform(scrollTo(),click());ready(app);
                 assertFalse("The exact known end is not a playable start or saved row",client.object("GET","/imports/playlists/"+knownId,null).getBoolean("saved"));
                 onView(withText("시작 시간이 영상 범위를 벗어났어요. 시간을 수정하거나 곡을 제외해 주세요.")).perform(scrollTo()).check(matches(isDisplayed()));
-                onView(allOf(withHint("시작 시간 (초)"),hasSibling(withText("1. 01:00")))).perform(scrollTo(),replaceText("179"),closeSoftKeyboard());
-                timelineOpen("1. 01:00","https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=179s");
-                onView(withText("선택한 곡을 앱 목록에 저장")).perform(scrollTo(),click());ready(app);
+                onView(rowEditor(1,"시작 시간 (초)")).perform(scrollTo(),replaceText("179"),closeSoftKeyboard());
+                timelineOpen("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=179s");
+                onView(saveButton()).perform(scrollTo(),click());ready(app);
             }
             String knownPlaylist=client.object("GET","/imports/playlists/"+knownId,null).getString("localPlaylistId");
             assertEquals(179,client.object("GET","/playlists/"+knownPlaylist,null).getJSONArray("items").getJSONObject(0).getJSONObject("track").getInt("timestamp"));
@@ -616,10 +617,10 @@ public class HubFlowCheckTest {
                 onView(withHint("영상 설명의 시간표 붙여넣기")).perform(scrollTo(),replaceText("00:00 Bridge song by Bridge artist"),closeSoftKeyboard());
                 onView(withText("입력한 시간표로 만들기")).perform(scrollTo(),click());readyHub();
                 onView(withHint("새 목록 이름")).perform(scrollTo(),replaceText(returnTitle),closeSoftKeyboard());
-                onView(withText("선택한 곡을 앱 목록에 저장")).perform(scrollTo(),click());readyHub();
+                onView(saveButton()).perform(scrollTo(),click());readyHub();
                 onView(withText("계속 보기")).inRoot(isDialog()).perform(click());
                 onView(withHint("새 목록 이름")).check(matches(withText(returnTitle)));
-                onView(withText("선택한 곡을 앱 목록에 저장")).perform(scrollTo(),click());readyHub();
+                onView(saveButton()).perform(scrollTo(),click());readyHub();
                 String returnedId=null;JSONArray returnedLists=client.array("/playlists");
                 for(int i=0;i<returnedLists.length();i++)if(returnTitle.equals(returnedLists.getJSONObject(i).getString("title")))returnedId=returnedLists.getJSONObject(i).getString("id");
                 assertNotNull("The result must refer to the actual saved playlist",returnedId);
@@ -656,17 +657,20 @@ public class HubFlowCheckTest {
             restore(settings,oldSettings);restore(credentials,oldCredentials);
         }
     }
+    // Imported rows are tagged "importRow N"; edit fields exist only after the row is tapped open.
+    private static org.hamcrest.Matcher<View> importRow(int row){return withTagValue(org.hamcrest.Matchers.<Object>equalTo("importRow "+row));}
+    private static org.hamcrest.Matcher<View> rowEditor(int row,String hint){return allOf(withHint(hint),isDescendantOfA(importRow(row)));}
+    private static org.hamcrest.Matcher<View> rowCheck(int row){return allOf(withId(R.id.row_check),isDescendantOfA(importRow(row)));}
+    private static org.hamcrest.Matcher<View> saveButton(){return withText(org.hamcrest.Matchers.startsWith("선택한 곡을 앱 목록에 저장"));}
+    private static void openRow(int row){onView(isRoot()).perform(closeSoftKeyboard());onView(allOf(withId(R.id.import_header),isDescendantOfA(importRow(row)))).perform(scrollTo(),click());}
     private static void timelineOpen(String expectedUrl) {
-        timelineOpen("1. 00:00",expectedUrl);
-    }
-    private static void timelineOpen(String rowLabel,String expectedUrl) {
         var instrumentation=InstrumentationRegistry.getInstrumentation();AtomicReference<Intent> sent=new AtomicReference<>();
         androidx.test.runner.intent.IntentCallback callback=intent->{if(Intent.ACTION_VIEW.equals(intent.getAction()))sent.set(new Intent(intent));};
         var intents=androidx.test.runner.intent.IntentMonitorRegistry.getInstance();IntentFilter filter=new IntentFilter(Intent.ACTION_VIEW);filter.addDataScheme("https");filter.addDataScheme("http");filter.addCategory(Intent.CATEGORY_BROWSABLE);
         var blocked=instrumentation.addMonitor(filter,new android.app.Instrumentation.ActivityResult(android.app.Activity.RESULT_CANCELED,null),true);intents.addIntentCallback(callback);
         try {
             onView(isRoot()).perform(closeSoftKeyboard());
-            onView(allOf(withText("원본 영상의 이 시간 열기"),hasSibling(withText(rowLabel)))).perform(scrollTo(),click());instrumentation.waitForIdleSync();
+            onView(allOf(withText("원본 영상의 이 시간 열기"),isDescendantOfA(importRow(1)))).perform(scrollTo(),click());instrumentation.waitForIdleSync();
             if(expectedUrl==null){assertNull("Invalid times must not launch an external activity",sent.get());assertEquals(0,blocked.getHits());}
             else{assertNotNull("Capture the actual external intent",sent.get());assertEquals(expectedUrl,sent.get().getDataString());assertEquals("Block the browser on both API24 and newer Android",1,blocked.getHits());}
         } finally {intents.removeIntentCallback(callback);instrumentation.removeMonitor(blocked);}
@@ -686,6 +690,7 @@ public class HubFlowCheckTest {
         throw new java.io.EOFException("Incomplete test HTTP header");
     }
     private static ActivityScenario<HubActivity> launch(Context context,String mode){return ActivityScenario.launch(new Intent(context,HubActivity.class).putExtra("mode",mode));}
+    private static org.hamcrest.Matcher<View> providerOption(String name){return allOf(isAssignableFrom(com.google.android.material.button.MaterialButton.class),withText(name));}
     private static void hubDraft(HubActivity app,String key,String value){try{var f=HubActivity.class.getDeclaredField("requests");f.setAccessible(true);((HubRequest)f.get(app)).data.put(key,value);}catch(Exception e){throw new AssertionError(e);}}
     private static ViewAction closeSoftKeyboard(){
         ViewAction close=androidx.test.espresso.action.ViewActions.closeSoftKeyboard();
