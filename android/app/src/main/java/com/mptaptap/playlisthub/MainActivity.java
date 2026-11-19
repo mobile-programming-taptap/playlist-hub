@@ -69,6 +69,9 @@ import org.json.JSONObject;
 
 public class MainActivity extends AppCompatActivity {
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
+    /** Official-video checks for shown cards run one at a time, apart from user actions. */
+    private final ExecutorService videoChecks = Executors.newSingleThreadExecutor();
+    private int videoCheckRound, droppedWithoutVideo;
     private final ArtworkLoader artwork = new ArtworkLoader();
     private List<Track> catalogue = new ArrayList<>();
     private List<Recommender.Pick> picks = new ArrayList<>();
@@ -472,6 +475,42 @@ public class MainActivity extends AppCompatActivity {
         });
         // Newly verified records are registered on the server; refresh the library's searchable tracks.
         if(api!=null&&newTracks)refreshData(()->{cards.notifyDataSetChanged();updateCounter();});
+        findViewById(R.id.results).post(this::checkVideos);
+    }
+
+    /** Looks up the official video of each card without one, starting at the shown card; drops cards that have none. */
+    private void checkVideos() {
+        int round=++videoCheckRound;droppedWithoutVideo=0;
+        if(api==null||picks.isEmpty()||!ApiClient.consentAccepted(this,api.base))return;
+        ApiClient source=api;List<Track> pending=new ArrayList<>();int start=Math.max(0,pager.getCurrentItem());
+        for(int i=0;i<picks.size();i++){Track track=picks.get((start+i)%picks.size()).track;if(track.youtubeVideoId.isEmpty())pending.add(track);}
+        if(pending.isEmpty())return;
+        videoChecks.execute(()->{
+            for(Track track:pending) {
+                if(round!=videoCheckRound)return;
+                String video;
+                try{video=source.object("GET","/playback/tracks/"+track.id,null).optString("videoId");}
+                catch(ApiClient.ApiError error){if(error.statusCode!=404)break;video=null;}
+                // Quota, outage or no YouTube access: keep the remaining cards as they are.
+                catch(Exception error){break;}
+                String found=video;
+                runOnUiThread(()->videoChecked(round,track,found));
+            }
+            runOnUiThread(()->{
+                if(round!=videoCheckRound||isDestroyed()||droppedWithoutVideo==0)return;
+                snackbar("공식 영상을 찾지 못한 "+droppedWithoutVideo+"곡은 뺐어요.",Snackbar.LENGTH_LONG).show();
+            });
+        });
+    }
+
+    private void videoChecked(int round,Track track,String video) {
+        if(round!=videoCheckRound||isDestroyed()||isFinishing())return;
+        int index=-1;for(int i=0;i<picks.size();i++)if(picks.get(i).track.id.equals(track.id))index=i;
+        if(index<0)return;
+        if(video!=null){if(video.matches("[A-Za-z0-9_-]{11}")){picks.get(index).track.youtubeVideoId=video;cards.notifyItemChanged(index);}return;}
+        int current=pager.getCurrentItem();if(index==current)stopPlayer();
+        List<Recommender.Pick> changed=new ArrayList<>(picks);changed.remove(index);picks=changed;droppedWithoutVideo++;
+        showResults();pager.setCurrentItem(Math.max(0,Math.min(index<current?current-1:current,picks.size()-1)),false);
     }
 
     private boolean mergeRecommendationTracks(boolean replace) {
@@ -490,6 +529,7 @@ public class MainActivity extends AppCompatActivity {
         findViewById(R.id.results).setVisibility(View.VISIBLE);
         findViewById(R.id.empty).setVisibility(picks.isEmpty() ? View.VISIBLE : View.GONE);
         String emptyNotice=api==null?"AI 추천이 연결되지 않았어요.\nAI 추천을 연결하면 같은 요청으로 새 곡을 찾을 수 있어요."
+            :droppedWithoutVideo>0?"공식 영상이 있는 곡을 찾지 못했어요.\n요청을 조금 바꿔 다시 추천받아 보세요."
             :resultNotice.isEmpty()?"조건에 맞는 곡을 확인하지 못했어요. 같은 요청으로 다시 시도해 보세요.":resultNotice;
         ((TextView)findViewById(R.id.empty)).setText(hiddenTracks.isEmpty()?emptyNotice:"이번 추천에서 모든 곡을 제외했어요.\n요청을 수정해 새로 추천받을 수 있어요.");
         ((TextView)findViewById(R.id.notice)).setText(resultMode.equals("openai")?"AI 추천":"이전 기본 추천 결과 · AI 연결 필요");
@@ -1426,6 +1466,7 @@ public class MainActivity extends AppCompatActivity {
     @Override protected void onDestroy(){
         artwork.close();
         dismissFailure();stopPlayer();for(AlertDialog dialog:dialogs)dialog.dismiss();dialogs.clear();
+        videoCheckRound++;videoChecks.shutdownNow();
         worker.execute(local::close);worker.shutdown();super.onDestroy();
     }
 }
