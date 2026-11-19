@@ -95,14 +95,13 @@ public class HubFlowCheckTest {
                     for(int attempt=1;attempt<=3;attempt++){
                         assertEquals(attempt,starts.get());assertNull(serverFailure.get());
                         onView(withText(failureMessage)).check(matches(isDisplayed()));
-                        // Espresso rejects multiple matching buttons, reproducing the reported accumulation.
-                        onView(withText("같은 요청 다시 시도")).perform(scrollTo()).check(matches(isEnabled()));
+                        onView(withText("같은 요청 다시 시도")).check(doesNotExist());
                         assertNull("Unavailable configuration must not launch a browser",launched.get());
-                        onView(withText("같은 요청 다시 시도")).perform(click());ready(app);
+                        onView(withText("YouTube Music 계정 연결")).perform(scrollTo(),click());ready(app);
                     }
                     assertEquals(4,starts.get());onView(withText("연결 주소를 확인할 수 없어요.")).perform(scrollTo()).check(matches(isDisplayed()));
                     app.onActivity(a->{try{var f=HubActivity.class.getDeclaredField("requests");f.setAccessible(true);assertFalse(((HubRequest)f.get(a)).data.optBoolean("authorizationPending"));}catch(Exception e){throw new AssertionError(e);}});
-                    assertNull(launched.get());onView(withText("같은 요청 다시 시도")).perform(scrollTo(),click());ready(app);
+                    assertNull(launched.get());onView(withText("YouTube Music 계정 연결")).perform(scrollTo(),click());ready(app);
                     assertEquals(5,starts.get());assertNotNull(launched.get());assertEquals(authorizationUrl,launched.get().getDataString());assertEquals(1,monitor.getHits());
                     onView(withText("같은 요청 다시 시도")).check(doesNotExist());
                     connected.set(true);app.moveToState(Lifecycle.State.CREATED);app.moveToState(Lifecycle.State.RESUMED);ready(app);
@@ -293,16 +292,234 @@ public class HubFlowCheckTest {
                     onView(withText("선택한 곡: 대상 곡 A · 대상 가수")).perform(scrollTo()).check(matches(isDisplayed()));onView(withText("선택 확인 후 플레이리스트 보내기")).perform(scrollTo(),click());ready(app);
                     onView(withText("확인한 곡을 전송할까요?")).inRoot(isDialog()).check(matches(isDisplayed()));assertEquals("Confirmation must precede a remote transfer",0,transfers.get());assertEquals(1,reviews.get());
                     onView(withText("전송")).inRoot(isDialog()).perform(click());ready(app);assertNull("Test server failure",serverFailure.get());
-                    onView(withText("3번째 곡 · 실패 · 다시 시도할 수 있어요")).perform(scrollTo()).check(matches(isDisplayed()));onView(withText("5번째 곡 · 사용자가 제외")).perform(scrollTo()).check(matches(isDisplayed()));
+                    onView(withText("원본 곡 B · 검사 가수 · 실패 · 다시 시도할 수 있어요")).perform(scrollTo()).check(matches(isDisplayed())).check(androidx.test.espresso.assertion.PositionAssertions.isCompletelyAbove(withText("수정한 곡 A · 검사 가수 · 전송 완료")));onView(withText("원본 곡 C · 검사 가수 · 사용자가 제외")).perform(scrollTo()).check(matches(isDisplayed()));onView(withText("앱의 내 목록에도 사본이 저장됐어요.")).check(doesNotExist());
                     onView(withText("완료 1곡 · 실패 1곡 · 제외 1곡 · 대기 0곡 · 확인 필요 0곡")).perform(scrollTo()).check(matches(isDisplayed()));
                     onView(withText("남은 곡 이어서 보내기")).perform(scrollTo(),click());onView(withText("남은 곡을 보낼까요?")).inRoot(isDialog()).check(matches(isDisplayed()));assertEquals(0,retries.get());
                     onView(withText("계속 보내기")).inRoot(isDialog()).perform(click());ready(app);assertNull("Test server failure",serverFailure.get());
                     onView(withText("완료 2곡 · 실패 0곡 · 제외 1곡 · 대기 0곡 · 확인 필요 0곡")).perform(scrollTo()).check(matches(isDisplayed()));onView(withText("남은 곡 이어서 보내기")).check(doesNotExist());
-                    app.recreate();ready(app);focused(app);onView(withText("5번째 곡 · 사용자가 제외")).perform(scrollTo()).check(matches(isDisplayed()));onView(withText("완료 2곡 · 실패 0곡 · 제외 1곡 · 대기 0곡 · 확인 필요 0곡")).perform(scrollTo()).check(matches(isDisplayed()));
+                    app.recreate();ready(app);focused(app);onView(withText("원본 곡 C · 검사 가수 · 사용자가 제외")).perform(scrollTo()).check(matches(isDisplayed()));onView(withText("완료 2곡 · 실패 0곡 · 제외 1곡 · 대기 0곡 · 확인 필요 0곡")).perform(scrollTo()).check(matches(isDisplayed()));
                     assertNull("Test server failure",serverFailure.get());assertEquals(1,imports.get());assertEquals(2,saves.get());assertEquals(2,matches.get());assertEquals(1,reviews.get());assertEquals(1,transfers.get());assertEquals(1,retries.get());assertTrue(statusReads.get()>0);assertEquals(token,credentials.getString(base,""));
                 }
             } finally {running.set(false);server.close();replies.get(2,TimeUnit.SECONDS);}
         } finally {running.set(false);worker.shutdownNow();restore(settings,oldSettings);restore(credentials,oldCredentials);}
+    }
+
+    @Test public void libraryExportImportsMatchesAllPagesAndStopsForReview() throws Exception {
+        var instrumentation=InstrumentationRegistry.getInstrumentation();Context context=instrumentation.getTargetContext();
+        if(android.os.Build.VERSION.SDK_INT>=37)instrumentation.getUiAutomation().grantRuntimePermission(context.getPackageName(),android.Manifest.permission.ACCESS_LOCAL_NETWORK);
+        SharedPreferences settings=context.getSharedPreferences("settings",Context.MODE_PRIVATE),credentials=context.getSharedPreferences("server_credentials",Context.MODE_PRIVATE);
+        Map<String,?> oldSettings=settings.getAll(),oldCredentials=credentials.getAll();
+        AtomicBoolean running=new AtomicBoolean(true);AtomicReference<Throwable> serverFailure=new AtomicReference<>();AtomicReference<String> importId=new AtomicReference<>();
+        AtomicInteger imports=new AtomicInteger(),matches=new AtomicInteger(),accountReads=new AtomicInteger(),reviewReads=new AtomicInteger();
+        String fullUrl="https://www.youtube.com/playlist?list=PLfull",emptyUrl="https://www.youtube.com/playlist?list=PLempty";
+        var worker=Executors.newSingleThreadExecutor();
+        try(ServerSocket server=new ServerSocket(0,5,InetAddress.getByName("127.0.0.1"))) {
+            server.setSoTimeout(500);String base="http://127.0.0.1:"+server.getLocalPort(),token="PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP";
+            var replies=worker.submit(()->{
+                JSONObject review=null;
+                while(running.get())try(Socket socket=server.accept()) {
+                    socket.setSoTimeout(5000);DataInputStream input=new DataInputStream(socket.getInputStream());String[] request=httpLine(input).split(" ");
+                    String header;int length=0;while(!(header=httpLine(input)).isEmpty()){if(header.toLowerCase(java.util.Locale.ROOT).startsWith("content-length:"))length=Integer.parseInt(header.substring(header.indexOf(':')+1).trim());}
+                    byte[] bodyBytes=new byte[length];input.readFully(bodyBytes);JSONObject body=length==0?new JSONObject():new JSONObject(new String(bodyBytes,StandardCharsets.UTF_8));
+                    String method=request[0],path=request[1];JSONObject response;int status=200;
+                    if(path.equals("/health"))response=new JSONObject().put("status","ok");
+                    else if(path.startsWith("/connections/youtube/playlists"))response=new JSONObject().put("provider","youtube").put("nextCursor","").put("items",new JSONArray()
+                            .put(new JSONObject().put("id","full").put("title","보낼 목록").put("itemCount",3).put("privacyStatus","private").put("sourceUrl",fullUrl))
+                            .put(new JSONObject().put("id","empty").put("title","빈 목록").put("itemCount",0).put("privacyStatus","private").put("sourceUrl",emptyUrl)));
+                    else if(path.equals("/accounts/me")){accountReads.incrementAndGet();response=new JSONObject().put("connections",new JSONArray().put(new JSONObject().put("provider","spotify").put("connected",true)).put(new JSONObject().put("provider","youtube").put("connected",true)));}
+                    else if(path.equals("/imports/playlists")) {
+                        assertEquals("POST",method);imports.incrementAndGet();assertEquals("youtube",body.getString("provider"));importId.set(body.getString("id"));
+                        if(body.getString("url").equals(emptyUrl))response=new JSONObject().put("id",importId.get()).put("provider","youtube").put("title","빈 목록").put("items",new JSONArray()).put("saved",false);
+                        else{JSONArray items=new JSONArray();for(int i=0;i<3;i++)items.put(new JSONObject().put("sourceIndex",i).put("track",new JSONObject().put("platform","youtube").put("externalId","vvvvvvvvvv"+i).put("title","원본 곡 "+i).put("artist","검사 가수")));
+                            response=new JSONObject().put("id",importId.get()).put("provider","youtube").put("title","보낼 목록").put("items",items).put("localPlaylistId",importId.get()).put("saved",true);}
+                    } else if(path.equals("/matches")) {
+                        assertEquals("POST",method);int call=matches.incrementAndGet();assertEquals(importId.get(),body.getString("importId"));assertEquals("spotify",body.getString("targetProvider"));
+                        boolean last=call>1;JSONArray rows=new JSONArray();for(int i=0;i<3;i++){JSONObject source=new JSONObject().put("title","원본 곡 "+i).put("artist","검사 가수");JSONObject target=new JSONObject().put("platform","spotify").put("externalId","sp"+i).put("title","대상 곡 "+i).put("artist","검사 가수");
+                            boolean searched=last||i<2;rows.put(new JSONObject().put("sourceIndex",i).put("source",source).put("candidates",searched?new JSONArray().put(new JSONObject().put("track",target)):new JSONArray()).put("status",!searched?"NOT_SEARCHED":i==1?"NEEDS_REVIEW":"MATCHED").put("selected",searched&&i!=1?target:JSONObject.NULL).put("approved",false));}
+                        if(call==1){assertEquals(0,body.optInt("offset",0));review=new JSONObject().put("importId",importId.get()).put("targetProvider","spotify").put("items",rows).put("nextOffset",2);response=review;}
+                        else if(call==2){assertEquals(2,body.getInt("offset"));status=503;response=new JSONObject().put("message","검색 한도를 넘었어요.");}
+                        else{assertEquals(3,call);assertEquals(2,body.getInt("offset"));review=new JSONObject().put("importId",importId.get()).put("targetProvider","spotify").put("items",rows).put("nextOffset",-1);response=review;}
+                    } else if(path.equals("/matches/"+importId.get()+"?targetProvider=spotify")){assertEquals("GET",method);reviewReads.incrementAndGet();assertNotNull(review);response=review;}
+                    else throw new AssertionError("Unexpected test request: "+method+" "+path);
+                    byte[] bytes=response.toString().getBytes(StandardCharsets.UTF_8);socket.getOutputStream().write(("HTTP/1.1 "+status+(status==200?" OK":" Service Unavailable")+"\r\nContent-Type: application/json\r\nContent-Length: "+bytes.length+"\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.UTF_8));socket.getOutputStream().write(bytes);socket.getOutputStream().flush();
+                }catch(SocketTimeoutException timeout){
+                    // Await the next explicit user action on this loopback fixture.
+                }catch(Throwable error){if(running.get())serverFailure.compareAndSet(null,error);return;}
+            });
+            try {
+                assertTrue(settings.edit().putString("server",base).putString("serviceConsent:"+base,ApiClient.CONSENT_VERSION).commit());assertTrue(credentials.edit().putString(base,token).commit());
+                try(ActivityScenario<HubActivity> app=launch(context,"create")) {
+                    ready(app);focused(app);
+                    onView(withText("내 플레이리스트 선택")).perform(scrollTo(),click());ready(app);assertNull("Test server failure",serverFailure.get());
+                    onView(withContentDescription("선택: 보낼 목록")).perform(scrollTo(),click());onView(withContentDescription("선택: 빈 목록")).perform(scrollTo(),click());
+                    onView(withText("다른 플랫폼으로 보내기")).perform(scrollTo(),click());ready(app);
+                    onView(withText("보내기는 한 번에 한 목록씩 할 수 있어요.")).perform(scrollTo()).check(matches(isDisplayed()));assertEquals(0,imports.get());assertEquals(0,accountReads.get());
+                    onView(withContentDescription("선택: 보낼 목록")).perform(scrollTo(),click());
+                    onView(withText("다른 플랫폼으로 보내기")).perform(scrollTo(),click());ready(app);assertNull("Test server failure",serverFailure.get());
+                    onView(withText("가져올 곡이 없어요.")).perform(scrollTo()).check(matches(isDisplayed()));assertEquals(1,imports.get());assertEquals(0,matches.get());
+                    onView(withText("다른 플랫폼으로 보내기")).perform(scrollTo()).check(matches(isDisplayed()));
+                    onView(withContentDescription("선택: 빈 목록")).perform(scrollTo(),click());onView(withContentDescription("선택: 보낼 목록")).perform(scrollTo(),click());
+                    onView(withText("다른 플랫폼으로 보내기")).perform(scrollTo(),click());ready(app);assertNull("Test server failure",serverFailure.get());
+                    assertEquals(2,imports.get());
+                    // The first page of this fixture only reports offsets; the export flow follows nextOffset without a tap and stops at the failed page.
+                    waitUntil(()->matches.get()>=2);ready(app);
+                    onView(withText("이어서 찾기")).perform(scrollTo()).check(matches(isDisplayed()));assertEquals(2,matches.get());
+                    app.recreate();ready(app);focused(app);assertNull("Test server failure",serverFailure.get());
+                    onView(withText("이어서 찾기")).perform(scrollTo()).check(matches(isDisplayed()));assertEquals("Restoring must not resume matching on its own",2,matches.get());assertEquals(1,reviewReads.get());
+                    onView(withText("이어서 찾기")).perform(scrollTo(),click());ready(app);assertNull("Test server failure",serverFailure.get());
+                    assertEquals(3,matches.get());onView(withText("이어서 찾기")).check(doesNotExist());onView(withText("중단")).check(doesNotExist());
+                    assertEquals(2,accountReads.get());
+                }
+            } finally {running.set(false);server.close();replies.get(2,TimeUnit.SECONDS);}
+        } finally {running.set(false);worker.shutdownNow();restore(settings,oldSettings);restore(credentials,oldCredentials);}
+    }
+
+    @Test public void exportReviewShowsOnlyUndecidedFirstAndSendsWithAutoCount() throws Exception {
+        var instrumentation=InstrumentationRegistry.getInstrumentation();Context context=instrumentation.getTargetContext();
+        if(android.os.Build.VERSION.SDK_INT>=37)instrumentation.getUiAutomation().grantRuntimePermission(context.getPackageName(),android.Manifest.permission.ACCESS_LOCAL_NETWORK);
+        SharedPreferences settings=context.getSharedPreferences("settings",Context.MODE_PRIVATE),credentials=context.getSharedPreferences("server_credentials",Context.MODE_PRIVATE);
+        Map<String,?> oldSettings=settings.getAll(),oldCredentials=credentials.getAll();
+        AtomicBoolean running=new AtomicBoolean(true);AtomicReference<Throwable> serverFailure=new AtomicReference<>();AtomicReference<String> importId=new AtomicReference<>();AtomicReference<JSONArray> lastSelections=new AtomicReference<>();
+        AtomicInteger puts=new AtomicInteger(),transfers=new AtomicInteger();
+        var worker=Executors.newSingleThreadExecutor();
+        try(ServerSocket server=new ServerSocket(0,5,InetAddress.getByName("127.0.0.1"))) {
+            server.setSoTimeout(500);String base="http://127.0.0.1:"+server.getLocalPort(),token="PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP";
+            var replies=worker.submit(()->{
+                JSONObject review=null;
+                while(running.get())try(Socket socket=server.accept()) {
+                    socket.setSoTimeout(5000);DataInputStream input=new DataInputStream(socket.getInputStream());String[] request=httpLine(input).split(" ");
+                    String header;int length=0;while(!(header=httpLine(input)).isEmpty()){if(header.toLowerCase(java.util.Locale.ROOT).startsWith("content-length:"))length=Integer.parseInt(header.substring(header.indexOf(':')+1).trim());}
+                    byte[] bodyBytes=new byte[length];input.readFully(bodyBytes);JSONObject body=length==0?new JSONObject():new JSONObject(new String(bodyBytes,StandardCharsets.UTF_8));
+                    String method=request[0],path=request[1];JSONObject response;
+                    if(path.equals("/health"))response=new JSONObject().put("status","ok");
+                    else if(path.startsWith("/connections/spotify/playlists"))response=new JSONObject().put("provider","spotify").put("nextCursor","").put("items",new JSONArray().put(new JSONObject().put("id","list").put("title","검수 목록").put("itemCount",4).put("privacyStatus","private").put("sourceUrl","https://open.spotify.com/playlist/SSSSSSSSSSSSSSSSSSSSSS")));
+                    else if(path.equals("/accounts/me"))response=new JSONObject().put("connections",new JSONArray().put(new JSONObject().put("provider","youtube").put("connected",true)).put(new JSONObject().put("provider","spotify").put("connected",true)));
+                    else if(path.equals("/imports/playlists")) {
+                        importId.set(body.getString("id"));JSONArray items=new JSONArray();for(int i=0;i<4;i++)items.put(new JSONObject().put("sourceIndex",i).put("track",new JSONObject().put("platform","spotify").put("externalId","s"+i).put("title","원본 곡 "+i).put("artist","검사 가수")));
+                        response=new JSONObject().put("id",importId.get()).put("provider","spotify").put("title","검수 목록").put("items",items).put("localPlaylistId",importId.get()).put("saved",true);
+                    } else if(path.equals("/matches")) {
+                        JSONArray rows=new JSONArray();
+                        for(int i=0;i<4;i++){JSONObject source=new JSONObject().put("title","원본 곡 "+i).put("artist","검사 가수");JSONArray candidates=new JSONArray();
+                            if(i<3)candidates.put(new JSONObject().put("track",new JSONObject().put("platform","youtube").put("externalId","yyyyyyyyyy"+i).put("title","대상 곡 "+i).put("artist","대상 가수")));
+                            if(i==2)candidates.put(new JSONObject().put("track",new JSONObject().put("platform","youtube").put("externalId","zzzzzzzzzz2").put("title","다른 버전 2").put("artist","대상 가수")));
+                            rows.put(new JSONObject().put("sourceIndex",i).put("source",source).put("candidates",candidates).put("status",i<2?"MATCHED":i==2?"NEEDS_REVIEW":"UNKNOWN").put("selected",i<2?candidates.getJSONObject(0).getJSONObject("track"):JSONObject.NULL).put("approved",false));}
+                        review=new JSONObject().put("importId",importId.get()).put("targetProvider","youtube").put("items",rows).put("nextOffset",-1);response=review;
+                    } else if(path.equals("/matches/"+importId.get())&&method.equals("PUT")){puts.incrementAndGet();assertEquals("youtube",body.getString("targetProvider"));lastSelections.set(body.getJSONArray("selections"));response=review;}
+                    else if(path.equals("/transfers")) {
+                        transfers.incrementAndGet();response=new JSONObject().put("id",body.getString("id")).put("importId",importId.get()).put("provider","youtube").put("title","검수 목록").put("status","PARTIAL").put("playlistUrl","").put("notice","").put("excludedSourceIndices",new JSONArray().put(3))
+                                .put("items",new JSONArray().put(new JSONObject().put("sourceIndex",0).put("status","ADDED")).put(new JSONObject().put("sourceIndex",2).put("status","FAILED")));
+                    } else if(path.startsWith("/transfers/"))response=new JSONObject().put("id",path.substring(11)).put("importId",importId.get()).put("provider","youtube").put("title","검수 목록").put("status","PARTIAL").put("playlistUrl","").put("notice","").put("excludedSourceIndices",new JSONArray().put(3)).put("items",new JSONArray().put(new JSONObject().put("sourceIndex",0).put("status","ADDED")).put(new JSONObject().put("sourceIndex",2).put("status","FAILED")));
+                    else throw new AssertionError("Unexpected test request: "+method+" "+path);
+                    byte[] bytes=response.toString().getBytes(StandardCharsets.UTF_8);socket.getOutputStream().write(("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "+bytes.length+"\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.UTF_8));socket.getOutputStream().write(bytes);socket.getOutputStream().flush();
+                }catch(SocketTimeoutException timeout){
+                    // Await the next explicit user action on this loopback fixture.
+                }catch(Throwable error){if(running.get())serverFailure.compareAndSet(null,error);return;}
+            });
+            try {
+                assertTrue(settings.edit().putString("server",base).putString("serviceConsent:"+base,ApiClient.CONSENT_VERSION).commit());assertTrue(credentials.edit().putString(base,token).commit());
+                try(ActivityScenario<HubActivity> app=launch(context,"create")) {
+                    ready(app);focused(app);
+                    onView(providerOption("Spotify")).perform(scrollTo(),click());onView(withText("내 플레이리스트 선택")).perform(scrollTo(),click());ready(app);
+                    onView(withContentDescription("선택: 검수 목록")).perform(scrollTo(),click());onView(withText("다른 플랫폼으로 보내기")).perform(scrollTo(),click());ready(app);assertNull("Test server failure",serverFailure.get());
+                    onView(withText("확인이 필요한 곡 (1)")).perform(scrollTo()).check(matches(isDisplayed()));onView(withText("찾지 못한 곡 (1) · 제외됨")).perform(scrollTo()).check(matches(isDisplayed()));
+                    onView(withText("확인 필요 1곡 남음")).check(matches(allOf(isDisplayed(),isNotEnabled())));
+                    onView(withText("이 곡으로")).perform(scrollTo(),click());
+                    onView(withText("YouTube Music으로 3곡 보내기")).check(matches(allOf(isDisplayed(),isEnabled()))).perform(click());ready(app);assertNull("Test server failure",serverFailure.get());
+                    assertEquals(1,puts.get());JSONArray sent=lastSelections.get();assertEquals(4,sent.length());
+                    for(int i=0;i<4;i++){JSONObject row=null;for(int j=0;j<4;j++)if(sent.getJSONObject(j).getInt("sourceIndex")==i)row=sent.getJSONObject(j);assertNotNull(row);assertEquals(i==3,row.getBoolean("excluded"));assertEquals(i==3,row.getString("targetId").isEmpty());}
+                    onView(withText(org.hamcrest.Matchers.containsString("자동 선택 2곡 포함"))).inRoot(isDialog()).check(matches(isDisplayed()));assertEquals(0,transfers.get());
+                    onView(withText("취소")).inRoot(isDialog()).perform(click());
+                    onView(withText("선택된 곡 (3)")).perform(scrollTo(),click());
+                    onView(allOf(withText("다른 후보"),hasSibling(withText("대상 곡 0 · 대상 가수")))).perform(scrollTo(),click());onView(withText("이 곡은 전송에서 제외")).inRoot(isDialog()).perform(click());
+                    onView(withText("YouTube Music으로 2곡 보내기")).check(matches(isEnabled())).perform(click());ready(app);
+                    onView(withText(org.hamcrest.Matchers.containsString("자동 선택 1곡 포함"))).inRoot(isDialog()).check(matches(isDisplayed()));
+                    onView(withText("전송")).inRoot(isDialog()).perform(click());ready(app);assertNull("Test server failure",serverFailure.get());
+                    assertEquals(2,puts.get());assertEquals(1,transfers.get());
+                    onView(withText("원본 곡 0 · 검사 가수 · 전송 완료")).perform(scrollTo()).check(matches(isDisplayed()));onView(withText("원본 곡 2 · 검사 가수 · 실패 · 다시 시도할 수 있어요")).check(androidx.test.espresso.assertion.PositionAssertions.isCompletelyAbove(withText("원본 곡 0 · 검사 가수 · 전송 완료")));onView(withText("원본 곡 3 · 검사 가수 · 사용자가 제외")).perform(scrollTo()).check(matches(isDisplayed()));onView(withText("앱의 내 목록에도 사본이 저장됐어요.")).perform(scrollTo()).check(matches(isDisplayed()));
+                }
+            } finally {running.set(false);server.close();replies.get(2,TimeUnit.SECONDS);}
+        } finally {running.set(false);worker.shutdownNow();restore(settings,oldSettings);restore(credentials,oldCredentials);}
+    }
+
+    /** Shared loopback fixture for export-flow checks: a YouTube library with one three-track list and a Spotify target. */
+    private interface ExportRoute{Object reply(String method,String path,JSONObject body,int[] status)throws Exception;}
+    private static void exportFixture(ExportRoute route,java.util.function.Consumer<ActivityScenario<HubActivity>> steps) throws Exception {
+        var instrumentation=InstrumentationRegistry.getInstrumentation();Context context=instrumentation.getTargetContext();
+        if(android.os.Build.VERSION.SDK_INT>=37)instrumentation.getUiAutomation().grantRuntimePermission(context.getPackageName(),android.Manifest.permission.ACCESS_LOCAL_NETWORK);
+        SharedPreferences settings=context.getSharedPreferences("settings",Context.MODE_PRIVATE),credentials=context.getSharedPreferences("server_credentials",Context.MODE_PRIVATE);
+        Map<String,?> oldSettings=settings.getAll(),oldCredentials=credentials.getAll();AtomicBoolean running=new AtomicBoolean(true);AtomicReference<Throwable> serverFailure=new AtomicReference<>();
+        IntentFilter filter=new IntentFilter(Intent.ACTION_VIEW);filter.addDataScheme("https");filter.addCategory(Intent.CATEGORY_BROWSABLE);
+        var monitor=instrumentation.addMonitor(filter,new android.app.Instrumentation.ActivityResult(android.app.Activity.RESULT_CANCELED,null),true);var worker=Executors.newSingleThreadExecutor();
+        try(ServerSocket server=new ServerSocket(0,5,InetAddress.getByName("127.0.0.1"))) {
+            server.setSoTimeout(500);String base="http://127.0.0.1:"+server.getLocalPort(),token="PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP";
+            var replies=worker.submit(()->{
+                while(running.get())try(Socket socket=server.accept()) {
+                    socket.setSoTimeout(5000);DataInputStream input=new DataInputStream(socket.getInputStream());String[] request=httpLine(input).split(" ");
+                    String header;int length=0;while(!(header=httpLine(input)).isEmpty()){if(header.toLowerCase(java.util.Locale.ROOT).startsWith("content-length:"))length=Integer.parseInt(header.substring(header.indexOf(':')+1).trim());}
+                    byte[] bodyBytes=new byte[length];input.readFully(bodyBytes);JSONObject body=length==0?new JSONObject():new JSONObject(new String(bodyBytes,StandardCharsets.UTF_8));
+                    int[] status={200};String path=request[1];Object response;
+                    if(path.equals("/health"))response=new JSONObject().put("status","ok");
+                    else if(path.startsWith("/connections/youtube/playlists"))response=new JSONObject().put("provider","youtube").put("nextCursor","").put("items",new JSONArray().put(new JSONObject().put("id","full").put("title","보낼 목록").put("itemCount",3).put("privacyStatus","private").put("sourceUrl","https://www.youtube.com/playlist?list=PLfull")));
+                    else response=route.reply(request[0],path,body,status);
+                    if(response==null)throw new AssertionError("Unexpected test request: "+request[0]+" "+path);
+                    byte[] bytes=response.toString().getBytes(StandardCharsets.UTF_8);socket.getOutputStream().write(("HTTP/1.1 "+status[0]+" Result\r\nContent-Type: application/json\r\nContent-Length: "+bytes.length+"\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.UTF_8));socket.getOutputStream().write(bytes);socket.getOutputStream().flush();
+                }catch(SocketTimeoutException timeout){
+                    // Await the next explicit user action on this loopback fixture.
+                }catch(Throwable error){if(running.get())serverFailure.compareAndSet(null,error);return;}
+            });
+            try {
+                assertTrue(settings.edit().putString("server",base).putString("serviceConsent:"+base,ApiClient.CONSENT_VERSION).commit());assertTrue(credentials.edit().putString(base,token).commit());
+                try(ActivityScenario<HubActivity> app=launch(context,"create")) {
+                    ready(app);focused(app);onView(withText("내 플레이리스트 선택")).perform(scrollTo(),click());ready(app);
+                    onView(withContentDescription("선택: 보낼 목록")).perform(scrollTo(),click());
+                    steps.accept(app);assertNull("Test server failure",serverFailure.get());
+                }
+            } finally {running.set(false);server.close();replies.get(2,TimeUnit.SECONDS);}
+        } finally {running.set(false);worker.shutdownNow();instrumentation.removeMonitor(monitor);restore(settings,oldSettings);restore(credentials,oldCredentials);}
+    }
+    private static JSONObject exportImport(JSONObject body)throws Exception{JSONArray items=new JSONArray();for(int i=0;i<3;i++)items.put(new JSONObject().put("sourceIndex",i).put("track",new JSONObject().put("platform","youtube").put("externalId","vvvvvvvvvv"+i).put("title","원본 곡 "+i).put("artist","검사 가수")));
+        return new JSONObject().put("id",body.getString("id")).put("provider","youtube").put("title","보낼 목록").put("items",items).put("localPlaylistId",body.getString("id")).put("saved",true);}
+    private static JSONObject exportMatches(JSONObject body,int next)throws Exception{JSONArray rows=new JSONArray();for(int i=0;i<3;i++){JSONObject target=new JSONObject().put("platform","spotify").put("externalId","sp"+i).put("title","대상 곡 "+i).put("artist","검사 가수");
+            rows.put(new JSONObject().put("sourceIndex",i).put("source",new JSONObject().put("title","원본 곡 "+i).put("artist","검사 가수")).put("candidates",new JSONArray().put(new JSONObject().put("track",target))).put("status","MATCHED").put("selected",target).put("approved",false));}
+        return new JSONObject().put("importId",body.getString("importId")).put("targetProvider","spotify").put("items",rows).put("nextOffset",next);}
+
+    @Test public void exportResumesAfterTargetOAuthAndKeepsSourceLibrary() throws Exception {
+        AtomicBoolean connected=new AtomicBoolean();AtomicInteger starts=new AtomicInteger(),imports=new AtomicInteger();AtomicReference<JSONObject> importBody=new AtomicReference<>();
+        exportFixture((method,path,body,status)->{
+            if(path.equals("/accounts/me"))return new JSONObject().put("connections",new JSONArray().put(new JSONObject().put("provider","youtube").put("connected",true)).put(new JSONObject().put("provider","spotify").put("connected",connected.get())));
+            if(path.equals("/connections"))return new JSONArray().put(new JSONObject().put("provider","youtube").put("connected",true)).put(new JSONObject().put("provider","spotify").put("connected",connected.get()));
+            if(path.equals("/connections/config"))return new JSONObject().put("providers",new JSONArray().put(new JSONObject().put("provider","spotify").put("configured",true)).put(new JSONObject().put("provider","youtube").put("configured",true)));
+            if(path.equals("/connections/spotify/start")){starts.incrementAndGet();return new JSONObject().put("authorizationUrl","https://accounts.spotify.com/authorize?state=export-check");}
+            if(path.equals("/imports/playlists")){imports.incrementAndGet();importBody.set(body);return exportImport(body);}
+            if(path.equals("/matches"))return exportMatches(body,-1);
+            return null;
+        },app->{
+            onView(withText("다른 플랫폼으로 보내기")).perform(scrollTo(),click());ready(app);
+            assertEquals(1,starts.get());assertEquals(0,imports.get());
+            app.onActivity(a->{try{var f=HubActivity.class.getDeclaredField("requests");f.setAccessible(true);JSONObject data=((HubRequest)f.get(a)).data;
+                assertEquals("The export source library must stay YouTube","youtube",data.optString("libraryProvider"));assertNotEquals("true",data.optString("libraryConnect"));}catch(Exception e){throw new AssertionError(e);}});
+            connected.set(true);app.moveToState(Lifecycle.State.CREATED);app.moveToState(Lifecycle.State.RESUMED);ready(app);
+            waitUntil(()->imports.get()>=1);ready(app);
+            try{assertEquals("youtube",importBody.get().getString("provider"));assertEquals("https://www.youtube.com/playlist?list=PLfull",importBody.get().getString("url"));}catch(Exception e){throw new AssertionError(e);}
+            onView(withText("Spotify로 3곡 보내기")).check(matches(isEnabled()));
+        });
+    }
+
+    @Test public void exportStopWorksWhileAPageIsLoading() throws Exception {
+        AtomicInteger matchCalls=new AtomicInteger();
+        exportFixture((method,path,body,status)->{
+            if(path.equals("/accounts/me"))return new JSONObject().put("connections",new JSONArray().put(new JSONObject().put("provider","spotify").put("connected",true)));
+            if(path.equals("/imports/playlists"))return exportImport(body);
+            if(path.equals("/matches")){int call=matchCalls.incrementAndGet();SystemClock.sleep(2500);return exportMatches(body,call<3?call:-1);}
+            return null;
+        },app->{
+            onView(withText("다른 플랫폼으로 보내기")).perform(scrollTo(),click());
+            waitUntil(()->matchCalls.get()>=1);
+            onView(withText("중단")).perform(scrollTo(),click());
+            ready(app);SystemClock.sleep(500);ready(app);
+            assertEquals("Stopping must not send the next page",1,matchCalls.get());
+            onView(withText("이어서 찾기")).perform(scrollTo()).check(matches(isDisplayed()));
+        });
     }
 
     @Test public void automaticVideoImportKeepsManualDraftSeparateAndAllowsRecovery() throws Exception {
@@ -369,7 +586,8 @@ public class HubFlowCheckTest {
                     onView(withText("영상에서 곡 목록 가져오기")).perform(scrollTo(),click());ready(app);
                     assertNull("Test server failure",serverFailure.get());assertEquals(2,automatic.get());assertEquals(0,manual.get());
                     onView(withText(failureMessage)).perform(scrollTo()).check(matches(isDisplayed()));onView(withHint("영상 설명의 시간표 붙여넣기")).check(matches(withText(draft)));
-                    onView(withText("같은 요청 다시 시도")).perform(scrollTo(),click());ready(app);
+                    onView(withText("같은 요청 다시 시도")).check(doesNotExist());
+                    onView(withText("영상에서 곡 목록 가져오기")).perform(scrollTo(),click());ready(app);
                     assertNull("Test server failure",serverFailure.get());assertEquals(3,automatic.get());
                     openRow(1);onView(withHint("곡명")).check(matches(withText("자동으로 가져온 곡")));
                     onView(withContentDescription("돌아가기")).perform(closeSoftKeyboard(),click());ready(app);
