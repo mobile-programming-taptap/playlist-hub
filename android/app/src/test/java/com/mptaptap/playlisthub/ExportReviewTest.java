@@ -65,4 +65,9 @@ public class ExportReviewTest {
         JSONObject row=find(selections,0);assertNotNull("An unrelated candidate must not wait for review",row);assertTrue(row.getBoolean("excluded"));assertTrue(row.getBoolean("auto"));
         ExportReview.Groups groups=ExportReview.group(items,selections);assertTrue(groups.needsReview().isEmpty());assertEquals(1,groups.excluded().size());
     }
+    @Test public void sendLabelSaysWhenNothingCanBeSent()throws Exception{
+        JSONArray items=new JSONArray().put(new JSONObject().put("sourceIndex",0).put("status","UNKNOWN").put("candidates",new JSONArray()).put("source",track("y0","A","B")));
+        JSONObject done=new JSONObject().put("items",items).put("nextOffset",-1);JSONArray selections=ExportReview.autoSelect(items,new JSONArray());
+        assertEquals("보낼 수 있는 곡이 없어요",ExportReview.sendLabel("Spotify",done,selections));assertFalse(ExportReview.canSend(done,selections));
+    }
 }

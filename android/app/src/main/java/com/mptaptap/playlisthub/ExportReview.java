@@ -51,6 +51,7 @@ final class ExportReview {
         if(review==null||review.optInt("nextOffset",-1)>=0)return "곡 후보 찾는 중";
         Groups groups=group(review.optJSONArray("items"),selections);
         if(!groups.needsReview.isEmpty())return "확인 필요 "+groups.needsReview.size()+"곡 남음";
+        if(groups.selected.isEmpty())return "보낼 수 있는 곡이 없어요";
         return providerName+(providerName.equals("Spotify")?"로":"으로")+" "+groups.selected.size()+"곡 보내기";
     }
 
