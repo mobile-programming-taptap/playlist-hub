@@ -1,17 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Imported track row: Spotify-style header; the existing edit fields and actions are added to import_body. -->
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto"
-    android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:paddingTop="10dp">
-    <LinearLayout android:id="@+id/import_header" android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="64dp" android:orientation="horizontal" android:gravity="center_vertical">
-        <TextView android:id="@+id/import_index" android:layout_width="32dp" android:layout_height="wrap_content" android:gravity="center" android:textColor="@color/muted" android:textSize="14sp" android:importantForAccessibility="no" />
-        <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:layout_marginStart="8dp" android:orientation="vertical">
-            <TextView android:id="@+id/import_title" android:layout_width="match_parent" android:layout_height="wrap_content" android:maxLines="1" android:ellipsize="end" android:textColor="@color/ink" android:textSize="16sp" android:fontFamily="@font/pretendard_semibold" app:fontFamily="@font/pretendard_semibold" />
-            <TextView android:id="@+id/import_meta" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="4dp" android:maxLines="1" android:ellipsize="end" android:textColor="@color/muted" android:textSize="13sp" android:fontFamily="@font/pretendard" app:fontFamily="@font/pretendard" />
-        </LinearLayout>
-        <CheckBox android:id="@+id/import_include" android:layout_width="wrap_content" android:layout_height="48dp" android:text="포함" />
-    </LinearLayout>
-    <TextView android:id="@+id/import_badge" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginStart="40dp" android:layout_marginBottom="4dp" android:background="@drawable/review_badge"
+<!-- Imported track: the shared 내 목록 row; tapping it reveals the edit fields in import_body. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical">
+    <include android:id="@+id/import_header" layout="@layout/item_media_row" />
+    <TextView android:id="@+id/import_badge" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginStart="100dp" android:layout_marginBottom="4dp" android:background="@drawable/review_badge"
         android:paddingStart="8dp" android:paddingEnd="8dp" android:paddingTop="3dp" android:paddingBottom="3dp" android:text="곡명과 아티스트를 확인해 주세요." android:textColor="@color/deck_accent" android:textSize="12sp" android:visibility="gone" />
-    <LinearLayout android:id="@+id/import_body" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:paddingStart="40dp" android:paddingBottom="12dp" />
-    <View android:layout_width="match_parent" android:layout_height="1dp" android:background="@color/card_line" android:importantForAccessibility="no" />
+    <LinearLayout android:id="@+id/import_body" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:paddingStart="4dp" android:paddingEnd="4dp" android:paddingBottom="12dp" android:visibility="gone" />
 </LinearLayout>
