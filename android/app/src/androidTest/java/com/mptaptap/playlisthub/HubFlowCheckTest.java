@@ -444,6 +444,9 @@ public class HubFlowCheckTest {
     /** Shared loopback fixture for export-flow checks: a YouTube library with one three-track list and a Spotify target. */
     private interface ExportRoute{Object reply(String method,String path,JSONObject body,int[] status)throws Exception;}
     private static void exportFixture(ExportRoute route,java.util.function.Consumer<ActivityScenario<HubActivity>> steps) throws Exception {
+        hubFixture(route,app->{onView(withText("내 플레이리스트 선택")).perform(scrollTo(),click());ready(app);onView(withContentDescription("선택: 보낼 목록")).perform(scrollTo(),click());steps.accept(app);});
+    }
+    private static void hubFixture(ExportRoute route,java.util.function.Consumer<ActivityScenario<HubActivity>> steps) throws Exception {
         var instrumentation=InstrumentationRegistry.getInstrumentation();Context context=instrumentation.getTargetContext();
         if(android.os.Build.VERSION.SDK_INT>=37)instrumentation.getUiAutomation().grantRuntimePermission(context.getPackageName(),android.Manifest.permission.ACCESS_LOCAL_NETWORK);
         SharedPreferences settings=context.getSharedPreferences("settings",Context.MODE_PRIVATE),credentials=context.getSharedPreferences("server_credentials",Context.MODE_PRIVATE);
@@ -470,8 +473,7 @@ public class HubFlowCheckTest {
             try {
                 assertTrue(settings.edit().putString("server",base).putString("serviceConsent:"+base,ApiClient.CONSENT_VERSION).commit());assertTrue(credentials.edit().putString(base,token).commit());
                 try(ActivityScenario<HubActivity> app=launch(context,"create")) {
-                    ready(app);focused(app);onView(withText("내 플레이리스트 선택")).perform(scrollTo(),click());ready(app);
-                    onView(withContentDescription("선택: 보낼 목록")).perform(scrollTo(),click());
+                    ready(app);focused(app);
                     steps.accept(app);assertNull("Test server failure",serverFailure.get());
                 }
             } finally {running.set(false);server.close();replies.get(2,TimeUnit.SECONDS);}
@@ -502,6 +504,38 @@ public class HubFlowCheckTest {
             waitUntil(()->imports.get()>=1);ready(app);
             try{assertEquals("youtube",importBody.get().getString("provider"));assertEquals("https://www.youtube.com/playlist?list=PLfull",importBody.get().getString("url"));}catch(Exception e){throw new AssertionError(e);}
             onView(withText("Spotify로 3곡 보내기")).check(matches(isEnabled()));
+        });
+    }
+
+    @Test public void titleOnlyTimelineSavesAndFindsCandidatesInTheExportScreen() throws Exception {
+        AtomicReference<String> id=new AtomicReference<>();AtomicInteger saves=new AtomicInteger(),matches=new AtomicInteger();AtomicReference<JSONArray> savedEntries=new AtomicReference<>();
+        String url="https://www.youtube.com/watch?v=0Y41XMkfROU";
+        hubFixture((method,path,body,status)->{
+            if(path.equals("/conversions/youtube")){id.set(body.getString("id"));JSONArray entries=new JSONArray();
+                for(int i=0;i<12;i++)entries.put(new JSONObject().put("sourceIndex",i).put("timestamp","0"+i+":00").put("seconds",i*60).put("startSeconds",i*60).put("title","제목만 있는 곡 "+i).put("artist","").put("sourceRow","0"+i+":00 제목만 있는 곡 "+i).put("sourceUrl",url+"&t="+(i*60)+"s").put("needsReview",true));
+                return new JSONObject().put("id",id.get()).put("provider","youtube").put("videoId","0Y41XMkfROU").put("title","재즈 모음").put("durationSeconds",3600).put("sourceUrl",url).put("entries",entries).put("items",new JSONArray()).put("metadataMode","official_metadata").put("saved",false).put("notice","");}
+            if(path.equals("/imports/playlists/"+id.get()+"/save")){saves.incrementAndGet();savedEntries.set(body.getJSONArray("entries"));return new JSONObject().put("id",id.get()).put("title",body.getString("title")).put("size",12).put("items",new JSONArray());}
+            if(path.equals("/imports/playlists/"+id.get()+"/review"))return new JSONObject().put("id",id.get()).put("title",body.getString("title"));
+            if(path.equals("/matches")){matches.incrementAndGet();assertEquals("spotify",body.getString("targetProvider"));JSONArray rows=new JSONArray();
+                for(int i=0;i<12;i++)rows.put(new JSONObject().put("sourceIndex",i).put("source",new JSONObject().put("title","제목만 있는 곡 "+i).put("artist","")).put("candidates",new JSONArray()).put("status","UNKNOWN").put("selected",JSONObject.NULL).put("approved",false));
+                return new JSONObject().put("importId",id.get()).put("targetProvider","spotify").put("items",rows).put("nextOffset",-1);}
+            return null;
+        },app->{
+            onView(withHint("YouTube 영상 주소")).perform(scrollTo(),replaceText(url),closeSoftKeyboard());
+            onView(withText("영상에서 곡 목록 가져오기")).perform(scrollTo(),click());ready(app);
+            openRow(1);onView(rowEditor(1,"곡명")).perform(scrollTo(),replaceText(""),closeSoftKeyboard());
+            onView(saveButton()).perform(scrollTo(),click());ready(app);
+            onView(withText("포함할 곡의 곡명을 입력하거나 곡을 제외해 주세요.")).check(matches(isDisplayed()));assertEquals(0,saves.get());
+            onView(rowEditor(1,"곡명")).perform(scrollTo(),replaceText("제목만 있는 곡 0"),closeSoftKeyboard());
+            onView(saveButton()).perform(scrollTo(),click());ready(app);
+            assertEquals("Rows with a title but no artist must still save",1,saves.get());try{assertEquals("",savedEntries.get().getJSONObject(0).getString("artist"));}catch(Exception e){throw new AssertionError(e);}
+            onView(withText("계속 보기")).inRoot(isDialog()).perform(click());
+            onView(providerOption("Spotify")).perform(scrollTo(),click());
+            onView(withText("대상 플랫폼의 곡 후보 찾기")).perform(scrollTo(),click());ready(app);
+            assertEquals(1,matches.get());
+            onView(withText("Spotify로 보내기")).check(matches(isDisplayed()));
+            onView(withText("찾지 못한 곡 (12) · 제외됨")).perform(scrollTo()).check(matches(isDisplayed()));
+            onView(withText("보낼 수 있는 곡이 없어요")).check(matches(isDisplayed()));
         });
     }
 
