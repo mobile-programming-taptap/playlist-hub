@@ -235,6 +235,8 @@ public class MainActivity extends AppCompatActivity {
                 if (librarySelected && playlistId != null) { playlistId = null; loadLibrary(); }
                 else if (librarySelected) ((BottomNavigationView)findViewById(R.id.navigation)).setSelectedItemId(R.id.nav_recommend);
                 else if (hasResults && findViewById(R.id.request_panel).getVisibility()==View.VISIBLE) { hideKeyboard(); showResults(); }
+                // 결과 화면에서 나가도 다시 요청하지 않도록 앱을 닫지 않고 뒤로 보낸다.
+                else if (hasResults) moveTaskToBack(true);
                 else { setEnabled(false); getOnBackPressedDispatcher().onBackPressed(); }
             }
         });
@@ -1340,6 +1342,11 @@ public class MainActivity extends AppCompatActivity {
     }
     private void updateBusy(){
         busy=pendingTask.current()!=null||recommendation.current().loading;findViewById(R.id.progress).setVisibility(busy?View.VISIBLE:View.INVISIBLE);
+        boolean finding=recommendation.current().loading;
+        // 추천은 수십 초 걸릴 수 있어 진행 안내를 띄우고, 지난 실패 안내는 지운다.
+        if(finding&&findingBar==null){dismissFailure();findingBar=snackbar("음악을 찾고 있어요 · 보통 5~20초 걸려요",Snackbar.LENGTH_INDEFINITE);findingBar.show();}
+        else if(!finding&&findingBar!=null){findingBar.dismiss();findingBar=null;}
+        ((MaterialButton)findViewById(R.id.recommend)).setText(finding?"음악을 찾고 있어요…":"새로운 음악 발견하기");
         findViewById(R.id.recommend).setEnabled(!busy && metadataReady);findViewById(R.id.settings).setEnabled(!busy);
         findViewById(R.id.save_results).setEnabled(!busy && metadataReady && !picks.isEmpty());
         findViewById(R.id.edit_request).setEnabled(!busy);
@@ -1359,6 +1366,7 @@ public class MainActivity extends AppCompatActivity {
         bar.setTextMaxLines(4);
         bar.setAnchorViewLayoutListenerEnabled(true);return bar;
     }
+    private Snackbar findingBar;
     private void dismissFailure(){if(failureBar!=null){failureBar.dismiss();failureBar=null;}}
     private void showError(String message,Runnable retry){dismissFailure();Snackbar bar=snackbar(message,retry==null?Snackbar.LENGTH_LONG:Snackbar.LENGTH_INDEFINITE);failureBar=bar;if(retry!=null)bar.setAction("재시도",v->{dismissFailure();retry.run();});bar.show();}
 
