@@ -119,7 +119,16 @@ final class RecommendationCatalogue {
         }
         String query=missing.stream().map(song->"(recording:"+literal(song.title())+" AND artist:"+literal(song.artist())+")")
                 .collect(Collectors.joining(" OR "));
-        JsonNode rows=search(query,deadline).path("recordings");
+        JsonNode rows;
+        try{rows=search(query,deadline).path("recordings");}
+        catch(Exception error){
+            // 나머지 곡 조회가 실패해도 이미 확인한 곡은 보여 준다. 하나도 없을 때만 실패로 알린다.
+            if(verified.isEmpty())throw error;
+            org.slf4j.LoggerFactory.getLogger(RecommendationCatalogue.class).warn("Recording search failed; using {} verified songs: {}",verified.size(),error.getMessage());
+            List<Track> result=new ArrayList<>(verified.values());
+            logFunnel(proposed,cachedHits,searched,skippedByArtist,result.size());
+            return result;
+        }
         List<Track> discovered=new ArrayList<>();
         for(OpenAi.Suggestion song:missing) {
             for(JsonNode row:rows) {
@@ -189,10 +198,11 @@ final class RecommendationCatalogue {
         long budget=deadline-System.nanoTime();
         if(budget<=0||!searchLock.tryLock(Math.min(Duration.ofSeconds(2).toNanos(),budget),java.util.concurrent.TimeUnit.NANOSECONDS))throw new IllegalStateException("CATALOGUE_BUSY");
         try {
-            for(int attempt=0;attempt<2;attempt++) {
+            // MusicBrainz answers 503 when it is busy; two more tries, each waiting longer, fit the shared deadline.
+            for(int attempt=0;attempt<3;attempt++) {
                 long remaining=nextRequest-System.nanoTime();if(remaining>0){if(remaining>=deadline-System.nanoTime())throw new IllegalStateException("CATALOGUE_BUSY");Thread.sleep(Duration.ofNanos(remaining));}
                 remaining=deadline-System.nanoTime();if(remaining<=0)throw new IllegalStateException("CATALOGUE_BUSY");
-                nextRequest=System.nanoTime()+1_000_000_000L;
+                nextRequest=System.nanoTime()+(attempt+1)*1_000_000_000L;
                 URI url=URI.create(endpoint+"?fmt=json&limit=100&query="+URLEncoder.encode(query,StandardCharsets.UTF_8));
                 String contact=PublicPagesApi.validatedEmail(supportEmail);
                 HttpRequest request=HttpRequest.newBuilder(url).timeout(Duration.ofNanos(Math.min(Duration.ofSeconds(6).toNanos(),remaining)))
@@ -201,11 +211,11 @@ final class RecommendationCatalogue {
                 final BoundedHttp.Reply response;
                 try {response=client.send(request,4_000_000);}
                 catch(java.io.IOException error) {
-                    if(attempt==0&&!"RESPONSE_TOO_LARGE".equals(error.getMessage())&&deadline-System.nanoTime()>1_000_000_000L)continue;
+                    if(attempt<2&&!"RESPONSE_TOO_LARGE".equals(error.getMessage())&&nextRequest<deadline-1_000_000_000L)continue;
                     throw error;
                 }
                 if(response.status()!=200) {
-                    if(attempt==0&&List.of(502,503,504).contains(response.status()))continue;
+                    if(attempt<2&&List.of(502,503,504).contains(response.status())&&nextRequest<deadline-1_000_000_000L)continue;
                     throw new IllegalStateException("CATALOGUE_HTTP_"+response.status());
                 }
                 JsonNode result=json.readTree(response.body());

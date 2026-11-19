@@ -391,7 +391,7 @@ class DynamicCatalogueCheckTest {
         }finally{if(app!=null)app.close();mb.stop(0);}
     }
 
-    @Test void transientCatalogueFailureRetriesOnceAtProviderRateAndPermanentFailureStops() throws Exception {
+    @Test void transientCatalogueFailureRetriesTwiceWithGrowingGapAndPermanentFailureStops() throws Exception {
         var calls=new AtomicInteger();var timestamps=new CopyOnWriteArrayList<Long>();
         String id=UUID.randomUUID().toString(),releaseId=UUID.randomUUID().toString();
         var failure=new AtomicInteger(503);
@@ -411,11 +411,32 @@ class DynamicCatalogueCheckTest {
             var missing=new OpenAi.Suggestion("Another song","Another artist",List.of("genre:retry_genre"),"en");
             failure.set(503);long started=System.nanoTime();
             assertEquals("CATALOGUE_HTTP_503",assertThrows(IllegalStateException.class,()->catalogue.resolve(List.of(missing))).getMessage());
-            assertEquals(4,calls.get());assertTrue(System.nanoTime()-started<Duration.ofSeconds(8).toNanos());
+            assertEquals(5,calls.get(),"A busy provider gets two more tries");assertTrue(System.nanoTime()-started<Duration.ofSeconds(8).toNanos());
+            assertTrue(timestamps.get(4)-timestamps.get(3)>=Duration.ofMillis(1900).toNanos(),"The second retry waits longer");
             failure.set(400);
             assertEquals("CATALOGUE_HTTP_400",assertThrows(IllegalStateException.class,()->catalogue.resolve(List.of(missing))).getMessage());
-            assertEquals(5,calls.get(),"Permanent errors must not be retried");
+            assertEquals(6,calls.get(),"Permanent errors must not be retried");
             assertEquals(1,app.getBean(JdbcTemplate.class).queryForObject("SELECT COUNT(*) FROM recommendation_tracks",Integer.class));
+        }finally{if(app!=null)app.close();mb.stop(0);}
+    }
+
+    @Test void catalogueOutageStillReturnsAlreadyVerifiedSongs() throws Exception {
+        var status=new AtomicInteger(200);String id=UUID.randomUUID().toString(),releaseId=UUID.randomUUID().toString();
+        HttpServer mb=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
+        mb.createContext("/recording/",exchange->respond(exchange,status.get(),Map.of("recordings",List.of(recording(id,"Kept song","Kept artist","",releaseId)))));
+        mb.start();ConfigurableApplicationContext app=null;
+        try {
+            String endpoint="http://127.0.0.1:"+mb.getAddress().getPort();
+            app=start("jdbc:h2:mem:outage-"+UUID.randomUUID()+";MODE=PostgreSQL;DB_CLOSE_DELAY=-1","sa","",endpoint+"/unused",endpoint+"/recording/");
+            var catalogue=app.getBean(RecommendationCatalogue.class);
+            var kept=new OpenAi.Suggestion("Kept song","Kept artist",List.of("genre:outage_genre"),"en");
+            catalogue.resolve(List.of(kept));
+            status.set(503);
+            var fresh=new OpenAi.Suggestion("Fresh song","Fresh artist",List.of("genre:outage_genre"),"en");
+            assertEquals(List.of(id),catalogue.resolve(List.of(kept,fresh)).stream().map(track->track.id).toList(),
+                "Songs verified earlier are still shown when the lookup for the rest fails");
+            assertEquals("CATALOGUE_HTTP_503",assertThrows(IllegalStateException.class,()->catalogue.resolve(List.of(fresh))).getMessage(),
+                "With nothing verified the failure is still reported");
         }finally{if(app!=null)app.close();mb.stop(0);}
     }
 
