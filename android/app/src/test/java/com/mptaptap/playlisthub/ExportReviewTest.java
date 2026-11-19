@@ -59,4 +59,10 @@ public class ExportReviewTest {
         JSONArray saved=new JSONArray(ExportReview.savedSelections(selections).toString());
         assertEquals(1,ExportReview.autoCount(saved));assertEquals("sp1",find(saved,0).getString("targetId"));assertTrue(find(saved,2).getBoolean("excluded"));
     }
+    @Test public void unrelatedCandidatesAreExcludedNotOffered()throws Exception{
+        JSONArray items=new JSONArray().put(new JSONObject().put("sourceIndex",0).put("status","UNKNOWN").put("candidates",new JSONArray().put(candidate("wrong"))).put("source",track("y0","재즈 모음","채널")));
+        JSONArray selections=ExportReview.autoSelect(items,new JSONArray());
+        JSONObject row=find(selections,0);assertNotNull("An unrelated candidate must not wait for review",row);assertTrue(row.getBoolean("excluded"));assertTrue(row.getBoolean("auto"));
+        ExportReview.Groups groups=ExportReview.group(items,selections);assertTrue(groups.needsReview().isEmpty());assertEquals(1,groups.excluded().size());
+    }
 }
