@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS ai_usage (
     used_at VARCHAR(40) NOT NULL
 );
 ALTER TABLE playlist_items ADD COLUMN IF NOT EXISTS track_json TEXT;
+ALTER TABLE playlists ADD COLUMN IF NOT EXISTS position INTEGER;
 CREATE INDEX IF NOT EXISTS playlists_owner ON playlists(user_id);
 CREATE INDEX IF NOT EXISTS ai_usage_time ON ai_usage(used_at);
 CREATE TABLE IF NOT EXISTS accounts (

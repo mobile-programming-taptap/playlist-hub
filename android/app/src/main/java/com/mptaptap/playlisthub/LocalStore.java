@@ -17,14 +17,17 @@ import org.json.JSONObject;
 
 final class LocalStore extends SQLiteOpenHelper {
     LocalStore(Context context) { this(context, "taptap.db"); }
-    LocalStore(Context context, String name) { super(context, name, null, 1); }
+    LocalStore(Context context, String name) { super(context, name, null, 2); }
     @Override public void onCreate(SQLiteDatabase db) {
         db.execSQL("CREATE TABLE feedback(track_id TEXT PRIMARY KEY,reaction INTEGER NOT NULL CHECK(reaction IN(-1,1)))");
-        db.execSQL("CREATE TABLE playlists(id TEXT PRIMARY KEY,title TEXT NOT NULL,created_at INTEGER NOT NULL)");
+        db.execSQL("CREATE TABLE playlists(id TEXT PRIMARY KEY,title TEXT NOT NULL,created_at INTEGER NOT NULL,position INTEGER)");
         db.execSQL("CREATE TABLE items(id TEXT PRIMARY KEY,playlist_id TEXT NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,track_id TEXT NOT NULL,track TEXT NOT NULL,position INTEGER NOT NULL,UNIQUE(playlist_id,track_id))");
     }
     @Override public void onConfigure(SQLiteDatabase db) { db.setForeignKeyConstraintsEnabled(true); }
-    @Override public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) { throw new IllegalStateException("Unsupported database upgrade"); }
+    @Override public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
+        if (oldVersion != 1 || newVersion != 2) throw new IllegalStateException("Unsupported database upgrade");
+        db.execSQL("ALTER TABLE playlists ADD COLUMN position INTEGER");
+    }
     Map<String, Integer> feedback() {
         Map<String, Integer> result = new HashMap<>();
         try (Cursor rows = getReadableDatabase().rawQuery("SELECT track_id,reaction FROM feedback", null)) {
@@ -41,7 +44,7 @@ final class LocalStore extends SQLiteOpenHelper {
     void clearFeedback() { getWritableDatabase().delete("feedback", null, null); }
     JSONArray playlists() throws JSONException {
         JSONArray result = new JSONArray();
-        try (Cursor rows = getReadableDatabase().rawQuery("SELECT p.id,p.title,COUNT(i.id) FROM playlists p LEFT JOIN items i ON p.id=i.playlist_id GROUP BY p.id ORDER BY p.created_at DESC,p.id", null)) {
+        try (Cursor rows = getReadableDatabase().rawQuery("SELECT p.id,p.title,COUNT(i.id) FROM playlists p LEFT JOIN items i ON p.id=i.playlist_id GROUP BY p.id ORDER BY CASE WHEN p.position IS NULL THEN 0 ELSE 1 END,p.position,p.created_at DESC,p.id", null)) {
             while (rows.moveToNext()) result.put(new JSONObject().put("id", rows.getString(0)).put("title", rows.getString(1)).put("size", rows.getInt(2)));
         }
         return result;
@@ -102,6 +105,18 @@ final class LocalStore extends SQLiteOpenHelper {
         getWritableDatabase().update("playlists", values, "id=?", new String[]{id});
     }
     void delete(String id) throws JSONException { playlist(id); getWritableDatabase().delete("playlists", "id=?", new String[]{id}); }
+    /** Mirrors the server: lists made after a reorder have no position and show first. */
+    void reorderPlaylists(List<String> ids) throws JSONException {
+        SQLiteDatabase db = getWritableDatabase(); db.beginTransaction();
+        try {
+            JSONArray lists = playlists(); HashSet<String> current = new HashSet<>();
+            for (int i=0;i<lists.length();i++) current.add(lists.getJSONObject(i).getString("id"));
+            if (ids == null || ids.size() != lists.length() || !new HashSet<>(ids).equals(current))
+                throw new IllegalArgumentException("모든 목록을 중복 없이 지정해 주세요. 목록이 바뀌었다면 다시 열어주세요.");
+            for (int i=0;i<ids.size();i++) { ContentValues values = new ContentValues(); values.put("position", i); db.update("playlists", values, "id=?", new String[]{ids.get(i)}); }
+            db.setTransactionSuccessful();
+        } finally { db.endTransaction(); }
+    }
     void reorder(String id, List<String> ids) throws JSONException {
         SQLiteDatabase db = getWritableDatabase(); db.beginTransaction();
         try {
