@@ -435,9 +435,11 @@ class DynamicCatalogueCheckTest {
             assertEquals(8,value("POST","/recommendations",token,Map.of("prompt","보사노바"),200).path("tracks").size());
             var links=app.getBean(YoutubeLinks.class);var now=java.time.Instant.now();
             links.remember(ids.get(0),"",now);links.remember(ids.get(1),"abcdefghijk",now);links.remember(ids.get(2),"",now.minus(Duration.ofDays(8)));
+            links.rememberCandidate(ids.get(3),"lmnopqrstuv",now);
             JsonNode second=value("POST","/recommendations",token,Map.of("prompt","보사노바"),200).path("tracks");
             assertFalse(ids(second).contains(ids.get(0)),"A song known to have no official video is not offered");
             assertTrue(ids(second).contains(ids.get(2)),"An expired no-video check does not hide the song");
+            assertTrue(ids(second).contains(ids.get(3)),"A song with only an unconfirmed candidate video stays");
             for(JsonNode pick:second)assertEquals(pick.path("track").path("id").asString().equals(ids.get(1))?"abcdefghijk":"",pick.path("track").path("youtubeVideoId").asString());
             assertFalse(app.getBean(JdbcTemplate.class).queryForObject("SELECT track_json FROM recommendation_tracks WHERE id=?",String.class,ids.get(1)).contains("abcdefghijk"),
                 "YouTube references stay outside the CC0 recording records");

@@ -17,7 +17,12 @@ CREATE TABLE IF NOT EXISTS recommendation_tracks (
 CREATE TABLE IF NOT EXISTS youtube_links (
     track_id VARCHAR(36) PRIMARY KEY,
     video_id VARCHAR(11) NOT NULL,
+    verified BOOLEAN NOT NULL,
     checked_at VARCHAR(40) NOT NULL
+);
+CREATE TABLE IF NOT EXISTS youtube_checks (
+    check_day VARCHAR(10) PRIMARY KEY,
+    used INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS playlists (
     id VARCHAR(36) PRIMARY KEY,

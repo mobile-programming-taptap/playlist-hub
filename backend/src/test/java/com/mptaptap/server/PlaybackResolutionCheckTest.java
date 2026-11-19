@@ -152,10 +152,37 @@ class PlaybackResolutionCheckTest {
             assertEquals(404,assertThrows(ResponseStatusException.class,()->f.api.resolve(f.auth,f.track.id)).getStatusCode().value());
             assertEquals(404,assertThrows(ResponseStatusException.class,()->f.api.resolve(f.auth,f.track.id)).getStatusCode().value());
             assertEquals(1,f.searches.get(),"A song checked as having no official video is not searched again");
-            assertEquals("",f.links.fresh(f.track.id,Instant.now()).orElseThrow());
+            assertTrue(f.links.fresh(f.track.id,Instant.now()).orElseThrow().none());
             try{f.api.resolve(f.auth,f.track.id,true);}catch(ResponseStatusException ignored){}
             assertEquals(2,f.searches.get(),"Pressing play still looks for candidates");
             assertTrue(f.links.fresh(f.track.id,Instant.now().plus(java.time.Duration.ofDays(8))).isEmpty(),"No-video checks expire after a week");
+        }
+    }
+
+    @Test void backgroundCheckKeepsCandidateOnlySongsAndReportsNoneOnlyWhenNothingMatches() throws Exception {
+        try(Fixture f=new Fixture(true)){
+            f.videos=List.of(f.video("Justin Timberlake - Can't Stop the Feeling! (Official Video)","Some Label Music","public"));
+            assertEquals("candidate",f.api.checkTrack(f.auth,f.track.id).getBody().get("state"),"A matching video on another channel keeps the card");
+            assertEquals("candidate",f.api.checkTrack(f.auth,f.track.id).getBody().get("state"));
+            assertEquals(1,f.searches.get(),"The candidate result is remembered");
+            f.links.forget(f.track.id);f.videos=List.of(f.video("Can't Stop the Feeling! (Cover)","Someone Else","public"));
+            assertEquals(404,assertThrows(ResponseStatusException.class,()->f.api.checkTrack(f.auth,f.track.id)).getStatusCode().value());
+            assertEquals(404,assertThrows(ResponseStatusException.class,()->f.api.checkTrack(f.auth,f.track.id)).getStatusCode().value());
+            assertEquals(2,f.searches.get(),"No video at all is remembered too");
+            f.links.forget(f.track.id);f.videos=List.of(f.video("Justin Timberlake - Can't Stop the Feeling! (Official Video)","Justin Timberlake","public"));
+            var verified=f.api.checkTrack(f.auth,f.track.id).getBody();
+            assertEquals("verified",verified.get("state"));assertEquals(VIDEO,verified.get("videoId"));
+        }
+    }
+
+    @Test void backgroundChecksStopAtTheDailyBudgetButPlayingStillSearches() throws Exception {
+        try(Fixture f=new Fixture(true)){
+            var limited=new PlaybackApi(f.users,f.connections,f.remote,f.catalogue,new YoutubeLinks(f.db,1));
+            assertEquals("verified",limited.checkTrack(f.auth,f.track.id).getBody().get("state"));
+            f.links.forget(f.track.id);
+            assertEquals(429,assertThrows(ResponseStatusException.class,()->limited.checkTrack(f.auth,f.track.id)).getStatusCode().value());
+            assertEquals(1,f.searches.get(),"Over budget, a background check does not search");
+            assertTrue(limited.resolve(f.auth,f.track.id,true).getBody().playbackAllowed(),"Pressing play is not limited by the background budget");
         }
     }
 

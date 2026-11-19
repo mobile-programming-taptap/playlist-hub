@@ -95,8 +95,8 @@ public class Api {
         }
         Map<String,Track> candidates=new LinkedHashMap<>();
         java.time.Instant now=java.time.Instant.now();
-        // 공식 영상이 없다고 최근 확인한 곡은 카드로 보여 주지 않는다.
-        for(Track track:verified)if(!"".equals(videos.fresh(track.id,now).orElse(null)))candidates.put(track.id,track);
+        // 영상 후보조차 없다고 최근 확인한 곡은 카드로 보여 주지 않는다.
+        for(Track track:verified)if(!videos.fresh(track.id,now).map(YoutubeLinks.Link::none).orElse(false))candidates.put(track.id,track);
         for(List<String> ids:List.of(body.keptTrackIds()==null?List.<String>of():body.keptTrackIds(),body.excludedTrackIds()==null?List.<String>of():body.excludedTrackIds()))
             for(String id:ids)candidates.putIfAbsent(id,catalogue.track(id));
         Recommender.Result result=Conversation.recommend(new ArrayList<>(candidates.values()),plan.conditions(),feedback,"openai",body.keptTrackIds(),body.excludedTrackIds());
@@ -111,7 +111,7 @@ public class Api {
                 var previous=plan.candidates().stream().map(song->song.title()+"|"+song.artist()).collect(java.util.stream.Collectors.toSet());
                 var fresh=extra.candidates().stream().filter(song->!previous.contains(song.title()+"|"+song.artist())).toList();
                 proposed+=fresh.size();
-                for(Track track:catalogue.resolve(fresh,java.time.Duration.ofNanos(Math.max(1,deadline-System.nanoTime())),plan.conditions())){verifiedIds.add(track.id);if(!"".equals(videos.fresh(track.id,now).orElse(null)))candidates.putIfAbsent(track.id,track);}
+                for(Track track:catalogue.resolve(fresh,java.time.Duration.ofNanos(Math.max(1,deadline-System.nanoTime())),plan.conditions())){verifiedIds.add(track.id);if(!videos.fresh(track.id,now).map(YoutubeLinks.Link::none).orElse(false))candidates.putIfAbsent(track.id,track);}
                 result=Conversation.recommend(new ArrayList<>(candidates.values()),plan.conditions(),feedback,"openai",body.keptTrackIds(),body.excludedTrackIds());
             } catch(InterruptedException interrupted){Thread.currentThread().interrupt();throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"AI 요청이 중단됐어요. 같은 요청으로 다시 시도해 주세요.");}
             catch(Exception error){org.slf4j.LoggerFactory.getLogger(Api.class).warn("Supplementary recommendation failed: {}",error.getClass().getSimpleName());}
@@ -124,7 +124,7 @@ public class Api {
         }
         org.slf4j.LoggerFactory.getLogger(Api.class).info("Recommendation counts: proposed={}, verified={}, shown={}",proposed,verifiedIds.size(),shown);
         // 이미 찾은 공식 영상은 응답 카드에만 실어 바로 재생하게 한다. 곡 레코드에는 저장하지 않는다.
-        for(Recommender.Pick pick:result.tracks)if(pick.track.youtubeVideoId.isEmpty())pick.track.youtubeVideoId=videos.fresh(pick.track.id,now).orElse("");
+        for(Recommender.Pick pick:result.tracks)if(pick.track.youtubeVideoId.isEmpty())pick.track.youtubeVideoId=videos.fresh(pick.track.id,now).filter(YoutubeLinks.Link::verified).map(YoutubeLinks.Link::videoId).orElse("");
         return new Recommender.Result(result.tracks,result.conditions,"openai",notice);
     }
 
