@@ -142,7 +142,7 @@ public class AccountPlaylistCheckTest {
                     onView(withText("2개 중 2개 저장 완료")).perform(scrollTo()).check(matches(isDisplayed()));
                     onView(withText("남은 목록 다시 가져오기")).check(doesNotExist());
                     onView(allOf(withText("가져온 곡 확인"),hasSibling(withText(titleA)))).perform(scrollTo(),click());ready(app);
-                    onView(withHint("곡명")).check(matches(withText("가져온 공부 곡")));app.recreate();ready(app);focused(app);onView(withHint("곡명")).check(matches(withText("가져온 공부 곡")));
+                    onView(withId(R.id.import_header)).perform(closeSoftKeyboard(),scrollTo(),click());onView(withHint("곡명")).check(matches(withText("가져온 공부 곡")));app.recreate();ready(app);focused(app);onView(withHint("곡명")).check(matches(withText("가져온 공부 곡")));
                     onView(withContentDescription("돌아가기")).perform(closeSoftKeyboard(),click());ready(app);onView(withText("내 플레이리스트 선택")).perform(scrollTo(),click());ready(app);
                     onView(withContentDescription("선택: "+titleA)).check(matches(not(isChecked())));onView(withText("다음 목록 불러오기")).perform(scrollTo(),click());ready(app);onView(withContentDescription("선택: "+titleB)).check(matches(not(isChecked())));
                     assertNull("Test server failure",serverFailure.get());assertEquals(1,firstImports.get());assertEquals(2,secondImports.get());assertEquals(token,credentials.getString(base,""));

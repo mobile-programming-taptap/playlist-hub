@@ -17,8 +17,6 @@ import android.view.ViewGroup;
 import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
-import android.widget.Spinner;
-import android.widget.ArrayAdapter;
 import android.widget.TextView;
 import androidx.activity.EdgeToEdge;
 import androidx.activity.OnBackPressedCallback;
@@ -47,7 +45,7 @@ import org.json.JSONObject;
 public final class HubActivity extends AppCompatActivity {
     private static final String[] PROVIDERS={"spotify","youtube"};
     private static final String[] PROVIDER_NAMES={"Spotify","YouTube Music"};
-    private static final String[] SAVED_TEXT={"screen","importId","targetProvider","transferId","transferKey","saveId","matchedSaveId","sourceKey","importRequestId","conversionRequestId","videoUrl","timeline","timelineExpanded","linkExpanded","listUrl","listTitle","email","name","emailExpanded","kakaoAction","welcomeAction","sourceProvider","libraryProvider","libraryCursor","libraryRequestCursor","libraryReset","libraryLoaded","libraryConnect","batchActiveId","authorizationProvider","authorizationStatus","authorizationReason","authorizationNotice","authorizationNoticeProvider","authorizationRejected"};
+    private static final String[] SAVED_TEXT={"screen","importId","targetProvider","transferId","transferKey","saveId","matchedSaveId","sourceKey","importRequestId","conversionRequestId","videoUrl","timeline","timelineExpanded","linkExpanded","importExpanded","listUrl","listTitle","email","name","emailExpanded","kakaoAction","welcomeAction","sourceProvider","libraryProvider","libraryCursor","libraryRequestCursor","libraryReset","libraryLoaded","libraryConnect","batchActiveId","authorizationProvider","authorizationStatus","authorizationReason","authorizationNotice","authorizationNoticeProvider","authorizationRejected"};
     private HubRequest requests;
     private String base,mode;
     private LinearLayout content;
@@ -58,6 +56,7 @@ public final class HubActivity extends AppCompatActivity {
     private MaterialButton retry;
     private LinearProgressIndicator progress;
     private final List<View> controls=new ArrayList<>();
+    private final ArtworkLoader artwork=new ArtworkLoader();
     private final java.util.Set<AlertDialog> dialogs=java.util.Collections.newSetFromMap(new java.util.WeakHashMap<>());
     private final Handler handler=new Handler(Looper.getMainLooper());
     private boolean resumed;
@@ -123,7 +122,7 @@ public final class HubActivity extends AppCompatActivity {
     @Override protected void onResume(){super.onResume();resumed=true;base=serverBase();if(requests!=null&&requests.synchronize(this,base)){put("screen",mode);render();if(!requests.busy()&&!base.isEmpty())reload();}else if(requests!=null){refreshAuthorization();if(value("screen").equals("transfer"))scheduleTransferRefresh();}}
     private void refreshAuthorization(){if(resumed&&!base.isEmpty()&&ApiClient.consentAccepted(this,base)&&requests.data.optBoolean("authorizationPending")&&!requests.busy()){put("authorizationPending",false);put("screen","account");send("account","GET","/accounts/me",null);}}
     @Override protected void onPause(){resumed=false;handler.removeCallbacks(transferRefresh);super.onPause();}
-    @Override protected void onDestroy(){handler.removeCallbacks(transferRefresh);for(AlertDialog dialog:dialogs)dialog.dismiss();dialogs.clear();super.onDestroy();}
+    @Override protected void onDestroy(){handler.removeCallbacks(transferRefresh);for(AlertDialog dialog:dialogs)dialog.dismiss();dialogs.clear();artwork.close();super.onDestroy();}
     @Override protected void onSaveInstanceState(Bundle out) {
         out.putString("hubMode",mode);
         out.putBoolean("kakaoPending",requests.kakaoPending());
@@ -199,7 +198,7 @@ public final class HubActivity extends AppCompatActivity {
         EditText timeline=createField(manual,"시간표","영상 설명의 시간표 붙여넣기","timeline",65536,true);
         addButton(manual,"입력한 시간표로 만들기",()->convertVideo(url,timeline));
         if(value("sourceProvider").isEmpty())put("sourceProvider","youtube");
-        LinearLayout service=card(content);service.addView(text("내 플레이리스트 가져오기",20,true));service.addView(text("음악 계정을 연결하고 가져올 목록을 체크하세요. 선택한 목록은 내 목록에 각각 저장해요.",13,false));service.addView(text("음악 서비스",12,true));fillInput(providerPicker(service,"sourceProvider"));
+        LinearLayout service=card(content);service.addView(text("내 플레이리스트 가져오기",20,true));service.addView(text("음악 계정을 연결하고 가져올 목록을 체크하세요. 선택한 목록은 내 목록에 각각 저장해요.",13,false));service.addView(text("음악 서비스",12,true));providerPicker(service,"sourceProvider");
         addPrimaryButton(service,"내 플레이리스트 선택",()->openLibrary(provider("sourceProvider")));
         if(array("batchImports").length()>0)addButton(service,"이전 가져오기 결과",()->{put("screen","batch");render();});
         LinearLayout link=column();MaterialButton linkToggle=button("",()->{});linkToggle.setStrokeWidth(0);linkToggle.setBackgroundTintList(android.content.res.ColorStateList.valueOf(android.graphics.Color.TRANSPARENT));linkToggle.setTextColor(getColor(R.color.muted));
@@ -477,31 +476,48 @@ public final class HubActivity extends AppCompatActivity {
         if(imported.optBoolean("truncated"))paragraph("가져온 "+previewEntries(imported).length()+"곡을 확인하고 저장할 곡을 선택해 주세요.");
         if(!imported.optString("notice").isEmpty())paragraph(imported.optString("notice"));
         field(content,"새 목록 이름","listTitle",80,false);
-        JSONArray entries=previewEntries(imported);
+        JSONArray entries=previewEntries(imported);boolean timeline=imported.has("entries");
+        List<CheckBox> includes=new ArrayList<>();CheckBox all=new CheckBox(this);all.setText("전체 선택");TapTapUi.checkbox(all);controls.add(all);content.addView(all);
+        MaterialButton save=button("",this::saveImport);
+        Runnable counted=()->{int n=0;for(CheckBox c:includes)if(c.isChecked())n++;save.setText("선택한 곡을 앱 목록에 저장 ("+n+"곡)");all.setChecked(n>0&&n==includes.size());};
+        all.setOnClickListener(v->{boolean on=all.isChecked();for(CheckBox c:includes)c.setChecked(on);counted.run();});
+        View[] expanded={null};
         for(int i=0;i<entries.length();i++) {
             JSONObject row=entries.optJSONObject(i);if(row==null)continue;int index=row.optInt("sourceIndex",i);
             JSONObject track=row.optJSONObject("track"),edit=edit(index,track==null?row:track);
-            boolean timeline=imported.has("entries");View item=LayoutInflater.from(this).inflate(R.layout.item_import_track,content,false);content.addView(item);LinearLayout box=item.findViewById(R.id.import_body);
-            View header=item.findViewById(R.id.import_header);TextView heading=item.findViewById(R.id.import_title),meta=item.findViewById(R.id.import_meta);
-            String label=timeline?row.optString("timestamp"):"가져온 곡";((TextView)item.findViewById(R.id.import_index)).setText(String.valueOf(index+1));
-            Runnable summary=()->{String title=edit.optString("title").trim(),artist=edit.optString("artist").trim();heading.setText(title.isEmpty()?"곡명 입력 필요":title);meta.setText(artist.isEmpty()?label:artist+" · "+label);};summary.run();
-            if(timeline&&!row.optString("sourceRow").isEmpty())addButton(box,"원문과 시간 보기",()->dialog().setTitle("영상 설명 원문").setMessage(row.optString("sourceRow")).setPositiveButton("닫기",null).show());
+            View item=LayoutInflater.from(this).inflate(R.layout.item_import_track,content,false);item.setTag("importRow "+(index+1));content.addView(item);LinearLayout box=item.findViewById(R.id.import_body);
+            View header=item.findViewById(R.id.import_header);TextView heading=header.findViewById(R.id.row_title),meta=header.findViewById(R.id.row_subtitle),number=header.findViewById(R.id.row_index);
+            number.setText(String.valueOf(index+1));number.setVisibility(View.VISIBLE);header.findViewById(R.id.row_trailing).setVisibility(View.GONE);
+            artwork.load(header.findViewById(R.id.row_artwork),track!=null&&"youtube".equals(track.optString("platform"))?track.optString("externalId"):"");
+            String label=timeline?row.optString("timestamp"):track==null?"":track.optString("album");
+            Runnable summary=()->{String title=edit.optString("title").trim(),artist=edit.optString("artist").trim(),line=artist.isEmpty()?"아티스트 입력 필요":artist;heading.setText(title.isEmpty()?"곡명 입력 필요":title);meta.setText(label.isEmpty()?line:line+" · "+label);header.setContentDescription((index+1)+". "+heading.getText()+", "+meta.getText());};summary.run();
             if(row.optBoolean("needsReview"))item.findViewById(R.id.import_badge).setVisibility(View.VISIBLE);
-            CheckBox include=item.findViewById(R.id.import_include);TapTapUi.checkbox(include);include.setContentDescription((index+1)+"번 곡 포함");
+            CheckBox include=header.findViewById(R.id.row_check);include.setVisibility(View.VISIBLE);TapTapUi.checkbox(include);include.setContentDescription((index+1)+"번 곡 포함");
             if(timeline&&row.optInt("seconds",row.optInt("startSeconds",-1))<0&&!edit.has("excluded"))set(edit,"excluded",true);
+            if(timeline&&!edit.has("seconds"))set(edit,"seconds",row.optInt("seconds",row.optInt("startSeconds",-1)));
             include.setChecked(!edit.optBoolean("excluded"));header.setAlpha(edit.optBoolean("excluded")?0.5f:1f);
-            include.setOnCheckedChangeListener((v,checked)->{set(edit,"excluded",!checked);set(edit,"edited",true);header.setAlpha(checked?1f:0.5f);});controls.add(include);
-            rowField(box,"곡명",edit,"title").addTextChangedListener(watcher(text->summary.run()));rowField(box,"아티스트",edit,"artist").addTextChangedListener(watcher(text->summary.run()));
-            if(timeline){if(!edit.has("seconds"))set(edit,"seconds",row.optInt("seconds",row.optInt("startSeconds",-1)));EditText time=rowField(box,"시작 시간 (초)",edit,"seconds");time.setInputType(InputType.TYPE_CLASS_NUMBER|InputType.TYPE_NUMBER_FLAG_SIGNED);}
-            String sourceUrl=row.optString("sourceUrl",track==null?"":track.optString("sourceUrl"));
-            if(timeline)addButton(box,"원본 영상의 이 시간 열기",()->{
-                try{String video=imported.optString("videoId");if(!video.matches("[A-Za-z0-9_-]{11}"))throw new IllegalArgumentException("영상 주소를 확인해 주세요.");open("https://www.youtube.com/watch?v="+video+"&t="+timelineSeconds(imported,edit)+"s");}
-                catch(IllegalArgumentException error){message(error.getMessage());}
-            });
-            else if(!sourceUrl.isEmpty())addButton(box,"원본 곡 열기",()->open(sourceUrl));
+            include.setOnCheckedChangeListener((v,checked)->{set(edit,"excluded",!checked);set(edit,"edited",true);header.setAlpha(checked?1f:0.5f);counted.run();});controls.add(include);includes.add(include);
+            // Edit fields are built on first expansion only, so long lists stay light.
+            Runnable build=()->{
+                if(box.getChildCount()>0)return;
+                if(timeline&&!row.optString("sourceRow").isEmpty())addButton(box,"원문과 시간 보기",()->dialog().setTitle("영상 설명 원문").setMessage(row.optString("sourceRow")).setPositiveButton("닫기",null).show());
+                rowField(box,"곡명",edit,"title").addTextChangedListener(watcher(text->summary.run()));rowField(box,"아티스트",edit,"artist").addTextChangedListener(watcher(text->summary.run()));
+                if(timeline){EditText time=rowField(box,"시작 시간 (초)",edit,"seconds");time.setInputType(InputType.TYPE_CLASS_NUMBER|InputType.TYPE_NUMBER_FLAG_SIGNED);}
+                String sourceUrl=row.optString("sourceUrl",track==null?"":track.optString("sourceUrl"));
+                if(timeline)addButton(box,"원본 영상의 이 시간 열기",()->{
+                    try{String video=imported.optString("videoId");if(!video.matches("[A-Za-z0-9_-]{11}"))throw new IllegalArgumentException("영상 주소를 확인해 주세요.");open("https://www.youtube.com/watch?v="+video+"&t="+timelineSeconds(imported,edit)+"s");}
+                    catch(IllegalArgumentException error){message(error.getMessage());}
+                });
+                else if(!sourceUrl.isEmpty())addButton(box,"원본 곡 열기",()->open(sourceUrl));
+            };
+            String key=imported.optString("id")+"#"+index;
+            Runnable show=()->{build.run();box.setVisibility(View.VISIBLE);expanded[0]=box;};
+            header.setOnClickListener(v->{if(requests.busy())return;boolean open=box.getVisibility()!=View.VISIBLE;if(expanded[0]!=null)expanded[0].setVisibility(View.GONE);expanded[0]=null;put("importExpanded",open?key:"");if(open)show.run();});controls.add(header);
+            if(key.equals(value("importExpanded")))show.run();
         }
-        if(imported.has("entries"))addPrimaryButton(content,"개별 YouTube 영상 찾기",()->{put("targetProvider","youtube");if(value("listTitle").trim().isEmpty())put("listTitle",imported.optString("title","영상 속 음악").substring(0,Math.min(65,imported.optString("title","영상 속 음악").length()))+" · 개별 영상");saveImport(true);});
-        addButton(content,"선택한 곡을 앱 목록에 저장",this::saveImport);
+        counted.run();
+        if(timeline)addPrimaryButton(content,"개별 YouTube 영상 찾기",()->{put("targetProvider","youtube");if(value("listTitle").trim().isEmpty())put("listTitle",imported.optString("title","영상 속 음악").substring(0,Math.min(65,imported.optString("title","영상 속 음악").length()))+" · 개별 영상");saveImport(true);});
+        content.addView(save,new LinearLayout.LayoutParams(-1,-2));
         heading("다른 플랫폼으로 옮기기");providerPicker(content,"targetProvider");
         paragraph("수정하고 선택한 곡을 앱 목록에 저장한 뒤 대상 서비스에서 같은 곡을 찾아요.");
         addButton(content,"대상 플랫폼의 곡 후보 찾기",()->saveImport(true));
@@ -769,7 +785,7 @@ public final class HubActivity extends AppCompatActivity {
     private void addButton(LinearLayout box,String label,Runnable action){box.addView(button(label,action),new LinearLayout.LayoutParams(-1,-2));}
     private void addPrimaryButton(LinearLayout box,String label,Runnable action){MaterialButton button=button(label,action);TapTapUi.primary(button);LinearLayout.LayoutParams size=new LinearLayout.LayoutParams(-1,-2);size.setMargins(0,dp(12),0,0);box.addView(button,size);}
     private EditText createField(LinearLayout box,String label,String hint,String key,int max,boolean multiline){TextView caption=text(label,12,true);LinearLayout.LayoutParams spacing=new LinearLayout.LayoutParams(-1,-2);spacing.setMargins(0,dp(10),0,dp(4));box.addView(caption,spacing);EditText view=field(box,hint,key,max,multiline);fillInput(view);view.setTextColor(getColor(R.color.ink));view.setHintTextColor(getColor(R.color.muted));view.setId(View.generateViewId());caption.setLabelFor(view.getId());return view;}
-    private void fillInput(View view){if(view instanceof EditText){TapTapUi.input((EditText)view);return;}view.setBackground(TapTapUi.rounded(this,R.color.input_surface,14,true));view.setPadding(view instanceof Spinner?0:dp(14),0,view instanceof Spinner?0:dp(14),0);view.setMinimumHeight(dp(56));}
+    private void fillInput(View view){if(view instanceof EditText){TapTapUi.input((EditText)view);return;}view.setBackground(TapTapUi.rounded(this,R.color.input_surface,14,true));view.setPadding(dp(14),0,dp(14),0);view.setMinimumHeight(dp(56));}
     private EditText field(LinearLayout box,String hint,String key,int max,boolean multiline){AppCompatEditText view=input(hint,max,multiline);view.setText(value(key));view.addTextChangedListener(watcher(text->put(key,text)));controls.add(view);LinearLayout.LayoutParams size=new LinearLayout.LayoutParams(-1,-2);size.setMargins(0,dp(6),0,dp(6));box.addView(view,size);return view;}
     private EditText rowField(LinearLayout box,String hint,JSONObject row,String key){AppCompatEditText view=input(hint,key.equals("seconds")?8:300,false);view.setId(View.generateViewId());TextView caption=text(hint,12,true);caption.setLabelFor(view.getId());box.addView(caption);view.setText(row.optString(key));if(!view.getText().toString().equals(row.optString(key))){set(row,key,view.getText().toString());set(row,"edited",true);}view.addTextChangedListener(watcher(text->{set(row,key,text);set(row,"edited",true);}));controls.add(view);box.addView(view,new LinearLayout.LayoutParams(-1,-2));return view;}
     private AppCompatEditText input(String hint,int max,boolean multiline){AppCompatEditText view=new AppCompatEditText(this);view.setHint(hint);view.setFilters(new InputFilter[]{new InputFilter.LengthFilter(max)});view.setSingleLine(!multiline);if(multiline){view.setMinLines(3);view.setMaxLines(6);view.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_FLAG_MULTI_LINE);}TapTapUi.input(view);return view;}
@@ -780,12 +796,11 @@ public final class HubActivity extends AppCompatActivity {
             box.addView(text("이전에 선택한 서비스는 지원하지 않아요. 음악 서비스를 다시 선택해 주세요.",13,false));
             MaterialButton choose=button("음악 서비스 선택",()->dialog().setTitle("음악 서비스를 선택해 주세요").setItems(PROVIDER_NAMES,(d,which)->{put(key,PROVIDERS[which]);render();}).setNegativeButton("취소",null).show());box.addView(choose,new LinearLayout.LayoutParams(-1,-2));return choose;
         }
-        Spinner picker=new Spinner(this,Spinner.MODE_DROPDOWN);picker.setMinimumHeight(dp(56));picker.setPopupBackgroundDrawable(TapTapUi.rounded(this,R.color.surface,16,true));picker.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,PROVIDER_NAMES){
-            private View style(View view,boolean collapsed){TextView label=(TextView)view;TapTapUi.font(label,false);label.setTextColor(getColor(R.color.ink));label.setTextSize(15);label.setMinHeight(dp(56));label.setPadding(dp(16),dp(12),dp(16),dp(12));label.setCompoundDrawablesRelativeWithIntrinsicBounds(0,0,collapsed?R.drawable.ic_expand_more:0,0);return label;}
-            @Override public View getView(int position,View recycled,ViewGroup parent){return style(super.getView(position,recycled,parent),true);}
-            @Override public View getDropDownView(int position,View recycled,ViewGroup parent){return style(super.getDropDownView(position,recycled,parent),false);}
-        });fillInput(picker);for(int i=0;i<PROVIDERS.length;i++)if(PROVIDERS[i].equals(provider(key)))picker.setSelection(i);picker.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){public void onItemSelected(android.widget.AdapterView<?> parent,View view,int position,long id){if(position>=0&&position<PROVIDERS.length)put(key,PROVIDERS[position]);}public void onNothingSelected(android.widget.AdapterView<?> parent){}});controls.add(picker);box.addView(picker,new LinearLayout.LayoutParams(-1,-2));return picker;
+        LinearLayout toggle=new LinearLayout(this);MaterialButton[] options=new MaterialButton[PROVIDERS.length];
+        for(int i=0;i<PROVIDERS.length;i++){String provider=PROVIDERS[i];options[i]=button(PROVIDER_NAMES[i],()->{put(key,provider);selectProvider(options,key);});options[i].setCheckable(true);LinearLayout.LayoutParams size=new LinearLayout.LayoutParams(0,-2,1);if(i>0)size.setMarginStart(dp(8));toggle.addView(options[i],size);}
+        selectProvider(options,key);box.addView(toggle,new LinearLayout.LayoutParams(-1,-2));return toggle;
     }
+    private void selectProvider(MaterialButton[] options,String key){for(int i=0;i<options.length;i++){boolean selected=PROVIDERS[i].equals(provider(key));TapTapUi.button(options[i]);if(selected)TapTapUi.primary(options[i]);options[i].setChecked(selected);}}
     private boolean supportedProvider(String provider){for(String supported:PROVIDERS)if(supported.equals(provider))return true;return false;}
     private String provider(String key){String selected=value(key);return selected.isEmpty()?"spotify":supportedProvider(selected)?selected:"";}
     private String providerName(String provider){for(int i=0;i<PROVIDERS.length;i++)if(PROVIDERS[i].equals(provider))return PROVIDER_NAMES[i];return "지원하지 않는 음악 서비스";}
