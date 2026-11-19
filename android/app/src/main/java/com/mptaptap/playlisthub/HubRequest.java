@@ -197,6 +197,9 @@ public final class HubRequest extends ViewModel {
                     result.put("configuration",client.object("GET","/connections/config",null));
                     result.put("connections",client.array("/connections"));
                     result.put("sessionExpired",client.loginExpired());
+                } else if(route.equals("exportAccount")) {
+                    // /connections answers with a list; the export screen reads it under "connections" like the account screen does.
+                    result=new JSONObject().put("connections",client.array("/connections"));
                 } else if(route.equals("guest")) {
                     boolean registered=true;
                     try{client.object("GET","/accounts/me",null);}catch(ApiClient.ApiError error){if(error.statusCode!=404)throw error;registered=false;}

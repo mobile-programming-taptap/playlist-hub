@@ -321,12 +321,12 @@ public class HubFlowCheckTest {
                     socket.setSoTimeout(5000);DataInputStream input=new DataInputStream(socket.getInputStream());String[] request=httpLine(input).split(" ");
                     String header;int length=0;while(!(header=httpLine(input)).isEmpty()){if(header.toLowerCase(java.util.Locale.ROOT).startsWith("content-length:"))length=Integer.parseInt(header.substring(header.indexOf(':')+1).trim());}
                     byte[] bodyBytes=new byte[length];input.readFully(bodyBytes);JSONObject body=length==0?new JSONObject():new JSONObject(new String(bodyBytes,StandardCharsets.UTF_8));
-                    String method=request[0],path=request[1];JSONObject response;int status=200;
+                    String method=request[0],path=request[1];Object response;int status=200;
                     if(path.equals("/health"))response=new JSONObject().put("status","ok");
                     else if(path.startsWith("/connections/youtube/playlists"))response=new JSONObject().put("provider","youtube").put("nextCursor","").put("items",new JSONArray()
                             .put(new JSONObject().put("id","full").put("title","보낼 목록").put("itemCount",3).put("privacyStatus","private").put("sourceUrl",fullUrl))
                             .put(new JSONObject().put("id","empty").put("title","빈 목록").put("itemCount",0).put("privacyStatus","private").put("sourceUrl",emptyUrl)));
-                    else if(path.equals("/accounts/me")){accountReads.incrementAndGet();response=new JSONObject().put("connections",new JSONArray().put(new JSONObject().put("provider","spotify").put("connected",true)).put(new JSONObject().put("provider","youtube").put("connected",true)));}
+                    else if(path.equals("/connections")){accountReads.incrementAndGet();response=(new JSONArray().put(new JSONObject().put("provider","spotify").put("connected",true)).put(new JSONObject().put("provider","youtube").put("connected",true)));}
                     else if(path.equals("/imports/playlists")) {
                         assertEquals("POST",method);imports.incrementAndGet();assertEquals("youtube",body.getString("provider"));importId.set(body.getString("id"));
                         if(body.getString("url").equals(emptyUrl))response=new JSONObject().put("id",importId.get()).put("provider","youtube").put("title","빈 목록").put("items",new JSONArray()).put("saved",false);
@@ -390,10 +390,10 @@ public class HubFlowCheckTest {
                     socket.setSoTimeout(5000);DataInputStream input=new DataInputStream(socket.getInputStream());String[] request=httpLine(input).split(" ");
                     String header;int length=0;while(!(header=httpLine(input)).isEmpty()){if(header.toLowerCase(java.util.Locale.ROOT).startsWith("content-length:"))length=Integer.parseInt(header.substring(header.indexOf(':')+1).trim());}
                     byte[] bodyBytes=new byte[length];input.readFully(bodyBytes);JSONObject body=length==0?new JSONObject():new JSONObject(new String(bodyBytes,StandardCharsets.UTF_8));
-                    String method=request[0],path=request[1];JSONObject response;
+                    String method=request[0],path=request[1];Object response;
                     if(path.equals("/health"))response=new JSONObject().put("status","ok");
                     else if(path.startsWith("/connections/spotify/playlists"))response=new JSONObject().put("provider","spotify").put("nextCursor","").put("items",new JSONArray().put(new JSONObject().put("id","list").put("title","검수 목록").put("itemCount",4).put("privacyStatus","private").put("sourceUrl","https://open.spotify.com/playlist/SSSSSSSSSSSSSSSSSSSSSS")));
-                    else if(path.equals("/accounts/me"))response=new JSONObject().put("connections",new JSONArray().put(new JSONObject().put("provider","youtube").put("connected",true)).put(new JSONObject().put("provider","spotify").put("connected",true)));
+                    else if(path.equals("/connections"))response=(new JSONArray().put(new JSONObject().put("provider","youtube").put("connected",true)).put(new JSONObject().put("provider","spotify").put("connected",true)));
                     else if(path.equals("/imports/playlists")) {
                         importId.set(body.getString("id"));JSONArray items=new JSONArray();for(int i=0;i<4;i++)items.put(new JSONObject().put("sourceIndex",i).put("track",new JSONObject().put("platform","spotify").put("externalId","s"+i).put("title","원본 곡 "+i).put("artist","검사 가수")));
                         response=new JSONObject().put("id",importId.get()).put("provider","spotify").put("title","검수 목록").put("items",items).put("localPlaylistId",importId.get()).put("saved",true);
@@ -486,7 +486,7 @@ public class HubFlowCheckTest {
     @Test public void exportResumesAfterTargetOAuthAndKeepsSourceLibrary() throws Exception {
         AtomicBoolean connected=new AtomicBoolean();AtomicInteger starts=new AtomicInteger(),imports=new AtomicInteger();AtomicReference<JSONObject> importBody=new AtomicReference<>();
         exportFixture((method,path,body,status)->{
-            if(path.equals("/accounts/me"))return new JSONObject().put("connections",new JSONArray().put(new JSONObject().put("provider","youtube").put("connected",true)).put(new JSONObject().put("provider","spotify").put("connected",connected.get())));
+            if(path.equals("/accounts/me")){status[0]=404;return new JSONObject().put("message","아직 가입한 계정이 없어요.");}
             if(path.equals("/connections"))return new JSONArray().put(new JSONObject().put("provider","youtube").put("connected",true)).put(new JSONObject().put("provider","spotify").put("connected",connected.get()));
             if(path.equals("/connections/config"))return new JSONObject().put("providers",new JSONArray().put(new JSONObject().put("provider","spotify").put("configured",true)).put(new JSONObject().put("provider","youtube").put("configured",true)));
             if(path.equals("/connections/spotify/start")){starts.incrementAndGet();return new JSONObject().put("authorizationUrl","https://accounts.spotify.com/authorize?state=export-check");}
@@ -508,7 +508,7 @@ public class HubFlowCheckTest {
     @Test public void exportStopWorksWhileAPageIsLoading() throws Exception {
         AtomicInteger matchCalls=new AtomicInteger();
         exportFixture((method,path,body,status)->{
-            if(path.equals("/accounts/me"))return new JSONObject().put("connections",new JSONArray().put(new JSONObject().put("provider","spotify").put("connected",true)));
+            if(path.equals("/connections"))return (new JSONArray().put(new JSONObject().put("provider","spotify").put("connected",true)));
             if(path.equals("/imports/playlists"))return exportImport(body);
             if(path.equals("/matches")){int call=matchCalls.incrementAndGet();SystemClock.sleep(2500);return exportMatches(body,call<3?call:-1);}
             return null;

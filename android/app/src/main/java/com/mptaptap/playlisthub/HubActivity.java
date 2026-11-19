@@ -303,7 +303,7 @@ public final class HubActivity extends AppCompatActivity {
         JSONObject row=selected.optJSONObject(0);String title=row==null?"":row.optString("title").trim();if(title.isEmpty())title="가져온 음악";
         if(title.length()>80){title=title.substring(0,80);if(Character.isHighSurrogate(title.charAt(title.length()-1)))title=title.substring(0,title.length()-1);}
         clearSource();requests.data.remove("sourceKey");put("targetProvider",target);put("listTitle",title);put("exportSourceUrl",row==null?"":row.optString("sourceUrl"));put("exportStopped","false");put("exportExpanded","false");
-        send("exportAccount","GET","/accounts/me",null);
+        send("exportAccount","GET","/connections",null);
     }
     private void beginExportImport() {
         put("importRequestId",UUID.randomUUID().toString());put("screen","export");render();scrollToTop();
