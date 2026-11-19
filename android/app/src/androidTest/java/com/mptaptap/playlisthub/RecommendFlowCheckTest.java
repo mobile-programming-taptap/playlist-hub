@@ -86,27 +86,50 @@ public class RecommendFlowCheckTest {
         });
     }
 
-    @Test public void cardsWithoutAnOfficialVideoAreDroppedAndFoundVideosPlayDirectly() throws Exception {
-        Recommender.Result result=recommendation(3);
-        String kept=result.tracks.get(1).track.id;List<String> checked=new CopyOnWriteArrayList<>();
+    @Test public void onlyCardsWithNoVideoAtAllAreDroppedAndTheShownCardStays() throws Exception {
+        Recommender.Result result=recommendation(5);
+        // The shown card and the next two have no video; cards 4 and 5 come into the look-ahead as those two drop.
+        String[] states={"none","none","none","candidate","verified"};List<String> checked=new CopyOnWriteArrayList<>();
         run((method,path)->{
             if(path.equals("/recommendations"))return new Object[]{200,body(result)};
-            if(path.startsWith("/playback/tracks/")) {
-                String id=path.substring("/playback/tracks/".length()).replaceAll("\\?.*","");checked.add(path);
-                return id.equals(kept)?new Object[]{200,new JSONObject().put("videoId","abcdefghijk").put("playbackAllowed",true).toString()}
-                    :new Object[]{404,new JSONObject().put("code","PLAYBACK_UNAVAILABLE").put("message","공식 채널 영상을 찾지 못했어요.").toString()};
+            if(path.startsWith("/playback/tracks/")&&path.endsWith("/check")) {
+                String id=path.substring("/playback/tracks/".length(),path.length()-"/check".length());checked.add(id);
+                int index=-1;for(int i=0;i<result.tracks.size();i++)if(result.tracks.get(i).track.id.equals(id))index=i;
+                String state=states[index];
+                return state.equals("none")?new Object[]{404,new JSONObject().put("code","PLAYBACK_UNAVAILABLE").put("message","공식 채널 영상을 찾지 못했어요.").toString()}
+                    :new Object[]{200,new JSONObject().put("state",state).put("videoId",state.equals("verified")?"abcdefghijk":"").toString()};
             }
             return null;
         },null,app->{
             onView(withId(R.id.prompt)).perform(replaceText(PROMPT),closeSoftKeyboard());
             onView(withId(R.id.recommend)).perform(click());
-            waitFor(()->checked.size()==3);ready(app);
-            waitFor(()->{AtomicBoolean done=new AtomicBoolean();app.onActivity(a->done.set(((TextView)a.findViewById(R.id.counter)).getText().toString().equals("1 / 1")));return done.get();});
-            for(String path:checked)assertFalse("Background checks must not ask for unverified candidates",path.contains("includeCandidates"));
-            onView(withText("공식 영상을 찾지 못한 2곡은 뺐어요.")).check(matches(isDisplayed()));
-            onView(withText(result.tracks.get(1).track.title)).check(matches(isDisplayed()));
+            waitFor(()->checked.size()==5);ready(app);
+            waitFor(()->counter(app).equals("1 / 3"));
+            onView(withText(result.tracks.get(0).track.title)).check(matches(isDisplayed()));
+            onView(withId(R.id.result_detail)).check(matches(withText(containsString("공식 영상을 찾지 못한 2곡은 뺐어요."))));
+            app.onActivity(a->assertEquals("Look-ahead starts with the shown card",result.tracks.get(0).track.id,checked.get(0)));
+            assertEquals("Each card is checked once",checked.size(),new java.util.HashSet<>(checked).size());
         });
     }
+
+    @Test public void videoChecksLookOnlyTwoCardsAhead() throws Exception {
+        Recommender.Result result=recommendation(6);List<String> checked=new CopyOnWriteArrayList<>();
+        run((method,path)->{
+            if(path.equals("/recommendations"))return new Object[]{200,body(result)};
+            if(path.endsWith("/check")){checked.add(path);return new Object[]{200,new JSONObject().put("state","candidate").put("videoId","").toString()};}
+            return null;
+        },null,app->{
+            onView(withId(R.id.prompt)).perform(replaceText(PROMPT),closeSoftKeyboard());
+            onView(withId(R.id.recommend)).perform(click());
+            waitFor(()->checked.size()==3);ready(app);SystemClock.sleep(1000);
+            assertEquals("Only the shown card and the next two are checked",3,checked.size());
+            onView(withId(R.id.next)).perform(click());
+            waitFor(()->checked.size()==4);SystemClock.sleep(500);
+            assertEquals("Each card is checked once",4,new java.util.HashSet<>(checked).size());assertEquals(4,checked.size());
+        });
+    }
+
+    private static String counter(ActivityScenario<MainActivity> app){AtomicReference<String> text=new AtomicReference<>();app.onActivity(a->text.set(((TextView)a.findViewById(R.id.counter)).getText().toString()));return text.get();}
 
     private static Recommender.Result recommendation(int size) throws Exception {
         Context context=InstrumentationRegistry.getInstrumentation().getTargetContext();

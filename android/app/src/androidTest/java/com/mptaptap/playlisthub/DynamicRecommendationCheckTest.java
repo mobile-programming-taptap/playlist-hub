@@ -91,7 +91,7 @@ public class DynamicRecommendationCheckTest {
                             else if(request[1].equals("/playlists/"+listId)){assertEquals("GET",request[0]);response=new JSONObject().put("id",listId).put("title",title).put("items",new JSONArray().put(new JSONObject().put("id",itemId).put("trackId",firstId).put("track",first))).toString();}
                             else if(request[1].equals("/playback/tracks/"+alternative.getString("id")+"?includeCandidates=true")){assertEquals("GET",request[0]);code=404;response="{\"message\":\"검증용 영상 연결 없음\"}";}
                             // Background official-video checks: answer without a video so the cards stay as the test arranged them.
-                            else if(request[1].matches("/playback/tracks/[0-9a-f-]{36}")){assertEquals("GET",request[0]);response="{\"playbackAllowed\":false}";}
+                            else if(request[1].matches("/playback/tracks/[0-9a-f-]{36}/check")){assertEquals("GET",request[0]);response="{\"state\":\"candidate\",\"videoId\":\"\"}";}
                             else throw new AssertionError("Unexpected test request: "+request[0]+" "+request[1]);
                     }
                     byte[] content=response.getBytes(StandardCharsets.UTF_8);socket.getOutputStream().write(("HTTP/1.1 "+code+" OK\r\nContent-Type: application/json\r\nContent-Length: "+content.length+"\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.UTF_8));socket.getOutputStream().write(content);socket.getOutputStream().flush();
