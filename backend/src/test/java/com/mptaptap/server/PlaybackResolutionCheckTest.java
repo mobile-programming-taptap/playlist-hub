@@ -48,11 +48,12 @@ class PlaybackResolutionCheckTest {
                     f.video("Can't Stop the Feeling! Part Two (Official Video)","Justin Timberlake","public"),
                     f.video("Can't Stop the Feeling!","Justin Timberlake","private"),
                     f.video("Can't Stop the Feeling!","Justin Timberlake Covers","public"))) {
-                f.videos=List.of(video);
+                f.videos=List.of(video);f.links.forget(f.track.id);
                 assertEquals(404,assertThrows(ResponseStatusException.class,()->f.api.resolve(f.auth,f.track.id)).getStatusCode().value());
             }
             f.videos=List.of(f.video("Justin Timberlake - Can't Stop the Feeling! (Official Video)","justintimberlakeVEVO","public"));
-            assertTrue(f.api.resolve(f.auth,f.track.id).getBody().playbackAllowed(),"No-match responses must not permanently hide later results.");
+            assertTrue(f.api.resolve(f.auth,f.track.id,true).getBody().playbackAllowed(),"No-match responses must not permanently hide later results: pressing play searches again.");
+            assertTrue(f.api.resolve(f.auth,f.track.id).getBody().playbackAllowed(),"The video found by pressing play replaces the no-video check.");
         }
     }
 
@@ -136,6 +137,28 @@ class PlaybackResolutionCheckTest {
         }
     }
 
+    @Test void foundVideoIsReusedAfterARestartWithoutAnotherSearch() throws Exception {
+        try(Fixture f=new Fixture(true)){
+            assertEquals(VIDEO,f.api.resolve(f.auth,f.track.id).getBody().videoId());assertEquals(1,f.searches.get());
+            var restarted=new PlaybackApi(f.users,f.connections,f.remote,f.catalogue,new YoutubeLinks(f.db));
+            assertEquals(VIDEO,restarted.resolve(f.auth,f.track.id).getBody().videoId());
+            assertEquals(1,f.searches.get(),"The stored reference is reused");assertEquals(1,f.statusChecks.get(),"Its current playback status is still checked");
+        }
+    }
+
+    @Test void missingOfficialVideoIsRememberedButAManualPlaySearchesAgain() throws Exception {
+        try(Fixture f=new Fixture(true)){
+            f.videos=List.of(f.video("Can't Stop the Feeling! (Cover)","Someone Else","public"));
+            assertEquals(404,assertThrows(ResponseStatusException.class,()->f.api.resolve(f.auth,f.track.id)).getStatusCode().value());
+            assertEquals(404,assertThrows(ResponseStatusException.class,()->f.api.resolve(f.auth,f.track.id)).getStatusCode().value());
+            assertEquals(1,f.searches.get(),"A song checked as having no official video is not searched again");
+            assertEquals("",f.links.fresh(f.track.id,Instant.now()).orElseThrow());
+            try{f.api.resolve(f.auth,f.track.id,true);}catch(ResponseStatusException ignored){}
+            assertEquals(2,f.searches.get(),"Pressing play still looks for candidates");
+            assertTrue(f.links.fresh(f.track.id,Instant.now().plus(java.time.Duration.ofDays(8))).isEmpty(),"No-video checks expire after a week");
+        }
+    }
+
     @Test void errorsStayErrorsAndDeletedCachedVideosTriggerAnotherSearch() throws Exception {
         try(Fixture f=new Fixture(true)){
             f.searchCode=429;assertEquals(429,assertThrows(PlatformClient.Failure.class,()->f.api.resolve(f.auth,f.track.id)).status);
@@ -169,6 +192,7 @@ class PlaybackResolutionCheckTest {
         volatile List<Map<String,Object>> videos;
         volatile String authorization="";
         final Store users;final PlatformStore connections;final PlatformClient remote;final RecommendationCatalogue catalogue;final PlaybackApi api;final Track track;final String auth;
+        final JdbcTemplate db;final YoutubeLinks links;
         Fixture(boolean key) throws Exception {
             server.createContext("/search",exchange->{
                 searches.incrementAndGet();assertTrue(exchange.getRequestURI().getRawQuery().contains("type=video"));assertTrue(exchange.getRequestURI().getRawQuery().contains("q="));assertTrue(exchange.getRequestURI().getRawQuery().contains("maxResults=50"));
@@ -184,7 +208,7 @@ class PlaybackResolutionCheckTest {
             });server.start();
             var source=new DriverManagerDataSource("jdbc:h2:mem:playback-resolution-"+UUID.randomUUID()+";MODE=PostgreSQL;DB_CLOSE_DELAY=-1","sa","");
             new ResourceDatabasePopulator(new ClassPathResource("schema.sql")).execute(source);
-            var db=new JdbcTemplate(source);var manager=new DataSourceTransactionManager(source);
+            db=new JdbcTemplate(source);var manager=new DataSourceTransactionManager(source);links=new YoutubeLinks(db);
             catalogue=new RecommendationCatalogue(db,manager,json,"https://musicbrainz.org/ws/2/recording/");
             track=json.readValue(json.writeValueAsString(catalogue.all().get(0)),Track.class);track.id=UUID.randomUUID().toString();track.sourceUrl="https://musicbrainz.org/recording/"+track.id;
             track.title="Can't Stop the Feeling!";track.artist="Justin Timberlake";track.youtubeVideoId="";
@@ -192,7 +216,7 @@ class PlaybackResolutionCheckTest {
             videos=List.of(video("Justin Timberlake - Can't Stop the Feeling! (Official Video)","Justin Timberlake","public"));
             users=new Store(db,manager,json,200,20);connections=new PlatformStore(db,manager,json,Base64.getEncoder().encodeToString(new byte[32]));
             remote=new PlatformClient(json,key?Map.of("YOUTUBE_API_KEY","fixture-key"):Map.of(),Map.of("youtube","http://127.0.0.1:"+server.getAddress().getPort()));
-            api=new PlaybackApi(users,connections,remote,catalogue);auth="Bearer "+users.register().get("token");
+            api=new PlaybackApi(users,connections,remote,catalogue,links);auth="Bearer "+users.register().get("token");
         }
         Map<String,Object> video(String title,String channel,String privacy){var state=new LinkedHashMap<>(status);state.put("privacyStatus",privacy);return Map.of("id",VIDEO,"snippet",Map.of("title",title,"channelTitle",channel),"status",state);}
         public void close(){catalogue.close();remote.close();server.stop(0);}

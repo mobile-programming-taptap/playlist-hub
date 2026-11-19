@@ -420,6 +420,30 @@ class DynamicCatalogueCheckTest {
         }finally{if(app!=null)app.close();mb.stop(0);}
     }
 
+    @Test void songsWithoutAnOfficialVideoAreLeftOutAndKnownVideosRideAlong() throws Exception {
+        String[][] credits={{"Chega de Saudade","João Gilberto"},{"Desafinado","João Gilberto"},{"Corcovado","Antônio Carlos Jobim"},
+            {"Wave","Antônio Carlos Jobim"},{"Meditação","Antônio Carlos Jobim"},{"O Barquinho","João Gilberto"},{"Samba de Uma Nota Só","João Gilberto"},{"Insensatez","João Gilberto"}};
+        List<String> ids=new ArrayList<>();List<Map<String,Object>> recordings=new ArrayList<>(),songs=new ArrayList<>();String release=UUID.randomUUID().toString();
+        for(String[] credit:credits){String id=UUID.randomUUID().toString();ids.add(id);recordings.add(recording(id,credit[0],credit[1],"",release));songs.add(song(credit[0],credit[1],List.of("bossa_nova"),""));}
+        HttpServer ai=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0),mb=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
+        ai.createContext("/responses",exchange->{exchange.getRequestBody().readAllBytes();respond(exchange,200,envelope(plan("bossa_nova",songs)));});
+        mb.createContext("/recording/",exchange->respond(exchange,200,Map.of("recordings",recordings)));ai.start();mb.start();
+        ConfigurableApplicationContext app=null;
+        try {
+            app=start("jdbc:h2:mem:videos-"+UUID.randomUUID()+";MODE=PostgreSQL;DB_CLOSE_DELAY=-1","sa","","http://127.0.0.1:"+ai.getAddress().getPort()+"/responses","http://127.0.0.1:"+mb.getAddress().getPort()+"/recording/");
+            String token=value("POST","/sessions",null,null,201).path("token").asString();
+            assertEquals(8,value("POST","/recommendations",token,Map.of("prompt","보사노바"),200).path("tracks").size());
+            var links=app.getBean(YoutubeLinks.class);var now=java.time.Instant.now();
+            links.remember(ids.get(0),"",now);links.remember(ids.get(1),"abcdefghijk",now);links.remember(ids.get(2),"",now.minus(Duration.ofDays(8)));
+            JsonNode second=value("POST","/recommendations",token,Map.of("prompt","보사노바"),200).path("tracks");
+            assertFalse(ids(second).contains(ids.get(0)),"A song known to have no official video is not offered");
+            assertTrue(ids(second).contains(ids.get(2)),"An expired no-video check does not hide the song");
+            for(JsonNode pick:second)assertEquals(pick.path("track").path("id").asString().equals(ids.get(1))?"abcdefghijk":"",pick.path("track").path("youtubeVideoId").asString());
+            assertFalse(app.getBean(JdbcTemplate.class).queryForObject("SELECT track_json FROM recommendation_tracks WHERE id=?",String.class,ids.get(1)).contains("abcdefghijk"),
+                "YouTube references stay outside the CC0 recording records");
+        }finally{if(app!=null)app.close();ai.stop(0);mb.stop(0);}
+    }
+
     @Test void catalogueOutageStillReturnsAlreadyVerifiedSongs() throws Exception {
         var status=new AtomicInteger(200);String id=UUID.randomUUID().toString(),releaseId=UUID.randomUUID().toString();
         HttpServer mb=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);

@@ -19,9 +19,10 @@ public class Api {
     private final Store store;
     private final OpenAi ai;
     private final RecommendationCatalogue catalogue;
+    private final YoutubeLinks videos;
 
-    Api(Store store, OpenAi ai, RecommendationCatalogue catalogue) {
-        this.store = store; this.ai = ai; this.catalogue=catalogue;
+    Api(Store store, OpenAi ai, RecommendationCatalogue catalogue, YoutubeLinks videos) {
+        this.store = store; this.ai = ai; this.catalogue=catalogue; this.videos=videos;
     }
 
     @GetMapping("/health")
@@ -93,7 +94,9 @@ public class Api {
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,catalogueNotice(reason));
         }
         Map<String,Track> candidates=new LinkedHashMap<>();
-        for(Track track:verified)candidates.put(track.id,track);
+        java.time.Instant now=java.time.Instant.now();
+        // 공식 영상이 없다고 최근 확인한 곡은 카드로 보여 주지 않는다.
+        for(Track track:verified)if(!"".equals(videos.fresh(track.id,now).orElse(null)))candidates.put(track.id,track);
         for(List<String> ids:List.of(body.keptTrackIds()==null?List.<String>of():body.keptTrackIds(),body.excludedTrackIds()==null?List.<String>of():body.excludedTrackIds()))
             for(String id:ids)candidates.putIfAbsent(id,catalogue.track(id));
         Recommender.Result result=Conversation.recommend(new ArrayList<>(candidates.values()),plan.conditions(),feedback,"openai",body.keptTrackIds(),body.excludedTrackIds());
@@ -108,7 +111,7 @@ public class Api {
                 var previous=plan.candidates().stream().map(song->song.title()+"|"+song.artist()).collect(java.util.stream.Collectors.toSet());
                 var fresh=extra.candidates().stream().filter(song->!previous.contains(song.title()+"|"+song.artist())).toList();
                 proposed+=fresh.size();
-                for(Track track:catalogue.resolve(fresh,java.time.Duration.ofNanos(Math.max(1,deadline-System.nanoTime())),plan.conditions())){candidates.putIfAbsent(track.id,track);verifiedIds.add(track.id);}
+                for(Track track:catalogue.resolve(fresh,java.time.Duration.ofNanos(Math.max(1,deadline-System.nanoTime())),plan.conditions())){verifiedIds.add(track.id);if(!"".equals(videos.fresh(track.id,now).orElse(null)))candidates.putIfAbsent(track.id,track);}
                 result=Conversation.recommend(new ArrayList<>(candidates.values()),plan.conditions(),feedback,"openai",body.keptTrackIds(),body.excludedTrackIds());
             } catch(InterruptedException interrupted){Thread.currentThread().interrupt();throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"AI 요청이 중단됐어요. 같은 요청으로 다시 시도해 주세요.");}
             catch(Exception error){org.slf4j.LoggerFactory.getLogger(Api.class).warn("Supplementary recommendation failed: {}",error.getClass().getSimpleName());}
@@ -120,6 +123,8 @@ public class Api {
             else if(verifiedIds.size()<proposed)notice="AI 후보 "+proposed+"곡 중 실제 곡 정보를 확인한 곡은 "+verifiedIds.size()+"곡이고, 요청과 반응을 반영한 추천은 "+shown+"곡이에요. 같은 요청으로 다른 후보를 찾아볼 수 있어요.";
         }
         org.slf4j.LoggerFactory.getLogger(Api.class).info("Recommendation counts: proposed={}, verified={}, shown={}",proposed,verifiedIds.size(),shown);
+        // 이미 찾은 공식 영상은 응답 카드에만 실어 바로 재생하게 한다. 곡 레코드에는 저장하지 않는다.
+        for(Recommender.Pick pick:result.tracks)if(pick.track.youtubeVideoId.isEmpty())pick.track.youtubeVideoId=videos.fresh(pick.track.id,now).orElse("");
         return new Recommender.Result(result.tracks,result.conditions,"openai",notice);
     }
 

@@ -83,7 +83,7 @@ class PlaybackCheckTest {
             users=new Store(db,manager,json,200,20);connections=new PlatformStore(db,manager,json,Base64.getEncoder().encodeToString(new byte[32]));
             remote=new PlatformClient(json,key?Map.of("YOUTUBE_API_KEY","fixture-key"):Map.of(),Map.of("youtube","http://127.0.0.1:"+server.getAddress().getPort()));
             catalogue=new RecommendationCatalogue(db,manager,json,"http://127.0.0.1:"+server.getAddress().getPort()+"/recording/");
-            api=new PlaybackApi(users,connections,remote,catalogue);auth="Bearer "+users.register().get("token");
+            api=new PlaybackApi(users,connections,remote,catalogue,new YoutubeLinks(db));auth="Bearer "+users.register().get("token");
         }
         public void close(){catalogue.close();remote.close();server.stop(0);}
     }

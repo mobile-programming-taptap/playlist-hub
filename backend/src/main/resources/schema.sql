@@ -14,6 +14,11 @@ CREATE TABLE IF NOT EXISTS recommendation_tracks (
     id VARCHAR(36) PRIMARY KEY,
     track_json TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS youtube_links (
+    track_id VARCHAR(36) PRIMARY KEY,
+    video_id VARCHAR(11) NOT NULL,
+    checked_at VARCHAR(40) NOT NULL
+);
 CREATE TABLE IF NOT EXISTS playlists (
     id VARCHAR(36) PRIMARY KEY,
     user_id VARCHAR(36) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
