@@ -391,7 +391,7 @@ class DynamicCatalogueCheckTest {
         }finally{if(app!=null)app.close();mb.stop(0);}
     }
 
-    @Test void transientCatalogueFailureRetriesOnceAtProviderRateAndPermanentFailureStops() throws Exception {
+    @Test void transientCatalogueFailureRetriesTwiceWithGrowingGapAndPermanentFailureStops() throws Exception {
         var calls=new AtomicInteger();var timestamps=new CopyOnWriteArrayList<Long>();
         String id=UUID.randomUUID().toString(),releaseId=UUID.randomUUID().toString();
         var failure=new AtomicInteger(503);
@@ -411,11 +411,58 @@ class DynamicCatalogueCheckTest {
             var missing=new OpenAi.Suggestion("Another song","Another artist",List.of("genre:retry_genre"),"en");
             failure.set(503);long started=System.nanoTime();
             assertEquals("CATALOGUE_HTTP_503",assertThrows(IllegalStateException.class,()->catalogue.resolve(List.of(missing))).getMessage());
-            assertEquals(4,calls.get());assertTrue(System.nanoTime()-started<Duration.ofSeconds(8).toNanos());
+            assertEquals(5,calls.get(),"A busy provider gets two more tries");assertTrue(System.nanoTime()-started<Duration.ofSeconds(8).toNanos());
+            assertTrue(timestamps.get(4)-timestamps.get(3)>=Duration.ofMillis(1900).toNanos(),"The second retry waits longer");
             failure.set(400);
             assertEquals("CATALOGUE_HTTP_400",assertThrows(IllegalStateException.class,()->catalogue.resolve(List.of(missing))).getMessage());
-            assertEquals(5,calls.get(),"Permanent errors must not be retried");
+            assertEquals(6,calls.get(),"Permanent errors must not be retried");
             assertEquals(1,app.getBean(JdbcTemplate.class).queryForObject("SELECT COUNT(*) FROM recommendation_tracks",Integer.class));
+        }finally{if(app!=null)app.close();mb.stop(0);}
+    }
+
+    @Test void songsWithoutAnOfficialVideoAreLeftOutAndKnownVideosRideAlong() throws Exception {
+        String[][] credits={{"Chega de Saudade","João Gilberto"},{"Desafinado","João Gilberto"},{"Corcovado","Antônio Carlos Jobim"},
+            {"Wave","Antônio Carlos Jobim"},{"Meditação","Antônio Carlos Jobim"},{"O Barquinho","João Gilberto"},{"Samba de Uma Nota Só","João Gilberto"},{"Insensatez","João Gilberto"}};
+        List<String> ids=new ArrayList<>();List<Map<String,Object>> recordings=new ArrayList<>(),songs=new ArrayList<>();String release=UUID.randomUUID().toString();
+        for(String[] credit:credits){String id=UUID.randomUUID().toString();ids.add(id);recordings.add(recording(id,credit[0],credit[1],"",release));songs.add(song(credit[0],credit[1],List.of("bossa_nova"),""));}
+        HttpServer ai=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0),mb=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
+        ai.createContext("/responses",exchange->{exchange.getRequestBody().readAllBytes();respond(exchange,200,envelope(plan("bossa_nova",songs)));});
+        mb.createContext("/recording/",exchange->respond(exchange,200,Map.of("recordings",recordings)));ai.start();mb.start();
+        ConfigurableApplicationContext app=null;
+        try {
+            app=start("jdbc:h2:mem:videos-"+UUID.randomUUID()+";MODE=PostgreSQL;DB_CLOSE_DELAY=-1","sa","","http://127.0.0.1:"+ai.getAddress().getPort()+"/responses","http://127.0.0.1:"+mb.getAddress().getPort()+"/recording/");
+            String token=value("POST","/sessions",null,null,201).path("token").asString();
+            assertEquals(8,value("POST","/recommendations",token,Map.of("prompt","보사노바"),200).path("tracks").size());
+            var links=app.getBean(YoutubeLinks.class);var now=java.time.Instant.now();
+            links.remember(ids.get(0),"",now);links.remember(ids.get(1),"abcdefghijk",now);links.remember(ids.get(2),"",now.minus(Duration.ofDays(8)));
+            links.rememberCandidate(ids.get(3),"lmnopqrstuv",now);
+            JsonNode second=value("POST","/recommendations",token,Map.of("prompt","보사노바"),200).path("tracks");
+            assertFalse(ids(second).contains(ids.get(0)),"A song known to have no official video is not offered");
+            assertTrue(ids(second).contains(ids.get(2)),"An expired no-video check does not hide the song");
+            assertTrue(ids(second).contains(ids.get(3)),"A song with only an unconfirmed candidate video stays");
+            for(JsonNode pick:second)assertEquals(pick.path("track").path("id").asString().equals(ids.get(1))?"abcdefghijk":"",pick.path("track").path("youtubeVideoId").asString());
+            assertFalse(app.getBean(JdbcTemplate.class).queryForObject("SELECT track_json FROM recommendation_tracks WHERE id=?",String.class,ids.get(1)).contains("abcdefghijk"),
+                "YouTube references stay outside the CC0 recording records");
+        }finally{if(app!=null)app.close();ai.stop(0);mb.stop(0);}
+    }
+
+    @Test void catalogueOutageStillReturnsAlreadyVerifiedSongs() throws Exception {
+        var status=new AtomicInteger(200);String id=UUID.randomUUID().toString(),releaseId=UUID.randomUUID().toString();
+        HttpServer mb=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
+        mb.createContext("/recording/",exchange->respond(exchange,status.get(),Map.of("recordings",List.of(recording(id,"Kept song","Kept artist","",releaseId)))));
+        mb.start();ConfigurableApplicationContext app=null;
+        try {
+            String endpoint="http://127.0.0.1:"+mb.getAddress().getPort();
+            app=start("jdbc:h2:mem:outage-"+UUID.randomUUID()+";MODE=PostgreSQL;DB_CLOSE_DELAY=-1","sa","",endpoint+"/unused",endpoint+"/recording/");
+            var catalogue=app.getBean(RecommendationCatalogue.class);
+            var kept=new OpenAi.Suggestion("Kept song","Kept artist",List.of("genre:outage_genre"),"en");
+            catalogue.resolve(List.of(kept));
+            status.set(503);
+            var fresh=new OpenAi.Suggestion("Fresh song","Fresh artist",List.of("genre:outage_genre"),"en");
+            assertEquals(List.of(id),catalogue.resolve(List.of(kept,fresh)).stream().map(track->track.id).toList(),
+                "Songs verified earlier are still shown when the lookup for the rest fails");
+            assertEquals("CATALOGUE_HTTP_503",assertThrows(IllegalStateException.class,()->catalogue.resolve(List.of(fresh))).getMessage(),
+                "With nothing verified the failure is still reported");
         }finally{if(app!=null)app.close();mb.stop(0);}
     }
 

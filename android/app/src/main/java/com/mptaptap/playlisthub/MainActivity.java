@@ -69,6 +69,11 @@ import org.json.JSONObject;
 
 public class MainActivity extends AppCompatActivity {
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
+    /** Official-video checks for shown cards run one at a time, apart from user actions. */
+    private final ExecutorService videoChecks = Executors.newSingleThreadExecutor();
+    private int videoCheckRound, droppedWithoutVideo;
+    private volatile boolean videoChecksStopped=true;
+    private final Set<String> videoQueued=new HashSet<>();
     private final ArtworkLoader artwork = new ArtworkLoader();
     private List<Track> catalogue = new ArrayList<>();
     private List<Recommender.Pick> picks = new ArrayList<>();
@@ -187,7 +192,7 @@ public class MainActivity extends AppCompatActivity {
         findViewById(R.id.library_scroll).setBackground(TapTapUi.rounded(this,R.color.background,28,false));findViewById(R.id.library_scroll).setClipToOutline(true);
         findViewById(R.id.recommend_scroll).addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob) -> resizeCard());
         pager.registerOnPageChangeCallback(new ViewPager2.OnPageChangeCallback() {
-            @Override public void onPageSelected(int index) { stopPlayer(); updateCounter(); }
+            @Override public void onPageSelected(int index) { stopPlayer(); updateCounter(); checkVideosNear(); }
             @Override public void onPageScrollStateChanged(int state) { if(state==ViewPager2.SCROLL_STATE_IDLE)updateDiscoverAppearance(); }
         });
         findViewById(R.id.recommend).setOnClickListener(v -> recommend());
@@ -235,6 +240,8 @@ public class MainActivity extends AppCompatActivity {
                 if (librarySelected && playlistId != null) { playlistId = null; loadLibrary(); }
                 else if (librarySelected) ((BottomNavigationView)findViewById(R.id.navigation)).setSelectedItemId(R.id.nav_recommend);
                 else if (hasResults && findViewById(R.id.request_panel).getVisibility()==View.VISIBLE) { hideKeyboard(); showResults(); }
+                // 결과 화면에서 나가도 다시 요청하지 않도록 앱을 닫지 않고 뒤로 보낸다.
+                else if (hasResults) moveTaskToBack(true);
                 else { setEnabled(false); getOnBackPressedDispatcher().onBackPressed(); }
             }
         });
@@ -458,7 +465,9 @@ public class MainActivity extends AppCompatActivity {
         int nextIndex=0;
         if(replacementPosition>=0&&picks.size()>replacementKeptCount){nextIndex=Math.min(replacementPosition,picks.size()-1);picks.add(nextIndex,picks.remove(replacementKeptCount));}
         replacementPosition=-1;int selectedIndex=nextIndex;
-        resultMode = (String)result[1]; resultNotice = (String)result[2];
+        resultMode = (String)result[1]; resultNotice = (String)result[2]; droppedWithoutVideo=0;
+        // Page events while the new cards are drawn must not check them before this round starts.
+        videoChecksStopped=true;
         boolean newTracks=mergeRecommendationTracks(true);
         resultConditions = (Recommender.Conditions)result[3]; hiddenTracks.clear();
         showResults(); List<Recommender.Pick> shown=picks;
@@ -470,6 +479,45 @@ public class MainActivity extends AppCompatActivity {
         });
         // Newly verified records are registered on the server; refresh the library's searchable tracks.
         if(api!=null&&newTracks)refreshData(()->{cards.notifyDataSetChanged();updateCounter();});
+        findViewById(R.id.results).post(this::startVideoChecks);
+    }
+
+    /** New results: forget earlier checks and look ahead from the shown card. */
+    private void startVideoChecks(){videoCheckRound++;videoChecksStopped=false;videoQueued.clear();checkVideosNear();}
+
+    /** Checks the shown card and the next two for a video, so cards only drop before the user reaches them. */
+    private void checkVideosNear() {
+        if(api==null||videoChecksStopped||picks.isEmpty()||!ApiClient.consentAccepted(this,api.base))return;
+        ApiClient source=api;int round=videoCheckRound,current=Math.max(0,pager.getCurrentItem());
+        for(int i=current;i<Math.min(picks.size(),current+3);i++) {
+            Track track=picks.get(i).track;
+            if(!track.youtubeVideoId.isEmpty()||!videoQueued.add(track.id))continue;
+            videoChecks.execute(()->{
+                if(round!=videoCheckRound||videoChecksStopped)return;
+                String outcome;
+                try{JSONObject result=source.object("GET","/playback/tracks/"+track.id+"/check",null);
+                    outcome=result.optString("state").equals("verified")?result.optString("videoId"):"candidate";}
+                catch(ApiClient.ApiError error){outcome=error.statusCode==404?"none":"stop";}
+                // Daily budget, outage or no YouTube access: keep the remaining cards as they are.
+                catch(Exception error){outcome="stop";}
+                String found=outcome;
+                runOnUiThread(()->videoChecked(round,track,found));
+            });
+        }
+    }
+
+    private void videoChecked(int round,Track track,String outcome) {
+        if(round!=videoCheckRound||isDestroyed()||isFinishing())return;
+        if(outcome.equals("stop")){videoChecksStopped=true;return;}
+        int index=-1;for(int i=0;i<picks.size();i++)if(picks.get(i).track.id.equals(track.id))index=i;
+        if(index<0||outcome.equals("candidate"))return;
+        if(!outcome.equals("none")){if(outcome.matches("[A-Za-z0-9_-]{11}")){picks.get(index).track.youtubeVideoId=outcome;cards.notifyItemChanged(index);}return;}
+        int current=pager.getCurrentItem();
+        // The card in front of the user stays; playing it still offers other videos or the external apps.
+        if(index==current)return;
+        List<Recommender.Pick> changed=new ArrayList<>(picks);changed.remove(index);picks=changed;droppedWithoutVideo++;
+        showResults();pager.setCurrentItem(Math.max(0,Math.min(index<current?current-1:current,picks.size()-1)),false);
+        checkVideosNear();
     }
 
     private boolean mergeRecommendationTracks(boolean replace) {
@@ -492,7 +540,8 @@ public class MainActivity extends AppCompatActivity {
         ((TextView)findViewById(R.id.empty)).setText(hiddenTracks.isEmpty()?emptyNotice:"이번 추천에서 모든 곡을 제외했어요.\n요청을 수정해 새로 추천받을 수 있어요.");
         ((TextView)findViewById(R.id.notice)).setText(resultMode.equals("openai")?"AI 추천":"이전 기본 추천 결과 · AI 연결 필요");
         TextView detail=findViewById(R.id.result_detail);
-        detail.setText(resultNotice+(hiddenTracks.isEmpty()?"":"\n이번 결과만 수정했어요. 좋아요·싫어요는 그대로예요."));
+        // After cards drop, the server's song count is out of date, so say what changed instead.
+        detail.setText((droppedWithoutVideo>0?"공식 영상을 찾지 못한 "+droppedWithoutVideo+"곡은 뺐어요.":resultNotice)+(hiddenTracks.isEmpty()?"":"\n이번 결과만 수정했어요. 좋아요·싫어요는 그대로예요."));
         detail.setVisibility(!picks.isEmpty()&&!detail.getText().toString().isEmpty()?View.VISIBLE:View.GONE);
         List<String> conditions=new ArrayList<>();
         for (String tag:resultConditions.tags) conditions.add(Recommender.label(tag));
@@ -1340,6 +1389,11 @@ public class MainActivity extends AppCompatActivity {
     }
     private void updateBusy(){
         busy=pendingTask.current()!=null||recommendation.current().loading;findViewById(R.id.progress).setVisibility(busy?View.VISIBLE:View.INVISIBLE);
+        boolean finding=recommendation.current().loading;
+        // 추천은 수십 초 걸릴 수 있어 진행 안내를 띄우고, 지난 실패 안내는 지운다.
+        if(finding&&findingBar==null){dismissFailure();findingBar=snackbar("음악을 찾고 있어요 · 보통 5~20초 걸려요",Snackbar.LENGTH_INDEFINITE);findingBar.show();}
+        else if(!finding&&findingBar!=null){findingBar.dismiss();findingBar=null;}
+        ((MaterialButton)findViewById(R.id.recommend)).setText(finding?"음악을 찾고 있어요…":"새로운 음악 발견하기");
         findViewById(R.id.recommend).setEnabled(!busy && metadataReady);findViewById(R.id.settings).setEnabled(!busy);
         findViewById(R.id.save_results).setEnabled(!busy && metadataReady && !picks.isEmpty());
         findViewById(R.id.edit_request).setEnabled(!busy);
@@ -1359,6 +1413,7 @@ public class MainActivity extends AppCompatActivity {
         bar.setTextMaxLines(4);
         bar.setAnchorViewLayoutListenerEnabled(true);return bar;
     }
+    private Snackbar findingBar;
     private void dismissFailure(){if(failureBar!=null){failureBar.dismiss();failureBar=null;}}
     private void showError(String message,Runnable retry){dismissFailure();Snackbar bar=snackbar(message,retry==null?Snackbar.LENGTH_LONG:Snackbar.LENGTH_INDEFINITE);failureBar=bar;if(retry!=null)bar.setAction("재시도",v->{dismissFailure();retry.run();});bar.show();}
 
@@ -1418,6 +1473,7 @@ public class MainActivity extends AppCompatActivity {
     @Override protected void onDestroy(){
         artwork.close();
         dismissFailure();stopPlayer();for(AlertDialog dialog:dialogs)dialog.dismiss();dialogs.clear();
+        videoCheckRound++;videoChecks.shutdownNow();
         worker.execute(local::close);worker.shutdown();super.onDestroy();
     }
 }

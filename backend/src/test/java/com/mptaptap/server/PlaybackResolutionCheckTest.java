@@ -48,11 +48,12 @@ class PlaybackResolutionCheckTest {
                     f.video("Can't Stop the Feeling! Part Two (Official Video)","Justin Timberlake","public"),
                     f.video("Can't Stop the Feeling!","Justin Timberlake","private"),
                     f.video("Can't Stop the Feeling!","Justin Timberlake Covers","public"))) {
-                f.videos=List.of(video);
+                f.videos=List.of(video);f.links.forget(f.track.id);
                 assertEquals(404,assertThrows(ResponseStatusException.class,()->f.api.resolve(f.auth,f.track.id)).getStatusCode().value());
             }
             f.videos=List.of(f.video("Justin Timberlake - Can't Stop the Feeling! (Official Video)","justintimberlakeVEVO","public"));
-            assertTrue(f.api.resolve(f.auth,f.track.id).getBody().playbackAllowed(),"No-match responses must not permanently hide later results.");
+            assertTrue(f.api.resolve(f.auth,f.track.id,true).getBody().playbackAllowed(),"No-match responses must not permanently hide later results: pressing play searches again.");
+            assertTrue(f.api.resolve(f.auth,f.track.id).getBody().playbackAllowed(),"The video found by pressing play replaces the no-video check.");
         }
     }
 
@@ -136,6 +137,55 @@ class PlaybackResolutionCheckTest {
         }
     }
 
+    @Test void foundVideoIsReusedAfterARestartWithoutAnotherSearch() throws Exception {
+        try(Fixture f=new Fixture(true)){
+            assertEquals(VIDEO,f.api.resolve(f.auth,f.track.id).getBody().videoId());assertEquals(1,f.searches.get());
+            var restarted=new PlaybackApi(f.users,f.connections,f.remote,f.catalogue,new YoutubeLinks(f.db));
+            assertEquals(VIDEO,restarted.resolve(f.auth,f.track.id).getBody().videoId());
+            assertEquals(1,f.searches.get(),"The stored reference is reused");assertEquals(1,f.statusChecks.get(),"Its current playback status is still checked");
+        }
+    }
+
+    @Test void missingOfficialVideoIsRememberedButAManualPlaySearchesAgain() throws Exception {
+        try(Fixture f=new Fixture(true)){
+            f.videos=List.of(f.video("Can't Stop the Feeling! (Cover)","Someone Else","public"));
+            assertEquals(404,assertThrows(ResponseStatusException.class,()->f.api.resolve(f.auth,f.track.id)).getStatusCode().value());
+            assertEquals(404,assertThrows(ResponseStatusException.class,()->f.api.resolve(f.auth,f.track.id)).getStatusCode().value());
+            assertEquals(1,f.searches.get(),"A song checked as having no official video is not searched again");
+            assertTrue(f.links.fresh(f.track.id,Instant.now()).orElseThrow().none());
+            try{f.api.resolve(f.auth,f.track.id,true);}catch(ResponseStatusException ignored){}
+            assertEquals(2,f.searches.get(),"Pressing play still looks for candidates");
+            assertTrue(f.links.fresh(f.track.id,Instant.now().plus(java.time.Duration.ofDays(8))).isEmpty(),"No-video checks expire after a week");
+        }
+    }
+
+    @Test void backgroundCheckKeepsCandidateOnlySongsAndReportsNoneOnlyWhenNothingMatches() throws Exception {
+        try(Fixture f=new Fixture(true)){
+            f.videos=List.of(f.video("Justin Timberlake - Can't Stop the Feeling! (Official Video)","Some Label Music","public"));
+            assertEquals("candidate",f.api.checkTrack(f.auth,f.track.id).getBody().get("state"),"A matching video on another channel keeps the card");
+            assertEquals("candidate",f.api.checkTrack(f.auth,f.track.id).getBody().get("state"));
+            assertEquals(1,f.searches.get(),"The candidate result is remembered");
+            f.links.forget(f.track.id);f.videos=List.of(f.video("Can't Stop the Feeling! (Cover)","Someone Else","public"));
+            assertEquals(404,assertThrows(ResponseStatusException.class,()->f.api.checkTrack(f.auth,f.track.id)).getStatusCode().value());
+            assertEquals(404,assertThrows(ResponseStatusException.class,()->f.api.checkTrack(f.auth,f.track.id)).getStatusCode().value());
+            assertEquals(2,f.searches.get(),"No video at all is remembered too");
+            f.links.forget(f.track.id);f.videos=List.of(f.video("Justin Timberlake - Can't Stop the Feeling! (Official Video)","Justin Timberlake","public"));
+            var verified=f.api.checkTrack(f.auth,f.track.id).getBody();
+            assertEquals("verified",verified.get("state"));assertEquals(VIDEO,verified.get("videoId"));
+        }
+    }
+
+    @Test void backgroundChecksStopAtTheDailyBudgetButPlayingStillSearches() throws Exception {
+        try(Fixture f=new Fixture(true)){
+            var limited=new PlaybackApi(f.users,f.connections,f.remote,f.catalogue,new YoutubeLinks(f.db,1));
+            assertEquals("verified",limited.checkTrack(f.auth,f.track.id).getBody().get("state"));
+            f.links.forget(f.track.id);
+            assertEquals(429,assertThrows(ResponseStatusException.class,()->limited.checkTrack(f.auth,f.track.id)).getStatusCode().value());
+            assertEquals(1,f.searches.get(),"Over budget, a background check does not search");
+            assertTrue(limited.resolve(f.auth,f.track.id,true).getBody().playbackAllowed(),"Pressing play is not limited by the background budget");
+        }
+    }
+
     @Test void errorsStayErrorsAndDeletedCachedVideosTriggerAnotherSearch() throws Exception {
         try(Fixture f=new Fixture(true)){
             f.searchCode=429;assertEquals(429,assertThrows(PlatformClient.Failure.class,()->f.api.resolve(f.auth,f.track.id)).status);
@@ -160,6 +210,23 @@ class PlaybackResolutionCheckTest {
         }
     }
 
+    @Test void aCoverReleaseIsNotTheOriginalBecauseTheComposerIsCredited() throws Exception {
+        try(Fixture f=new Fixture(true)){
+            f.track.title="RIDE ON TIME";f.track.artist="山下達郎";
+            var cover=new LinkedHashMap<>(f.video("RIDE ON TIME","May J. - Topic","public"));
+            cover.put("snippet",Map.of("title","RIDE ON TIME","channelTitle","May J. - Topic","description",
+                "Provided to YouTube by Label\n\nRIDE ON TIME · May J.\n\nSweet Song Covers\n\nComposer: 山下達郎\n\nAuto-generated by YouTube."));
+            f.videos=List.of(cover);
+            assertNull(f.remote.findPlayback(f.track,null,false),"Another singer's release is not the original recording");
+            var original=new LinkedHashMap<>(f.video("RIDE ON TIME","Label Releases","public"));
+            original.put("snippet",Map.of("title","RIDE ON TIME","channelTitle","Label Releases","description",
+                "Provided to YouTube by Label\n\nRIDE ON TIME · 山下達郎\n\nRIDE ON TIME\n\nAuto-generated by YouTube."));
+            f.videos=List.of(original);
+            var found=f.remote.findPlayback(f.track,null,false);
+            assertNotNull(found);assertFalse(found.requiresConfirmation(),"The performer's own release still counts as official");
+        }
+    }
+
     private static final class Fixture implements AutoCloseable {
         final ObjectMapper json=new ObjectMapper();
         final HttpServer server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
@@ -169,6 +236,7 @@ class PlaybackResolutionCheckTest {
         volatile List<Map<String,Object>> videos;
         volatile String authorization="";
         final Store users;final PlatformStore connections;final PlatformClient remote;final RecommendationCatalogue catalogue;final PlaybackApi api;final Track track;final String auth;
+        final JdbcTemplate db;final YoutubeLinks links;
         Fixture(boolean key) throws Exception {
             server.createContext("/search",exchange->{
                 searches.incrementAndGet();assertTrue(exchange.getRequestURI().getRawQuery().contains("type=video"));assertTrue(exchange.getRequestURI().getRawQuery().contains("q="));assertTrue(exchange.getRequestURI().getRawQuery().contains("maxResults=50"));
@@ -184,7 +252,7 @@ class PlaybackResolutionCheckTest {
             });server.start();
             var source=new DriverManagerDataSource("jdbc:h2:mem:playback-resolution-"+UUID.randomUUID()+";MODE=PostgreSQL;DB_CLOSE_DELAY=-1","sa","");
             new ResourceDatabasePopulator(new ClassPathResource("schema.sql")).execute(source);
-            var db=new JdbcTemplate(source);var manager=new DataSourceTransactionManager(source);
+            db=new JdbcTemplate(source);var manager=new DataSourceTransactionManager(source);links=new YoutubeLinks(db);
             catalogue=new RecommendationCatalogue(db,manager,json,"https://musicbrainz.org/ws/2/recording/");
             track=json.readValue(json.writeValueAsString(catalogue.all().get(0)),Track.class);track.id=UUID.randomUUID().toString();track.sourceUrl="https://musicbrainz.org/recording/"+track.id;
             track.title="Can't Stop the Feeling!";track.artist="Justin Timberlake";track.youtubeVideoId="";
@@ -192,7 +260,7 @@ class PlaybackResolutionCheckTest {
             videos=List.of(video("Justin Timberlake - Can't Stop the Feeling! (Official Video)","Justin Timberlake","public"));
             users=new Store(db,manager,json,200,20);connections=new PlatformStore(db,manager,json,Base64.getEncoder().encodeToString(new byte[32]));
             remote=new PlatformClient(json,key?Map.of("YOUTUBE_API_KEY","fixture-key"):Map.of(),Map.of("youtube","http://127.0.0.1:"+server.getAddress().getPort()));
-            api=new PlaybackApi(users,connections,remote,catalogue);auth="Bearer "+users.register().get("token");
+            api=new PlaybackApi(users,connections,remote,catalogue,links);auth="Bearer "+users.register().get("token");
         }
         Map<String,Object> video(String title,String channel,String privacy){var state=new LinkedHashMap<>(status);state.put("privacyStatus",privacy);return Map.of("id",VIDEO,"snippet",Map.of("title",title,"channelTitle",channel),"status",state);}
         public void close(){catalogue.close();remote.close();server.stop(0);}
