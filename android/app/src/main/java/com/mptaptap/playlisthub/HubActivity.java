@@ -45,7 +45,7 @@ import org.json.JSONObject;
 public final class HubActivity extends AppCompatActivity {
     private static final String[] PROVIDERS={"spotify","youtube"};
     private static final String[] PROVIDER_NAMES={"Spotify","YouTube Music"};
-    private static final String[] SAVED_TEXT={"screen","exportStopped","exportConnect","exportSourceUrl","exportExpanded","importId","targetProvider","transferId","transferKey","saveId","matchedSaveId","sourceKey","importRequestId","conversionRequestId","videoUrl","timeline","timelineExpanded","linkExpanded","importExpanded","listUrl","listTitle","email","name","emailExpanded","kakaoAction","welcomeAction","sourceProvider","libraryProvider","libraryCursor","libraryRequestCursor","libraryReset","libraryLoaded","libraryConnect","batchActiveId","authorizationProvider","authorizationStatus","authorizationReason","authorizationNotice","authorizationNoticeProvider","authorizationRejected"};
+    private static final String[] SAVED_TEXT={"screen","matchFlow","exportStopped","exportConnect","exportSourceUrl","exportExpanded","importId","targetProvider","transferId","transferKey","saveId","matchedSaveId","sourceKey","importRequestId","conversionRequestId","videoUrl","timeline","timelineExpanded","linkExpanded","importExpanded","listUrl","listTitle","email","name","emailExpanded","kakaoAction","welcomeAction","sourceProvider","libraryProvider","libraryCursor","libraryRequestCursor","libraryReset","libraryLoaded","libraryConnect","batchActiveId","authorizationProvider","authorizationStatus","authorizationReason","authorizationNotice","authorizationNoticeProvider","authorizationRejected"};
     private HubRequest requests;
     private String base,mode;
     private LinearLayout content,bottomBar;
@@ -303,11 +303,16 @@ public final class HubActivity extends AppCompatActivity {
         JSONObject row=selected.optJSONObject(0);String title=row==null?"":row.optString("title").trim();if(title.isEmpty())title="가져온 음악";
         if(title.length()>80){title=title.substring(0,80);if(Character.isHighSurrogate(title.charAt(title.length()-1)))title=title.substring(0,title.length()-1);}
         clearSource();requests.data.remove("sourceKey");put("targetProvider",target);put("listTitle",title);put("exportSourceUrl",row==null?"":row.optString("sourceUrl"));put("exportStopped","false");put("exportExpanded","false");
-        send("exportAccount","GET","/accounts/me",null);
+        send("exportAccount","GET","/connections",null);
     }
     private void beginExportImport() {
         put("importRequestId",UUID.randomUUID().toString());put("screen","export");render();scrollToTop();
         send("exportImport","POST","/imports/playlists",json("id",value("importRequestId"),"provider",value("libraryProvider"),"url",value("exportSourceUrl"),"title",value("listTitle").trim()));
+    }
+    /** "대상 플랫폼의 곡 후보 찾기" continues in the export screen; "개별 YouTube 영상 찾기" keeps the review screen and its save-videos option. */
+    private boolean exportMatching(){
+        if(!value("matchFlow").equals("export"))return false;
+        put("matchFlow","");put("exportSourceUrl","");put("exportStopped","false");put("exportExpanded","false");put("screen","export");render();scrollToTop();nextExportMatch(0);return true;
     }
     private void nextExportMatch(int offset){send("exportMatch","POST","/matches",json("importId",value("importId"),"targetProvider",value("targetProvider"),"offset",offset));}
     private void export() {
@@ -564,11 +569,11 @@ public final class HubActivity extends AppCompatActivity {
             if(key.equals(value("importExpanded")))show.run();
         }
         counted.run();
-        if(timeline)addPrimaryButton(content,"개별 YouTube 영상 찾기",()->{put("targetProvider","youtube");if(value("listTitle").trim().isEmpty())put("listTitle",imported.optString("title","영상 속 음악").substring(0,Math.min(65,imported.optString("title","영상 속 음악").length()))+" · 개별 영상");saveImport(true);});
+        if(timeline)addPrimaryButton(content,"개별 YouTube 영상 찾기",()->{put("matchFlow","review");put("targetProvider","youtube");if(value("listTitle").trim().isEmpty())put("listTitle",imported.optString("title","영상 속 음악").substring(0,Math.min(65,imported.optString("title","영상 속 음악").length()))+" · 개별 영상");saveImport(true);});
         content.addView(save,new LinearLayout.LayoutParams(-1,-2));
         heading("다른 플랫폼으로 옮기기");providerPicker(content,"targetProvider");
         paragraph("수정하고 선택한 곡을 앱 목록에 저장한 뒤 대상 서비스에서 같은 곡을 찾아요.");
-        addButton(content,"대상 플랫폼의 곡 후보 찾기",()->saveImport(true));
+        addButton(content,"대상 플랫폼의 곡 후보 찾기",()->{put("matchFlow","export");saveImport(true);});
         if(imported.has("reviews")&&supportedProvider(imported.optString("targetProvider")))addButton(content,"저장된 곡 후보 검토 이어보기",()->{put("targetProvider",imported.optString("targetProvider"));send("review","GET","/matches/"+Uri.encode(value("importId"))+"?targetProvider="+Uri.encode(value("targetProvider")),null);});
         if(!imported.has("entries")&&supportedProvider(imported.optString("provider")))addButton(content,"목록 변경 미리보기",()->send("sync","POST","/sync/"+Uri.encode(value("importId"))+"/preview",null));
     }
@@ -580,7 +585,7 @@ public final class HubActivity extends AppCompatActivity {
         for(int i=0;i<entries.length();i++) {
             JSONObject row=entries.optJSONObject(i);if(row==null)continue;JSONObject track=row.optJSONObject("track"),edit=edit(row.optInt("sourceIndex",i),track==null?row:track);
             if(!edit.optBoolean("excluded")) {
-                if(edit.optString("title").trim().isEmpty()||edit.optString("artist").trim().isEmpty()){message("포함할 곡의 곡명과 아티스트를 입력하거나 곡을 제외해 주세요.");return;}
+                if(edit.optString("title").trim().isEmpty()){message("포함할 곡의 곡명을 입력하거나 곡을 제외해 주세요.");return;}
                 if(imported.has("entries"))try{set(edit,"seconds",timelineSeconds(imported,edit));}catch(IllegalArgumentException error){message(error.getMessage());return;}
                 included++;
             }
@@ -785,10 +790,10 @@ public final class HubActivity extends AppCompatActivity {
                 put("screen","preview");break;
             case "review":put("review",value);restoreApprovals(value);put("screen","review");break;
             case "reviewedForMatch":
-                put("selections",new JSONArray());send("review","POST","/matches",json("importId",value("importId"),"targetProvider",provider("targetProvider")));return;
+                put("selections",new JSONArray());if(exportMatching())return;send("review","POST","/matches",json("importId",value("importId"),"targetProvider",provider("targetProvider")));return;
             case "reviewSavedLocally":put("review",value);send("matchedSaved","POST","/matches/"+Uri.encode(value("importId"))+"/save",json("title",value("listTitle").trim()));return;
             case "savedForMatch":
-                put("saveId",value.optString("id"));setResult(RESULT_OK,new Intent().putExtra("playlistId",value.optString("id")));put("selections",new JSONArray());send("review","POST","/matches",json("importId",value("importId"),"targetProvider",provider("targetProvider")));return;
+                put("saveId",value.optString("id"));setResult(RESULT_OK,new Intent().putExtra("playlistId",value.optString("id")));put("selections",new JSONArray());if(exportMatching())return;send("review","POST","/matches",json("importId",value("importId"),"targetProvider",provider("targetProvider")));return;
             case "reviewSaved":
                 put("review",value);dialog().setTitle("확인한 곡을 전송할까요?").setMessage("선택한 곡으로 "+providerName(provider("targetProvider"))+"에 ‘"+value("listTitle").trim()+"’ 목록을 만들어요. 제외한 곡은 보내지 않아요."+(value("screen").equals("export")?"\n자동 선택 "+ExportReview.autoCount(array("selections"))+"곡 포함":""))
                     .setPositiveButton("전송",(d,w)->{String key=transferKey();if(!key.equals(value("transferKey"))||value("transferId").isEmpty()){put("transferKey",key);put("transferId",UUID.randomUUID().toString());}transferPolls=0;put("screen","transfer");render();send("transfer","POST","/transfers",json("id",value("transferId"),"importId",value("importId"),"targetProvider",provider("targetProvider"),"title",value("listTitle").trim(),"confirmed",true));}).setNegativeButton("취소",null).show();return;
@@ -848,7 +853,8 @@ public final class HubActivity extends AppCompatActivity {
     private void scheduleTransferRefresh(){handler.removeCallbacks(transferRefresh);JSONObject transfer=requests.data.optJSONObject("transfer");if(resumed&&transfer!=null&&supportedProvider(transfer.optString("provider"))&&(transfer.optString("status").equals("RUNNING")||transfer.optString("status").equals("PENDING"))&&transferPolls<20)handler.postDelayed(transferRefresh,2000);}
     private void send(String route,String method,String path,JSONObject body){if(base.isEmpty()){message("서비스 이용 안내를 확인해 주세요.");return;}if(!ApiClient.consentAccepted(this,base)){render();return;}if(body!=null&&(body.has("provider")&&!supportedProvider(body.optString("provider"))||body.has("targetProvider")&&!supportedProvider(body.optString("targetProvider")))){message("지원하는 음악 서비스를 선택해 주세요.");return;}requests.send(getApplicationContext(),base,route,method,path,body);}
     private void busy(boolean loading){if(progress==null)return;if(loading)clearRetry();progress.setVisibility(loading?View.VISIBLE:View.GONE);for(View control:controls)control.setEnabled(!loading);if(navigation!=null)for(int i=0;i<navigation.getMenu().size();i++)navigation.getMenu().getItem(i).setEnabled(!loading);if(headerTitle!=null){ViewGroup header=(ViewGroup)headerTitle.getParent();for(int i=0;i<header.getChildCount();i++)if(header.getChildAt(i) instanceof MaterialButton)header.getChildAt(i).setEnabled(!loading||i==0&&requests.kakaoPending());}if(loading)message(requests.kakaoPending()?"카카오 로그인 확인 중이에요. 돌아가기를 누르면 취소할 수 있어요.":"처리 중이에요…");else if(status!=null&&(status.getText().toString().equals("처리 중이에요…")||status.getText().toString().startsWith("카카오 로그인 확인 중"))){status.setText("");status.setVisibility(View.GONE);}}
-    private void message(String message){if(status!=null){status.setText(message==null?"처리하지 못했어요.":message);status.setBackground(TapTapUi.rounded(this,R.color.surface,14,true));status.setPadding(dp(14),dp(12),dp(14),dp(12));status.setVisibility(View.VISIBLE);}}
+    private void message(String message){if(status!=null){status.setText(message==null?"처리하지 못했어요.":message);status.setBackground(TapTapUi.rounded(this,R.color.surface,14,true));status.setPadding(dp(14),dp(12),dp(14),dp(12));status.setVisibility(View.VISIBLE);
+        TextView shown=status;shown.post(()->{if(content.getParent() instanceof NestedScrollView)((NestedScrollView)content.getParent()).scrollTo(0,Math.max(0,shown.getTop()-dp(8)));});}}
 
     private LinearLayout column(){LinearLayout box=new LinearLayout(this);box.setOrientation(LinearLayout.VERTICAL);return box;}
     private LinearLayout card(LinearLayout parent){MaterialCardView card=new MaterialCardView(this);card.setRadius(dp(20));card.setCardElevation(0);card.setCardBackgroundColor(getColor(R.color.surface));card.setStrokeWidth(dp(1));card.setStrokeColor(getColor(R.color.line));LinearLayout.LayoutParams params=new LinearLayout.LayoutParams(-1,-2);params.setMargins(0,dp(12),0,dp(8));parent.addView(card,params);LinearLayout box=column();box.setPadding(dp(18),dp(16),dp(18),dp(16));card.addView(box);return box;}

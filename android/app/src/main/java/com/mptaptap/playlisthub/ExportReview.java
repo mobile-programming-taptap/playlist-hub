@@ -19,7 +19,11 @@ final class ExportReview {
 
     static String song(JSONObject track){if(track==null)return "곡 정보 확인 필요";String title=track.optString("title");return (title.isEmpty()?"곡명 확인 필요":title)+(track.optString("artist").isEmpty()?"":" · "+track.optString("artist"));}
 
-    /** Rule-scored MATCHED rows are pre-selected and rows with no candidate pre-excluded; ambiguous rows stay for the user. Existing choices win. */
+    /**
+     * Rule-scored MATCHED rows are pre-selected. UNKNOWN rows (no candidate is the same song) and rows with no candidate
+     * are pre-excluded, so a different song never waits as a suggestion; only NEEDS_REVIEW (same song, unclear version) stays for the user.
+     * Existing choices win.
+     */
     static JSONArray autoSelect(JSONArray items,JSONArray selections) {
         JSONArray result=copy(selections);if(items==null)return result;
         for(int i=0;i<items.length();i++) {
@@ -27,7 +31,7 @@ final class ExportReview {
             if(find(result,index)!=null)continue;
             String status=item.optString("status");JSONObject selected=item.optJSONObject("selected");JSONArray candidates=item.optJSONArray("candidates");
             if(status.equals("MATCHED")&&selected!=null&&!selected.optString("externalId").isEmpty())result.put(selection(index,selected.optString("externalId"),false,song(selected)));
-            else if(!status.equals("NOT_SEARCHED")&&(candidates==null||candidates.length()==0))result.put(selection(index,"",true,""));
+            else if(status.equals("UNKNOWN")||!status.equals("NOT_SEARCHED")&&(candidates==null||candidates.length()==0))result.put(selection(index,"",true,""));
         }
         return result;
     }
@@ -47,6 +51,7 @@ final class ExportReview {
         if(review==null||review.optInt("nextOffset",-1)>=0)return "곡 후보 찾는 중";
         Groups groups=group(review.optJSONArray("items"),selections);
         if(!groups.needsReview.isEmpty())return "확인 필요 "+groups.needsReview.size()+"곡 남음";
+        if(groups.selected.isEmpty())return "보낼 수 있는 곡이 없어요";
         return providerName+(providerName.equals("Spotify")?"로":"으로")+" "+groups.selected.size()+"곡 보내기";
     }
 
