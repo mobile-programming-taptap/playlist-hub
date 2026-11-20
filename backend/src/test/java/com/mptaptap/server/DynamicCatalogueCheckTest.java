@@ -490,14 +490,23 @@ class DynamicCatalogueCheckTest {
             Map<String,Object> legacy=new LinkedHashMap<>(plan("jazz",List.of()));legacy.remove("candidates");payload.set(legacy);
             assertTrue(api.plan("재즈만 추천해줘",List.of(),null,Map.of()).candidates().isEmpty());
             Map<String,Object> good=song("Take Five","The Dave Brubeck Quartet",List.of("jazz","instrumental"),"none");
-            List<Object> malformed=List.of("not an array",Collections.nCopies(13,good),List.of(song("","Artist",List.of(),"")),
-                List.of(song("a".repeat(161),"Artist",List.of(),"")),List.of(song("Song","a".repeat(161),List.of(),"")),
-                List.of(song("Song","Artist",List.of("invented"),"")),List.of(song("Song","Artist",List.of(),"not_a_language")),
-                List.of(song("Song","Artist",List.of("instrumental"),"ko")),List.of(song("Song","Artist",List.of("jazz"),"none")),List.of(Map.of("title",7,"artist","Artist","tags",List.of(),"language","")));
-            for(Object invalid:malformed) {
+            for(Object invalid:List.of("not an array",Collections.nCopies(13,good))) {
                 Map<String,Object> changed=new LinkedHashMap<>(legacy);changed.put("candidates",invalid);payload.set(changed);
-                assertThrows(Exception.class,()->api.plan("재즈만 추천해줘",List.of(),null,Map.of()),"Malformed suggestions must not become catalogue rows.");
+                assertThrows(Exception.class,()->api.plan("재즈만 추천해줘",List.of(),null,Map.of()),"A malformed candidate list fails the plan.");
             }
+            // One bad suggestion is left out; the rest of the plan still recommends.
+            List<Object> badRows=List.of(song("","Artist",List.of(),""),song("a".repeat(161),"Artist",List.of(),""),song("Song","a".repeat(161),List.of(),""),
+                song("Song","Artist",List.of("invented"),""),song("Song","Artist",List.of(),"not_a_language"),
+                song("Song","Artist",List.of("instrumental"),"ko"),Map.of("title",7,"artist","Artist","tags",List.of(),"language",""));
+            for(Object bad:badRows) {
+                Map<String,Object> changed=new LinkedHashMap<>(legacy);changed.put("candidates",List.of(bad,good));payload.set(changed);
+                var kept=api.plan("재즈만 추천해줘",List.of(),null,Map.of()).candidates();
+                assertEquals(List.of("Take Five"),kept.stream().map(OpenAi.Suggestion::title).toList(),"Malformed suggestions must not become catalogue rows: "+bad);
+            }
+            // A song without lyrics whose instrumental tag was forgotten is still that song.
+            Map<String,Object> untagged=new LinkedHashMap<>(legacy);untagged.put("candidates",List.of(song("Waltz for Debby","Bill Evans Trio",List.of("jazz","calm"),"none")));payload.set(untagged);
+            var repaired=api.plan("비 오는 밤에 듣기 좋은 잔잔한 음악",List.of(),null,Map.of()).candidates();
+            assertEquals(1,repaired.size());assertEquals(List.of("jazz","calm","instrumental"),repaired.get(0).tags());assertEquals("none",repaired.get(0).language());
             Map<String,Object> missingFlag=new LinkedHashMap<>(legacy);missingFlag.remove("languageSpecified");payload.set(missingFlag);
             assertThrows(Exception.class,()->api.plan("재즈만 추천해줘",List.of(),null,Map.of()));
         } finally {ai.stop(0);}
