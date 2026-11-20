@@ -82,6 +82,8 @@ public class Api {
         } catch(InterruptedException error) {
             Thread.currentThread().interrupt();throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"AI 요청이 중단됐어요. 같은 요청으로 다시 시도해 주세요.");
         } catch(Exception error) {
+            // 화면 문구는 하나지만 키 만료·AI 응답 오류·네트워크 문제는 로그에서 구분한다.
+            org.slf4j.LoggerFactory.getLogger(Api.class).warn("AI plan failed: {}: {}",error.getClass().getSimpleName(),error.getMessage());
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"AI 연결이 원활하지 않아요. 같은 요청으로 다시 시도해 주세요.");
         }
         List<Track> verified;
@@ -104,7 +106,8 @@ public class Api {
         int proposed=plan.candidates().size();
         // Reserve one recording lookup; its retries must fit the same overall deadline.
         long remaining=deadline-System.nanoTime()-java.time.Duration.ofSeconds(6).toNanos();
-        if(result.tracks.size()<7&&verified.size()<proposed&&proposed>=7&&remaining>java.time.Duration.ofSeconds(2).toNanos()&&store.reserveAi(user)) {
+        // Half a full list (6 of 12) is still worth replenishing; fewer than 5 is left as the model's own uncertainty.
+        if(result.tracks.size()<7&&verified.size()<proposed&&proposed>=5&&remaining>java.time.Duration.ofSeconds(2).toNanos()&&store.reserveAi(user)) {
             try {
                 OpenAi.Plan extra=ai.supplement(body.prompt(),body.history(),plan.conditions(),likedTags,plan.candidates(),
                     java.time.Duration.ofNanos(Math.min(java.time.Duration.ofSeconds(15).toNanos(),remaining)));
@@ -114,7 +117,8 @@ public class Api {
                 for(Track track:catalogue.resolve(fresh,java.time.Duration.ofNanos(Math.max(1,deadline-System.nanoTime())),plan.conditions())){verifiedIds.add(track.id);if(!videos.fresh(track.id,now).map(YoutubeLinks.Link::none).orElse(false))candidates.putIfAbsent(track.id,track);}
                 result=Conversation.recommend(new ArrayList<>(candidates.values()),plan.conditions(),feedback,"openai",body.keptTrackIds(),body.excludedTrackIds());
             } catch(InterruptedException interrupted){Thread.currentThread().interrupt();throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"AI 요청이 중단됐어요. 같은 요청으로 다시 시도해 주세요.");}
-            catch(Exception error){org.slf4j.LoggerFactory.getLogger(Api.class).warn("Supplementary recommendation failed: {}",error.getClass().getSimpleName());}
+            // The AI call and the recording lookup share this catch, so keep the message and stack trace to tell them apart.
+            catch(Exception error){org.slf4j.LoggerFactory.getLogger(Api.class).warn("Supplementary recommendation failed: {}: {}",error.getClass().getSimpleName(),error.getMessage(),error);}
         }
         String notice=result.notice;
         int shown=result.tracks.size();
