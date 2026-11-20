@@ -106,7 +106,8 @@ public class Api {
         int proposed=plan.candidates().size();
         // Reserve one recording lookup; its retries must fit the same overall deadline.
         long remaining=deadline-System.nanoTime()-java.time.Duration.ofSeconds(6).toNanos();
-        if(result.tracks.size()<7&&verified.size()<proposed&&proposed>=7&&remaining>java.time.Duration.ofSeconds(2).toNanos()&&store.reserveAi(user)) {
+        // Half a full list (6 of 12) is still worth replenishing; fewer than 5 is left as the model's own uncertainty.
+        if(result.tracks.size()<7&&verified.size()<proposed&&proposed>=5&&remaining>java.time.Duration.ofSeconds(2).toNanos()&&store.reserveAi(user)) {
             try {
                 OpenAi.Plan extra=ai.supplement(body.prompt(),body.history(),plan.conditions(),likedTags,plan.candidates(),
                     java.time.Duration.ofNanos(Math.min(java.time.Duration.ofSeconds(15).toNanos(),remaining)));
