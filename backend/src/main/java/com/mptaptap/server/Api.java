@@ -116,7 +116,8 @@ public class Api {
                 for(Track track:catalogue.resolve(fresh,java.time.Duration.ofNanos(Math.max(1,deadline-System.nanoTime())),plan.conditions())){verifiedIds.add(track.id);if(!videos.fresh(track.id,now).map(YoutubeLinks.Link::none).orElse(false))candidates.putIfAbsent(track.id,track);}
                 result=Conversation.recommend(new ArrayList<>(candidates.values()),plan.conditions(),feedback,"openai",body.keptTrackIds(),body.excludedTrackIds());
             } catch(InterruptedException interrupted){Thread.currentThread().interrupt();throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"AI 요청이 중단됐어요. 같은 요청으로 다시 시도해 주세요.");}
-            catch(Exception error){org.slf4j.LoggerFactory.getLogger(Api.class).warn("Supplementary recommendation failed: {}",error.getClass().getSimpleName());}
+            // The AI call and the recording lookup share this catch, so keep the message and stack trace to tell them apart.
+            catch(Exception error){org.slf4j.LoggerFactory.getLogger(Api.class).warn("Supplementary recommendation failed: {}: {}",error.getClass().getSimpleName(),error.getMessage(),error);}
         }
         String notice=result.notice;
         int shown=result.tracks.size();
