@@ -82,6 +82,8 @@ public class Api {
         } catch(InterruptedException error) {
             Thread.currentThread().interrupt();throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"AI 요청이 중단됐어요. 같은 요청으로 다시 시도해 주세요.");
         } catch(Exception error) {
+            // 화면 문구는 하나지만 키 만료·AI 응답 오류·네트워크 문제는 로그에서 구분한다.
+            org.slf4j.LoggerFactory.getLogger(Api.class).warn("AI plan failed: {}: {}",error.getClass().getSimpleName(),error.getMessage());
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"AI 연결이 원활하지 않아요. 같은 요청으로 다시 시도해 주세요.");
         }
         List<Track> verified;

@@ -24,6 +24,8 @@ final class BoundedHttp implements AutoCloseable {
             byte[] bytes=input.readNBytes(limit+1);
             if(expired.get())throw new IOException("RESPONSE_TIMEOUT");
             if(bytes.length>limit)throw new IOException("RESPONSE_TOO_LARGE");
+            // Callers may keep only a generic error code; the status is logged here. The body may echo credentials, so it is not.
+            if(response.statusCode()>=400)org.slf4j.LoggerFactory.getLogger(BoundedHttp.class).warn("HTTP {} from {}",response.statusCode(),request.uri().getHost());
             return new Reply(response.statusCode(),bytes);
         }finally{timer.cancel(false);}
     }
