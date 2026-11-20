@@ -238,22 +238,37 @@ public class OpenAi {
         // ponytail: legacy condition-only responses remain valid but cannot expand the catalogue.
         if(candidates==null)return List.of();
         if(!candidates.isArray()||candidates.size()>12)throw new IllegalStateException("AI_CANDIDATES_INVALID");
-        List<Suggestion> result=new ArrayList<>();
+        List<Suggestion> result=new ArrayList<>();int skipped=0;
         for(JsonNode row:candidates) {
-            if(!row.isObject()||row.size()!=4||!row.path("title").isString()||!row.path("artist").isString()
-                    ||!row.path("tags").isArray()||!row.path("language").isString())throw new IllegalStateException("AI_CANDIDATE_INVALID");
-            String title=row.path("title").asString().strip(),artist=row.path("artist").asString().strip(),language=row.path("language").asString();
-            if(title.isEmpty()||artist.isEmpty()||title.length()>160||artist.length()>160||row.path("tags").size()>64
-                    ||!Recommender.validLanguage(language))throw new IllegalStateException("AI_CANDIDATE_INVALID");
-            List<String> tags=new ArrayList<>();
-            for(JsonNode tag:row.path("tags")) {
-                if(!tag.isString()||!Recommender.validTag(tag.asString()))throw new IllegalStateException("AI_CANDIDATE_INVALID");
-                if(!tags.contains(tag.asString()))tags.add(tag.asString());
-            }
-            if(tags.contains("instrumental")!=language.equals("none"))throw new IllegalStateException("AI_CANDIDATE_INVALID");
-            result.add(new Suggestion(title,artist,List.copyOf(tags),language));
+            Suggestion song=suggestion(row);
+            // One malformed suggestion is left out instead of failing the whole recommendation.
+            if(song==null)skipped++;else result.add(song);
         }
+        if(skipped>0)org.slf4j.LoggerFactory.getLogger(OpenAi.class).warn("Skipped {} malformed AI song suggestions",skipped);
         return List.copyOf(result);
+    }
+    private static Suggestion skip(String reason,JsonNode row) {
+        org.slf4j.LoggerFactory.getLogger(OpenAi.class).info("AI song suggestion skipped ({}): {} / {}",reason,
+            row.path("title").asString("").strip(),row.path("artist").asString("").strip());
+        return null;
+    }
+
+    /** A checked suggestion, or null when the row is malformed (logged with the reason). */
+    private static Suggestion suggestion(JsonNode row) {
+        if(!row.isObject()||row.size()!=4||!row.path("title").isString()||!row.path("artist").isString()
+                ||!row.path("tags").isArray()||!row.path("language").isString())return skip("shape",row);
+        String title=row.path("title").asString().strip(),artist=row.path("artist").asString().strip(),language=row.path("language").asString();
+        if(title.isEmpty()||artist.isEmpty()||title.length()>160||artist.length()>160||row.path("tags").size()>64)return skip("text",row);
+        if(!Recommender.validLanguage(language))return skip("language",row);
+        List<String> tags=new ArrayList<>();
+        for(JsonNode tag:row.path("tags")) {
+            if(!tag.isString()||!Recommender.validTag(tag.asString()))return skip("tag "+tag,row);
+            if(!tags.contains(tag.asString()))tags.add(tag.asString());
+        }
+        // "none" means no lyrics, so a forgotten instrumental tag is added; an instrumental tag with lyrics is contradictory.
+        if(language.equals("none")&&!tags.contains("instrumental"))tags.add("instrumental");
+        if(tags.contains("instrumental")&&!language.equals("none"))return skip("instrumental with lyrics",row);
+        return new Suggestion(title,artist,List.copyOf(tags),language);
     }
 
     // ponytail: bounded exclusion cues only; this does not attach arbitrary negation to each genre.
