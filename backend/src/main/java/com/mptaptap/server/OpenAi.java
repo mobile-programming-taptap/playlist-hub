@@ -240,10 +240,12 @@ public class OpenAi {
     private List<Suggestion> suggestions(JsonNode candidates) {
         // ponytail: legacy condition-only responses remain valid but cannot expand the catalogue.
         if(candidates==null)return List.of();
-        if(!candidates.isArray()||candidates.size()>12)throw new IllegalStateException("AI_CANDIDATES_INVALID");
+        if(!candidates.isArray())throw new IllegalStateException("AI_CANDIDATES_INVALID");
+        // 12곡을 넘긴 답은 앞의 12곡만 쓴다. 초과분 때문에 추천 전체를 실패시키지 않는다.
+        if(candidates.size()>12)org.slf4j.LoggerFactory.getLogger(OpenAi.class).warn("AI proposed {} songs; using the first 12",candidates.size());
         List<Suggestion> result=new ArrayList<>();int skipped=0;
-        for(JsonNode row:candidates) {
-            Suggestion song=suggestion(row);
+        for(int i=0;i<Math.min(12,candidates.size());i++) {
+            Suggestion song=suggestion(candidates.get(i));
             // One malformed suggestion is left out instead of failing the whole recommendation.
             if(song==null)skipped++;else result.add(song);
         }

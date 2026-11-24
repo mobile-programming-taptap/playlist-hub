@@ -490,10 +490,10 @@ class DynamicCatalogueCheckTest {
             Map<String,Object> legacy=new LinkedHashMap<>(plan("jazz",List.of()));legacy.remove("candidates");payload.set(legacy);
             assertTrue(api.plan("재즈만 추천해줘",List.of(),null,Map.of()).candidates().isEmpty());
             Map<String,Object> good=song("Take Five","The Dave Brubeck Quartet",List.of("jazz","instrumental"),"none");
-            for(Object invalid:List.of("not an array",Collections.nCopies(13,good))) {
-                Map<String,Object> changed=new LinkedHashMap<>(legacy);changed.put("candidates",invalid);payload.set(changed);
-                assertThrows(Exception.class,()->api.plan("재즈만 추천해줘",List.of(),null,Map.of()),"A malformed candidate list fails the plan.");
-            }
+            Map<String,Object> notArray=new LinkedHashMap<>(legacy);notArray.put("candidates","not an array");payload.set(notArray);
+            assertThrows(Exception.class,()->api.plan("재즈만 추천해줘",List.of(),null,Map.of()),"A candidate field that is not a list fails the plan.");
+            Map<String,Object> tooMany=new LinkedHashMap<>(legacy);tooMany.put("candidates",Collections.nCopies(13,good));payload.set(tooMany);
+            assertEquals(12,api.plan("재즈만 추천해줘",List.of(),null,Map.of()).candidates().size(),"Proposals past the twelfth are left out instead of failing the plan.");
             // One bad suggestion is left out; the rest of the plan still recommends.
             List<Object> badRows=List.of(song("","Artist",List.of(),""),song("a".repeat(161),"Artist",List.of(),""),song("Song","a".repeat(161),List.of(),""),
                 song("Song","Artist",List.of("invented"),""),song("Song","Artist",List.of(),"not_a_language"),

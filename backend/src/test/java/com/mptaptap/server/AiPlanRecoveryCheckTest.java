@@ -61,6 +61,28 @@ class AiPlanRecoveryCheckTest {
         }finally{if(app!=null)app.close();ai.stop(0);mb.stop(0);}
     }
 
+    @Test void moreThanTwelveProposalsAreCutToTheFirstTwelveInsteadOfFailing() throws Exception {
+        List<Map<String,Object>> songs=songs("Many",13);
+        List<String> queries=new java.util.concurrent.CopyOnWriteArrayList<>();
+        HttpServer ai=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0),mb=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
+        ai.createContext("/responses",exchange->{exchange.getRequestBody().readAllBytes();respond(exchange,200,envelope(plan(songs)));});
+        mb.createContext("/recording/",exchange->{
+            queries.add(java.net.URLDecoder.decode(exchange.getRequestURI().getRawQuery(),java.nio.charset.StandardCharsets.UTF_8));
+            respond(exchange,200,Map.of("recordings",songs.stream().map(AiPlanRecoveryCheckTest::recording).toList()));
+        });
+        ai.start();mb.start();
+        ConfigurableApplicationContext app=null;
+        try {
+            app=start("http://127.0.0.1:"+ai.getAddress().getPort()+"/responses","http://127.0.0.1:"+mb.getAddress().getPort()+"/recording/");
+            String token=value("POST","/sessions",null,null,201).path("token").asString();
+            JsonNode result=value("POST","/recommendations",token,Map.of("prompt","재즈 추천"),200);
+            assertEquals(8,result.path("tracks").size());
+            assertEquals(1,queries.size());
+            assertTrue(queries.get(0).contains("Many song 11"),"The twelfth proposal is still looked up");
+            assertFalse(queries.get(0).contains("Many song 12"),"The thirteenth proposal is left out");
+        }finally{if(app!=null)app.close();ai.stop(0);mb.stop(0);}
+    }
+
     private ConfigurableApplicationContext start(String ai,String mb) {
         var context=new SpringApplicationBuilder(TapTapApplication.class).run("--spring.config.import=","--server.port=0","--server.address=127.0.0.1",
             "--spring.datasource.url=jdbc:h2:mem:plan-recovery-"+UUID.randomUUID()+";MODE=PostgreSQL;DB_CLOSE_DELAY=-1","--spring.datasource.username=sa","--spring.datasource.password=",
