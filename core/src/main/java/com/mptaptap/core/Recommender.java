@@ -104,6 +104,8 @@ public final class Recommender {
         public List<String> softTags = new ArrayList<>();
         /** 직접 요청으로 제외한 가수. 표기가 달라도 대표 이름으로 비교한다. */
         public List<String> excludedArtists = new ArrayList<>();
+        /** "밤편지 같은 느낌"처럼 참고 곡·가수에서 추론한 tags 부분집합. 장르여도 필수로 만들지 않는다. */
+        public List<String> inferredTags = new ArrayList<>();
     }
 
     public static final class Pick {
@@ -318,8 +320,12 @@ public final class Recommender {
         if (c.excludedArtists == null) c.excludedArtists = new ArrayList<>();
         c.excludedArtists = c.excludedArtists.stream().map(Recommender::normalizeArtist)
                 .filter(name -> !name.isEmpty()).distinct().toList();
-        if (c.hardTags.isEmpty()) c.hardTags = c.tags.stream().filter(Recommender::isHardTag).toList();
-        if (c.softTags.isEmpty()) c.softTags = c.tags.stream().filter(Recommender::isSoftTag).toList();
+        // 명시한 제외와 겹치는 추론 값은 위에서 tags 에서 빠졌으므로 여기서도 사라진다.
+        c.inferredTags = c.inferredTags == null ? new ArrayList<>() : new ArrayList<>(new LinkedHashSet<>(c.inferredTags));
+        c.inferredTags.retainAll(c.tags);
+        List<String> inferred = c.inferredTags;
+        if (c.hardTags.isEmpty()) c.hardTags = c.tags.stream().filter(tag -> isHardTag(tag) && !inferred.contains(tag)).toList();
+        if (c.softTags.isEmpty()) c.softTags = c.tags.stream().filter(tag -> isSoftTag(tag) || inferred.contains(tag)).toList();
         return c;
     }
 

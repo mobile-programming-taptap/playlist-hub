@@ -33,6 +33,14 @@ final class ConversationCheck {
         assert !letter.tags.contains("night")&&letter.unread.contains("밤편지")&&!Recommender.isKnownConditionRequest("밤편지 같은 느낌으로 바꿔줘");
         for(String request:List.of("밤에 듣는 노래","밤 노래","한밤중에","밤하늘 보면서","잔잔한 밤","night drive"))
             assert Recommender.parse(request).tags.contains("night"):request;
+        // 참고 곡에서 추론한 장르는 선호다. 명시한 제외와 겹치는 추론은 버리고, 직접 말하면 필수가 된다.
+        Recommender.Conditions like=new Recommender.Conditions();like.tags.addAll(List.of("ballad","sad","calm"));
+        like.inferredTags.addAll(List.of("ballad","sad","calm"));like.excludedTags.add("calm");Recommender.validate(like);
+        assert like.hardTags.isEmpty()&&like.softTags.contains("ballad")&&like.inferredTags.equals(List.of("ballad","sad")):like.inferredTags;
+        Recommender.Conditions livelier=Conversation.parse(like,List.of(),"더 신나게");
+        assert livelier.inferredTags.equals(List.of("ballad"))&&livelier.hardTags.isEmpty()&&livelier.tags.contains("ballad"):livelier.inferredTags;
+        Recommender.Conditions direct=Conversation.parse(like,List.of(),"발라드로 바꿔줘");
+        assert direct.hardTags.equals(List.of("ballad"))&&!direct.inferredTags.contains("ballad"):direct.hardTags;
         Recommender.Conditions ballad=new Recommender.Conditions();ballad.tags.add("ballad");
         Recommender.Conditions lifted=Conversation.parse(ballad,List.of(),"너무 처지지 않게 해줘");
         assert lifted.tags.equals(List.of("ballad"))&&lifted.excludedTags.equals(List.of("sad"));

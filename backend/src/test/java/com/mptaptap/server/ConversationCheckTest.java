@@ -94,6 +94,20 @@ class ConversationCheckTest {
             assertEquals(200,explicitVocals.statusCode(),explicitVocals.body());JsonNode guardedVocals=json.readTree(explicitVocals.body());
             assertEquals("openai",guardedVocals.path("mode").asString());assertEquals("",guardedVocals.path("conditions").path("language").asString());
             assertEquals("[]",guardedVocals.path("conditions").path("tags").toString());assertEquals("[\"instrumental\"]",guardedVocals.path("conditions").path("excludedTags").toString());
+            // 참고 곡에서 추론한 발라드는 선호로만 남고, 명시한 잔잔한 제외와 겹치는 추론은 버린다.
+            modelConditions.set("{\"tags\":[],\"excludedTags\":[\"calm\"],\"language\":\"\",\"languageSpecified\":false,\"inferredTags\":[\"ballad\",\"calm\"]}");
+            var reference=client.send(request.POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(Map.of("prompt","밤편지 같은 느낌으로 바꿔줘","previousConditions",
+                    Map.of("tags",List.of(),"excludedTags",List.of("calm"),"language",""))))).build(),HttpResponse.BodyHandlers.ofString());
+            assertEquals(200,reference.statusCode(),reference.body());JsonNode referenced=json.readTree(reference.body()).path("conditions");
+            assertTrue(sent.get(sent.size()-1).path("instructions").asString().contains("style reference"));
+            assertEquals("[\"ballad\"]",referenced.path("tags").toString(),"A song name must not add night");
+            assertEquals("[\"ballad\"]",referenced.path("inferredTags").toString());assertEquals("[]",referenced.path("hardTags").toString());
+            assertEquals("[\"calm\"]",referenced.path("excludedTags").toString());
+            // 다음 턴에 AI가 추론 값을 tags 로 옮겨도 사용자가 직접 말하지 않았으면 필수가 되지 않는다.
+            modelConditions.set("{\"tags\":[\"ballad\",\"warm\"],\"excludedTags\":[\"calm\"],\"language\":\"\",\"languageSpecified\":false,\"inferredTags\":[]}");
+            var followUp=client.send(request.POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(Map.of("prompt","커피 한 잔과 어울리게","previousConditions",referenced)))).build(),HttpResponse.BodyHandlers.ofString());
+            assertEquals(200,followUp.statusCode(),followUp.body());JsonNode followed=json.readTree(followUp.body()).path("conditions");
+            assertEquals("[\"ballad\"]",followed.path("inferredTags").toString());assertEquals("[]",followed.path("hardTags").toString());
             for(String invalidLanguageFlag:List.of("{\"tags\":[\"calm\"],\"excludedTags\":[],\"language\":\"\"}",
                     "{\"tags\":[\"calm\"],\"excludedTags\":[],\"language\":\"\",\"languageSpecified\":\"false\"}",
                     "{\"tags\":[\"calm\"],\"excludedTags\":[],\"language\":\"not_a_language\",\"languageSpecified\":false}")) {

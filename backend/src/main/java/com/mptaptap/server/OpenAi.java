@@ -72,7 +72,7 @@ public class OpenAi {
         Map<String, Object> tagArray = Map.of("type", "array", "maxItems",64,"items",tag);
         String languagePattern="^(?:|none|[a-z]{2,3}(?:-[a-z0-9]{2,8})*)$";
         Map<String, Object> properties = new LinkedHashMap<>(Map.of(
-                    "tags", Map.of("type","array","maxItems",64,"items",tag,"description","Exact requested genres and traits. First identify the specific genre by translating or transliterating its name into canonical English. Preserve that exact genre using genre:<slug> when absent from the alias dictionary. Never substitute a related listed genre."), "excludedTags", Map.of("type", "array", "maxItems",64,"items", tagArray.get("items"), "description",
+                    "tags", Map.of("type","array","maxItems",64,"items",tag,"description","Exact directly requested genres and traits, never ones inferred only from a referenced song or artist. First identify the specific genre by translating or transliterating its name into canonical English. Preserve that exact genre using genre:<slug> when absent from the alias dictionary. Never substitute a related listed genre."), "excludedTags", Map.of("type", "array", "maxItems",64,"items", tagArray.get("items"), "description",
                         "Only directly requested negatives or unchanged explicit snapshot exclusions. Never expand only or a requested genre into a complement of other tags."),
                     "language", Map.of("type", "string", "pattern",languagePattern,
                         "description", "Requested vocal language only. Never infer it from input text language, genre, a requested artist or that artist's nationality. Keep the prior value when unchanged; use empty when unspecified without a prior constraint, or after reset."),
@@ -81,8 +81,10 @@ public class OpenAi {
                     "excludedArtists", Map.of("type","array","maxItems",16,
                         "items", Map.of("type","string","maxLength",160,
                             "description","Official artist credit, in its original release spelling, that the user directly asked to exclude."),
-                        "description","Only artists the user directly asked to exclude, in their original credit spelling, such as BTS 말고 or 아이유 빼줘. Never infer an exclusion from a genre, a mood, a language or a negative mood statement. Keep an exclusion from the snapshot when the latest request does not change or reset it. Empty array when none.")));
-        List<String> required = new ArrayList<>(List.of("tags", "excludedTags", "language", "languageSpecified","excludedArtists"));
+                        "description","Only artists the user directly asked to exclude, in their original credit spelling, such as BTS 말고 or 아이유 빼줘. Never infer an exclusion from a genre, a mood, a language or a negative mood statement. Keep an exclusion from the snapshot when the latest request does not change or reset it. Empty array when none."),
+                    "inferredTags", Map.of("type","array","maxItems",16,"items",tag,
+                        "description","Genres and traits inferred only from a song or artist given as a style reference, such as 밤편지 같은 느낌. Preferences, not requirements. Never include a trait that is excluded. Empty array when none.")));
+        List<String> required = new ArrayList<>(List.of("tags", "excludedTags", "language", "languageSpecified","excludedArtists","inferredTags"));
         String candidateInstructions="";
         if(includeCandidates) {
             Map<String,Integer> preferences=new LinkedHashMap<>();
@@ -122,6 +124,8 @@ public class OpenAi {
                     "A reason clause that names an unwanted state states an avoidance, never a preference: 너무 조용하면 졸려 means exclude calm and never select calm; 너무 처지지 않게 excludes sad. Put the negated trait in excludedTags, not tags. " +
                     "가사ㄴㄴ, 보컬ㄴㄴ, 노래방ㄴㄴ, 가사 no and similar chat abbreviations mean no vocals, so they set language none with instrumental in tags. " +
                     "A requested artist is not a requested genre; never infer a genre constraint from an artist name or the artist's nationality. Preserve genres directly requested by the user. " +
+                    "A song or artist given as a style reference, such as 밤편지 같은 느낌 or X 같은 노래, is a song name, not a genre, mood or time-of-day request. Put genres and traits inferred from it only in inferredTags, never in tags. " +
+                    "Explicit exclusions win over a reference: never put an excluded trait, or one the user said to avoid, in inferredTags. Keep snapshot inferredTags unless the latest request changes or resets them; a genre the user names directly goes in tags. " +
                     "Use excludedTags only for directly requested negatives or unchanged explicit snapshot exclusions; never expand only or a requested genre into a complement of other tags. " +
                     "Keep explicitly requested genres even when this catalogue has no matching songs; never replace it with a different genre or silently remove it. " +
                     "J-pop/제이팝 is jpop; Japanese lyrics use language ja. City pop/시티팝 is citypop, bossa nova/보사노바 is bossa_nova. " +
@@ -163,16 +167,20 @@ public class OpenAi {
     }
 
     private Recommender.Conditions conditions(ObjectNode object,String prompt,List<String> history,Recommender.Conditions previousConditions,List<String> requests) {
-        if(object.size()!=5||!object.path("tags").isArray()||!object.path("excludedTags").isArray()||!object.path("language").isString()
+        // inferredTags 가 없는 응답은 추론 값이 없는 것으로 본다.
+        if(!object.has("inferredTags"))object.putArray("inferredTags");
+        if(object.size()!=6||!object.path("inferredTags").isArray()||!object.path("tags").isArray()||!object.path("excludedTags").isArray()||!object.path("language").isString()
                 ||!object.path("excludedArtists").isArray())
             throw new IllegalStateException("AI_CONDITIONS_INVALID");
-        for(String field:List.of("tags","excludedTags"))for(JsonNode tag:object.path(field))
+        for(String field:List.of("tags","excludedTags","inferredTags"))for(JsonNode tag:object.path(field))
             if(!tag.isString())throw new IllegalStateException("AI_CONDITIONS_INVALID");
         for(JsonNode artist:object.path("excludedArtists"))
             if(!artist.isString()||artist.asString().strip().isEmpty()||artist.asString().strip().length()>160)
                 throw new IllegalStateException("AI_CONDITIONS_INVALID");
         boolean languageSpecified=object.remove("languageSpecified").asBoolean();
         Recommender.Conditions raw=json.treeToValue(object,Recommender.Conditions.class);
+        // 추론 값도 조건에 들어가되 validate 에서 선호로만 분류된다.
+        for(String inferred:raw.inferredTags)if(!raw.tags.contains(inferred))raw.tags.add(inferred);
         boolean positiveUnknown=raw!=null&&raw.tags!=null&&raw.tags.contains("unsupported_genre");
         boolean conflictingUnknown=positiveUnknown&&raw.excludedTags!=null&&raw.excludedTags.contains("unsupported_genre");
         boolean genreComplement=positiveUnknown&&raw.excludedTags!=null&&Recommender.GENRES.stream()
@@ -202,9 +210,9 @@ public class OpenAi {
                     ?Conversation.parse(previousConditions,history,prompt)
                     :Conversation.parse(interpreted,List.of(),prompt);
             // 부정 표현이 결과에서 사라졌다면 AI 해석을 유지한다.
-            if(missingNegation(interpreted,known))return interpreted;
+            if(missingNegation(interpreted,known))return inferred(interpreted,previousConditions,prompt);
             affected(known,interpreted);
-            return known;
+            return inferred(known,previousConditions,prompt);
         }
         // The model already interpreted reset; replay explicit overrides without erasing its new semantic tags.
         String explicit=prompt.replaceAll("(?i)(처음부터|새로 시작|조건 초기화|start over|reset)","").trim();
@@ -215,7 +223,19 @@ public class OpenAi {
         if(interpretedGenres.stream().anyMatch(value->value.startsWith("genre:"))){resolved.tags.removeIf(Recommender::genre);resolved.tags.addAll(interpretedGenres);}
         if(unlisted&&!resolved.tags.contains("unsupported_genre"))resolved.tags.add("unsupported_genre");
         affected(resolved,interpreted);
-        return Recommender.validate(resolved);
+        return inferred(Recommender.validate(resolved),previousConditions,prompt);
+    }
+
+    /** AI가 이전 턴의 추론 값을 tags 로 옮겨도, 사용자가 이번에 직접 말하지 않았다면 선호로 남긴다. */
+    private static Recommender.Conditions inferred(Recommender.Conditions target,Recommender.Conditions previousConditions,String prompt) {
+        if(previousConditions==null||previousConditions.inferredTags==null)return target;
+        List<String> direct=Recommender.parse(prompt).tags;
+        boolean changed=false;
+        for(String tag:previousConditions.inferredTags)
+            if(target.tags.contains(tag)&&!direct.contains(tag)&&!target.inferredTags.contains(tag)){target.inferredTags.add(tag);changed=true;}
+        if(!changed)return target;
+        target.hardTags=null;target.softTags=null;
+        return Recommender.validate(target);
     }
 
     /** 사전 해석에 부정 조건이 빠져 있으면 AI 해석을 버리지 않는다. */

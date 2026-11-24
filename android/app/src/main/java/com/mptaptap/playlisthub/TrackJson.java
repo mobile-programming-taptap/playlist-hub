@@ -50,10 +50,13 @@ final class TrackJson {
         if (artists != null) {
             for (int i = 0; i < artists.length(); i++) c.excludedArtists.add(artists.getString(i));
         }
+        // 이전 버전에서 저장한 조건에는 없을 수 있다.
+        JSONArray inferred = value.optJSONArray("inferredTags");
+        if (inferred != null) for (int i = 0; i < inferred.length(); i++) c.inferredTags.add(inferred.getString(i));
         c.language=value.getString("language"); return Recommender.validate(c);
     }
     static JSONObject conditions(Recommender.Conditions c) throws JSONException {
         return new JSONObject().put("tags", new JSONArray(c.tags)).put("excludedTags", new JSONArray(c.excludedTags)).put("language", c.language)
-            .put("excludedArtists", new JSONArray(c.excludedArtists));
+            .put("excludedArtists", new JSONArray(c.excludedArtists)).put("inferredTags", new JSONArray(c.inferredTags));
     }
 }

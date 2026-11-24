@@ -30,6 +30,8 @@ public final class Conversation {
         copy.language=source.language;
         // 가수 제외는 사용자가 직접 말한 입력이므로 조건과 함께 이어져야 한다.
         copy.excludedArtists=source.excludedArtists==null?null:new ArrayList<>(source.excludedArtists);
+        // 추론한 선호가 다음 턴에 필수 장르로 바뀌지 않도록 함께 잇는다.
+        copy.inferredTags=source.inferredTags==null?null:new ArrayList<>(source.inferredTags);
         // hardTags/softTags 는 tags 에서 파생되는 값이라 복사하지 않는다.
         // 복사하면 tags 가 바뀐 뒤에도 옛 분류가 남아 필터가 어긋난다.
         return Recommender.validate(copy);
@@ -49,6 +51,8 @@ public final class Conversation {
             if(Recommender.languageExcluded(request,result.language))result.language="";
             result.excludedTags.removeAll(next.tags);
             for (String tag : next.tags) if (!result.tags.contains(tag)) result.tags.add(tag);
+            // 사용자가 직접 말한 태그는 더 이상 추론 값이 아니다.
+            result.inferredTags.removeAll(next.tags);
             for (String tag : next.excludedTags) if (!result.excludedTags.contains(tag)) result.excludedTags.add(tag);
             for (String word : next.unread) if (!result.unread.contains(word)) result.unread.add(word);
             for (String artist : next.excludedArtists)
