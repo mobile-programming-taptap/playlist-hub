@@ -55,10 +55,13 @@ final class TrackJson {
         if (inferred != null) for (int i = 0; i < inferred.length(); i++) c.inferredTags.add(inferred.getString(i));
         // 반영하지 않은 지역 표시. 이어서 요청할 때 안내가 계속 붙도록 저장한다. 옛 저장값에는 없다.
         c.origin=value.optString("origin","");
+        // 직접 말한 연대. 옛 저장값에는 없으므로 빈 목록이다.
+        JSONArray decades = value.optJSONArray("decades");
+        if (decades != null) for (int i = 0; i < decades.length(); i++) c.decades.add(decades.getInt(i));
         c.language=value.getString("language"); return Recommender.validate(c);
     }
     static JSONObject conditions(Recommender.Conditions c) throws JSONException {
         return new JSONObject().put("tags", new JSONArray(c.tags)).put("excludedTags", new JSONArray(c.excludedTags)).put("language", c.language)
-            .put("excludedArtists", new JSONArray(c.excludedArtists)).put("inferredTags", new JSONArray(c.inferredTags)).put("origin", c.origin);
+            .put("excludedArtists", new JSONArray(c.excludedArtists)).put("inferredTags", new JSONArray(c.inferredTags)).put("origin", c.origin).put("decades", new JSONArray(c.decades));
     }
 }

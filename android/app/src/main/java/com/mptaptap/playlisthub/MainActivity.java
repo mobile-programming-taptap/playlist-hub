@@ -547,6 +547,8 @@ public class MainActivity extends AppCompatActivity {
         for (String tag:resultConditions.tags) conditions.add(Recommender.label(tag));
         for (String tag:resultConditions.excludedTags) conditions.add(Recommender.label(tag)+" 제외");
         if(!resultConditions.language.isEmpty()&&!(resultConditions.language.equals("none")&&resultConditions.tags.contains("instrumental")))conditions.add(Recommender.languageLabel(resultConditions.language));
+        // 연대는 실제로 거르는 조건이라 칩에 보인다. 반영하지 않는 지역은 칩에 넣지 않는다.
+        if(!resultConditions.decades.isEmpty())conditions.add(Recommender.decadeLabel(resultConditions.decades));
         ((TextView)findViewById(R.id.condition_summary)).setText(conditions.isEmpty() ? "다양한 음악" : android.text.TextUtils.join(" · ",conditions));
         findViewById(R.id.condition_summary).setContentDescription("추천 조건: "+((TextView)findViewById(R.id.condition_summary)).getText());
         pager.setVisibility(picks.isEmpty() ? View.GONE : View.VISIBLE);
