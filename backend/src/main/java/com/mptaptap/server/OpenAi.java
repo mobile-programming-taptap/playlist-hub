@@ -67,7 +67,8 @@ public class OpenAi {
                 +json.writeValueAsString(Conversation.copyConditions(previousConditions))
                 +". This snapshot already includes the historical requests; apply only the latest request to it. "
                 +"Keep snapshot constraints unless the latest request changes, removes or resets them. "
-                +"Explicitly excluding instrumental/no vocals also removes a prior language none constraint.";
+                +"Explicitly excluding instrumental/no vocals also removes a prior language none constraint. "
+                +"The snapshot origin is an unsupported region mention kept only for a notice; never treat it as a constraint.";
         Map<String,Object> tag=Map.of("type","string","pattern","^(?:"+String.join("|",Recommender.LABELS.keySet().stream().filter(key->!key.equals("unsupported_genre")).toList())+"|genre:[a-z0-9][a-z0-9_-]{0,63})$");
         Map<String, Object> tagArray = Map.of("type", "array", "maxItems",64,"items",tag);
         String languagePattern="^(?:|none|[a-z]{2,3}(?:-[a-z0-9]{2,8})*)$";
@@ -210,9 +211,9 @@ public class OpenAi {
                     ?Conversation.parse(previousConditions,history,prompt)
                     :Conversation.parse(interpreted,List.of(),prompt);
             // 부정 표현이 결과에서 사라졌다면 AI 해석을 유지한다.
-            if(missingNegation(interpreted,known))return inferred(interpreted,previousConditions,prompt);
+            if(missingNegation(interpreted,known))return settled(interpreted,previousConditions,history,prompt);
             affected(known,interpreted);
-            return inferred(known,previousConditions,prompt);
+            return settled(known,previousConditions,history,prompt);
         }
         // The model already interpreted reset; replay explicit overrides without erasing its new semantic tags.
         String explicit=prompt.replaceAll("(?i)(처음부터|새로 시작|조건 초기화|start over|reset)","").trim();
@@ -223,7 +224,17 @@ public class OpenAi {
         if(interpretedGenres.stream().anyMatch(value->value.startsWith("genre:"))){resolved.tags.removeIf(Recommender::genre);resolved.tags.addAll(interpretedGenres);}
         if(unlisted&&!resolved.tags.contains("unsupported_genre"))resolved.tags.add("unsupported_genre");
         affected(resolved,interpreted);
-        return inferred(Recommender.validate(resolved),previousConditions,prompt);
+        return settled(Recommender.validate(resolved),previousConditions,history,prompt);
+    }
+
+    /**
+     * 모든 반환 경로의 마무리. AI 응답에는 지역이 없으므로 지역 표시는 사전 규칙으로만 정한다.
+     * 이어받기·덮어쓰기·"말고"·"상관없이" 해제·처음부터 초기화가 core 와 같게 동작한다.
+     */
+    private static Recommender.Conditions settled(Recommender.Conditions target,Recommender.Conditions previousConditions,List<String> history,String prompt) {
+        Recommender.Conditions result=inferred(target,previousConditions,prompt);
+        result.origin=Conversation.parse(previousConditions,history,prompt).origin;
+        return result;
     }
 
     /** AI가 이전 턴의 추론 값을 tags 로 옮겨도, 사용자가 이번에 직접 말하지 않았다면 선호로 남긴다. */

@@ -108,6 +108,27 @@ class ConversationCheckTest {
             var followUp=client.send(request.POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(Map.of("prompt","커피 한 잔과 어울리게","previousConditions",referenced)))).build(),HttpResponse.BodyHandlers.ofString());
             assertEquals(200,followUp.statusCode(),followUp.body());JsonNode followed=json.readTree(followUp.body()).path("conditions");
             assertEquals("[\"ballad\"]",followed.path("inferredTags").toString());assertEquals("[]",followed.path("hardTags").toString());
+            // 지역은 거르지 않고 안내만 붙인다. AI 응답에 지역이 없어도 사전 규칙으로 표시하고 이어받는다.
+            String regionNotice="지역 조건(한국)은 반영되지 않았어요.";
+            modelConditions.set("{\"tags\":[\"ballad\"],\"excludedTags\":[],\"language\":\"\",\"languageSpecified\":false}");
+            var regional=client.send(request.POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(Map.of("prompt","한국 발라드")))).build(),HttpResponse.BodyHandlers.ofString());
+            assertEquals(200,regional.statusCode(),regional.body());JsonNode regionalResult=json.readTree(regional.body());
+            assertEquals("KR",regionalResult.path("conditions").path("origin").asString());assertEquals("",regionalResult.path("conditions").path("language").asString());
+            assertTrue(regionalResult.path("notice").asString().endsWith(regionNotice),regionalResult.path("notice").asString());
+            assertFalse(sent.get(sent.size()-1).path("text").path("format").path("schema").path("properties").has("origin"),"Region is not an AI field");
+            // 후보가 없어 7곡 미만 안내로 덮어써도 지역 문구는 남는다.
+            modelConditions.set("{\"tags\":[],\"excludedTags\":[],\"language\":\"fr\",\"languageSpecified\":true}");
+            var overwritten=client.send(request.POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(Map.of("prompt","한국 프랑스어 노래")))).build(),HttpResponse.BodyHandlers.ofString());
+            assertEquals(200,overwritten.statusCode(),overwritten.body());String overwrittenNotice=json.readTree(overwritten.body()).path("notice").asString();
+            assertTrue(overwrittenNotice.startsWith("AI가 확실한 곡 후보를")&&overwrittenNotice.endsWith(regionNotice),overwrittenNotice);
+            // 사전이 못 읽는 다음 요청(AI 경로)에서도 이전 지역 표시를 이어받는다.
+            modelConditions.set("{\"tags\":[\"ballad\",\"warm\"],\"excludedTags\":[],\"language\":\"\",\"languageSpecified\":false}");
+            var carried=client.send(request.POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(Map.of("prompt","커피 한 잔과 어울리게","previousConditions",regionalResult.path("conditions"))))).build(),HttpResponse.BodyHandlers.ofString());
+            assertEquals(200,carried.statusCode(),carried.body());JsonNode carriedResult=json.readTree(carried.body());
+            assertEquals("KR",carriedResult.path("conditions").path("origin").asString());assertTrue(carriedResult.path("notice").asString().endsWith(regionNotice));
+            var released=client.send(request.POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(Map.of("prompt","지역 상관없이","previousConditions",carriedResult.path("conditions"))))).build(),HttpResponse.BodyHandlers.ofString());
+            assertEquals(200,released.statusCode(),released.body());JsonNode releasedResult=json.readTree(released.body());
+            assertEquals("",releasedResult.path("conditions").path("origin").asString());assertFalse(releasedResult.path("notice").asString().contains("지역 조건("));
             for(String invalidLanguageFlag:List.of("{\"tags\":[\"calm\"],\"excludedTags\":[],\"language\":\"\"}",
                     "{\"tags\":[\"calm\"],\"excludedTags\":[],\"language\":\"\",\"languageSpecified\":\"false\"}",
                     "{\"tags\":[\"calm\"],\"excludedTags\":[],\"language\":\"not_a_language\",\"languageSpecified\":false}")) {
