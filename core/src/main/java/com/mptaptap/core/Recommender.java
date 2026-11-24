@@ -76,7 +76,8 @@ public final class Recommender {
                 {"instrumental", "가사 없는", "가사\\s*없는|가사\\s*없이|가사\\s*ㄴㄴ|가사\\s*no|보컬\\s*없는|보컬\\s*ㄴㄴ|노래방\\s*ㄴㄴ|연주곡|instrumental|no vocals"},
                 {"study", "공부할 때", "공부|집중|작업|독서|study|focus"},
                 {"rain", "비 오는 날", "비\\s*오는|비\\s*올|빗소리|rain"},
-                {"night", "밤에", "밤|새벽|자기 전|잠들|night|sleep"},
+                // "밤편지"처럼 곡 이름 안의 "밤"은 시간대가 아니다. 조사·합성어로 이어질 때만 읽는다.
+                {"night", "밤에", "(?<![가-힣])한?밤(?=$|[^가-힣]|[에의엔은을이도만]|중|새|하늘|길|공기|산책)|새벽|자기 전|잠들|night|sleep"},
                 {"drive", "드라이브할 때", "드라이브|운전|여행|drive|driving"},
                 {"workout", "운동할 때", "운동|러닝|달리기|workout|running"}
         };

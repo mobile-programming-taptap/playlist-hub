@@ -28,6 +28,11 @@ final class ConversationCheck {
             assert upbeat.excludedTags.equals(List.of("sad"))&&!upbeat.tags.contains("sad"):request;
         }
         assert Recommender.parse("축 처져 있을 때 듣는 노래").tags.contains("sad");
+        // 곡 이름 "밤편지"는 시간대 조건이 아니라 사전이 못 읽는 표현으로 남아 AI 해석에 맡겨진다.
+        Recommender.Conditions letter=Recommender.parse("밤편지 같은 느낌으로 바꿔줘");
+        assert !letter.tags.contains("night")&&letter.unread.contains("밤편지")&&!Recommender.isKnownConditionRequest("밤편지 같은 느낌으로 바꿔줘");
+        for(String request:List.of("밤에 듣는 노래","밤 노래","한밤중에","밤하늘 보면서","잔잔한 밤","night drive"))
+            assert Recommender.parse(request).tags.contains("night"):request;
         Recommender.Conditions ballad=new Recommender.Conditions();ballad.tags.add("ballad");
         Recommender.Conditions lifted=Conversation.parse(ballad,List.of(),"너무 처지지 않게 해줘");
         assert lifted.tags.equals(List.of("ballad"))&&lifted.excludedTags.equals(List.of("sad"));
