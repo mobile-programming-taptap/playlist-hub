@@ -18,6 +18,8 @@ public final class Recommender {
     public static final Map<String, String> LABELS = new LinkedHashMap<>();
     private static final Map<String, String> WORDS = new LinkedHashMap<>();
     private static final Map<String,String> LANGUAGE_WORDS=new LinkedHashMap<>();
+    /** 언어로 잡히지 않는 국적 표현("한국 발라드", "국내", "일본 시티팝"). 곡을 거르지 않고 미반영 안내에만 쓴다. */
+    private static final Map<String,String> ORIGIN_WORDS=new LinkedHashMap<>();
     public static final List<String> GENRES = List.of("acoustic", "ballad", "kpop", "pop", "rock", "piano",
             "jazz", "classical", "hiphop", "rnb", "edm", "blues", "metal", "indie", "folk", "soul", "funk",
             "disco", "citypop", "lofi", "jpop", "synthpop", "dreampop", "ambient", "house", "techno", "trance",
@@ -90,12 +92,18 @@ public final class Recommender {
         LANGUAGE_WORDS.put("ja","일본어|일본 노래|\\bjapanese\\b");LANGUAGE_WORDS.put("zh","중국어|\\b(?:chinese|mandarin)\\b");
         LANGUAGE_WORDS.put("es","스페인어|\\bspanish\\b");LANGUAGE_WORDS.put("fr","프랑스어|불어|\\bfrench\\b");
         LANGUAGE_WORDS.put("de","독일어|\\bgerman\\b");
+        ORIGIN_WORDS.put("KR","한국(?!어)|국내");ORIGIN_WORDS.put("JP","일본(?!어)");
     }
 
     public static final class Conditions {
         public List<String> tags = new ArrayList<>();
         public List<String> excludedTags = new ArrayList<>();
         public String language = "";
+        /**
+         * 요청했지만 반영하지 않은 출신 지역(ISO 3166 대문자). 곡을 거르지 않고 안내에만 쓴다.
+         * 곡의 국적은 검증할 수 없어 지역 조건을 지원하지 않는다. 빈 값은 언급 없음.
+         */
+        public String origin = "";
         /** 사전이 매핑하지 못한 표현. AI 해석이 덮을 수 있으므로 실패로 단정하지 않는다. */
         public List<String> unread = new ArrayList<>();
         /** 최종 결과에서 반드시 만족해야 하는 tags 부분집합. 비면 장르·instrumental에서 자동 도출한다. */
@@ -167,6 +175,18 @@ public final class Recommender {
         if(language==null||language.isEmpty())return "";if(language.equals("none"))return "연주곡";if(language.equals("unsupported"))return "언어 확인 필요";
         String name=Locale.forLanguageTag(language).getDisplayLanguage(Locale.KOREAN);return name.isEmpty()?language:name;
     }
+    public static String originLabel(String origin){
+        if(origin==null||origin.isEmpty())return "";if(origin.equals("KR"))return "한국";
+        String name=new Locale("",origin).getDisplayCountry(Locale.KOREAN);return name.isEmpty()||name.equals(origin)?origin:name;
+    }
+    public static final String ORIGIN_NOTICE="지역 조건은 반영되지 않았어요.";
+    /** 지역을 언급했으면 기존 안내 뒤에 미반영 안내를 붙인다. 이미 붙어 있으면 그대로 둔다. */
+    public static String withOriginNotice(String notice,Conditions c){
+        String base=notice==null?"":notice.trim();
+        if(c==null||c.origin==null||c.origin.isEmpty()||base.endsWith(ORIGIN_NOTICE))return base;
+        return (base+" "+ORIGIN_NOTICE).trim();
+    }
+    public static boolean validOrigin(String origin){return origin!=null&&origin.matches("|[A-Z]{2}");}
 
     /** ponytail: dictionary and fixed wording only; extend for verified requests, leave additional meaning to the interpreter. */
     public static boolean isKnownConditionRequest(String request) {
@@ -220,6 +240,10 @@ public final class Recommender {
         }
         c.tags.removeAll(c.excludedTags);
         for(LanguageMention mention:languages(input))if(!mention.negative)c.language=mention.code;
+        // "한국 노래"처럼 언어로 잡힌 표현은 지역 안내 대상이 아니다.
+        List<LanguageMention> spoken=languages(input);
+        for(LanguageMention mention:mentions(ORIGIN_WORDS,input))
+            if(!mention.negative&&spoken.stream().noneMatch(language->language.start<mention.end&&mention.start<language.end))c.origin=mention.code;
         c.unread = unread(input);
         // "가사 없는/가사ㄴㄴ"은 연주곡을 원하는 요청이므로 language none 이다.
         // 반대로 "연주곡 제외"는 연주곡을 빼달라는 요청이므로 language 를 비운 채로 둔다.
@@ -244,7 +268,7 @@ public final class Recommender {
             java.util.regex.Matcher matcher = Pattern.compile(pattern).matcher(body);
             while (matcher.find()) for (int i=matcher.start();i<matcher.end();i++) consumed[i]=true;
         }
-        for (String pattern : LANGUAGE_WORDS.values()) {
+        for (String pattern : List.of(String.join("|",LANGUAGE_WORDS.values()),String.join("|",ORIGIN_WORDS.values()))) {
             java.util.regex.Matcher matcher = Pattern.compile(pattern).matcher(body);
             while (matcher.find()) for (int i=matcher.start();i<matcher.end();i++) consumed[i]=true;
         }
@@ -280,9 +304,11 @@ public final class Recommender {
         final String code;final int start,end;boolean negative;
         LanguageMention(String code,int start,int end){this.code=code;this.start=start;this.end=end;}
     }
-    private static List<LanguageMention> languages(String input){
+    private static List<LanguageMention> languages(String input){return mentions(LANGUAGE_WORDS,input);}
+    /** 언어·지역 표현의 위치와 부정 여부. "영어와 일본어 제외"처럼 나열된 표현은 함께 부정된다. */
+    private static List<LanguageMention> mentions(Map<String,String> words,String input){
         List<LanguageMention> mentions=new ArrayList<>();
-        for(var language:LANGUAGE_WORDS.entrySet()){var match=Pattern.compile(language.getValue()).matcher(input);while(match.find())mentions.add(new LanguageMention(language.getKey(),match.start(),match.end()));}
+        for(var language:words.entrySet()){var match=Pattern.compile(language.getValue()).matcher(input);while(match.find())mentions.add(new LanguageMention(language.getKey(),match.start(),match.end()));}
         mentions.sort(Comparator.comparingInt(mention->mention.start));
         for(int first=0;first<mentions.size();){int end=first+1;
             while(end<mentions.size()&&input.substring(mentions.get(end-1).end,mentions.get(end).start).matches("(?:[\\s,;/·]|and|or|및|와|과|랑|이랑|그리고|또는)*"))end++;
@@ -297,13 +323,20 @@ public final class Recommender {
             if(mention.negative&&(language.equals(mention.code)||language.startsWith(mention.code+"-")))return true;
         return false;
     }
+    public static boolean originExcluded(String request,String origin){
+        if(origin==null||origin.isEmpty())return false;
+        for(LanguageMention mention:mentions(ORIGIN_WORDS,Normalizer.normalize(request,Normalizer.Form.NFKC).toLowerCase(Locale.ROOT)))
+            if(mention.negative&&origin.equals(mention.code))return true;
+        return false;
+    }
     public static boolean ambiguousLanguage(String request){
         Set<String> choices=new LinkedHashSet<>();for(LanguageMention mention:languages(Normalizer.normalize(request,Normalizer.Form.NFKC).toLowerCase(Locale.ROOT)))choices.add(mention.code);
         return choices.size()>1;
     }
 
     public static Conditions validate(Conditions c) {
-        if (c == null || c.tags == null || c.excludedTags == null || c.language == null
+        if (c != null) c.origin = c.origin == null ? "" : c.origin.toUpperCase(Locale.ROOT);
+        if (c == null || c.tags == null || c.excludedTags == null || c.language == null || !validOrigin(c.origin)
                 || c.tags.size()>64 || c.excludedTags.size()>64 || !c.tags.stream().allMatch(Recommender::validTag) || !c.excludedTags.stream().allMatch(Recommender::validTag)
                 || !validLanguage(c.language))
             throw new IllegalArgumentException("추천 조건을 해석하지 못했습니다.");
@@ -411,6 +444,6 @@ public final class Recommender {
             notice = "조건에 맞는 곡이 " + picks.size() + "곡이에요. 분위기 조건을 줄이면 더 많은 곡을 찾을 수 있어요.";
         else notice = "";
         if (c.tags.isEmpty() && c.language.isEmpty()) notice = "구체적인 분위기나 장르를 더하면 요청에 맞춰 추천할 수 있어요.";
-        return new Result(picks, c, mode, notice);
+        return new Result(picks, c, mode, withOriginNotice(notice, c));
     }
 }

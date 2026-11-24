@@ -28,6 +28,7 @@ public final class Conversation {
         copy.excludedTags=source.excludedTags==null?null:new ArrayList<>(source.excludedTags);
         copy.unread=source.unread==null?null:new ArrayList<>(source.unread);
         copy.language=source.language;
+        copy.origin=source.origin;
         // 가수 제외는 사용자가 직접 말한 입력이므로 조건과 함께 이어져야 한다.
         copy.excludedArtists=source.excludedArtists==null?null:new ArrayList<>(source.excludedArtists);
         // 추론한 선호가 다음 턴에 필수 장르로 바뀌지 않도록 함께 잇는다.
@@ -49,6 +50,8 @@ public final class Conversation {
             result.tags.removeAll(next.excludedTags);
             if(next.excludedTags.contains("instrumental")&&result.language.equals("none"))result.language="";
             if(Recommender.languageExcluded(request,result.language))result.language="";
+            if(Recommender.originExcluded(request,result.origin))result.origin="";
+            if(!next.origin.isEmpty())result.origin=next.origin;
             result.excludedTags.removeAll(next.tags);
             for (String tag : next.tags) if (!result.tags.contains(tag)) result.tags.add(tag);
             // 사용자가 직접 말한 태그는 더 이상 추론 값이 아니다.
@@ -62,6 +65,7 @@ public final class Conversation {
                 if (!next.language.equals("none")) result.tags.remove("instrumental");
             }
             if (request.matches("(?is).*(언어 상관없|언어 무관|any language).*")) result.language = "";
+            if (request.matches("(?is).*((?:지역|나라|국가)\\s*(?:상관없|무관)|any country).*")) result.origin = "";
         }
         return Recommender.validate(result);
     }
@@ -94,6 +98,6 @@ public final class Conversation {
             notice="이번 추천에서 요청한 장르 조건에 맞는 새 곡을 확인하지 못했어요.";
         if(!keep.isEmpty()&&fresh.tracks.isEmpty()&&!conditions.language.isEmpty()&&!conditions.language.equals("none"))notice="이번 추천에서 요청한 언어 조건에 맞는 새 추천을 찾지 못했어요.";
         if (!keep.isEmpty()) notice = "직접 유지한 "+keep.size()+"곡은 새 조건과 관계없이 남겼어요. " + notice;
-        return new Recommender.Result(picks, conditions, mode, notice.trim());
+        return new Recommender.Result(picks, conditions, mode, Recommender.withOriginNotice(notice, conditions));
     }
 }

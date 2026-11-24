@@ -41,6 +41,30 @@ final class ConversationCheck {
         assert livelier.inferredTags.equals(List.of("ballad"))&&livelier.hardTags.isEmpty()&&livelier.tags.contains("ballad"):livelier.inferredTags;
         Recommender.Conditions direct=Conversation.parse(like,List.of(),"발라드로 바꿔줘");
         assert direct.hardTags.equals(List.of("ballad"))&&!direct.inferredTags.contains("ballad"):direct.hardTags;
+        // "한국 노래·한국곡·일본 노래"는 언어로 잡히고 지역 안내 대상이 아니다.
+        for(String[] spoken:new String[][]{{"한국 노래","ko"},{"한국곡","ko"},{"일본 노래","ja"},{"한국어 노래","ko"},{"korean songs","ko"},{"일본어 노래","ja"}}) {
+            Recommender.Conditions said=Recommender.parse(spoken[0]);
+            assert said.language.equals(spoken[1])&&said.origin.isEmpty():spoken[0];
+        }
+        // 언어로 잡히지 않는 국적 표현만 "요청했지만 반영하지 않은 지역"으로 표시한다.
+        for(String request:List.of("한국 발라드","한국 발라드곡","국내 노래")) {
+            Recommender.Conditions regional=Recommender.parse(request);
+            assert regional.origin.equals("KR")&&regional.language.isEmpty()&&regional.unread.isEmpty():request;
+        }
+        assert Recommender.parse("일본 시티팝").origin.equals("JP")&&Recommender.parse("일본 시티팝").language.isEmpty();
+        // 가사 없음은 언어만 none 으로 바꾸고 지역 표시는 남긴다.
+        Recommender.Conditions quiet=Recommender.parse("가사 없는 한국 발라드");
+        assert quiet.language.equals("none")&&quiet.origin.equals("KR")&&quiet.tags.containsAll(List.of("ballad","instrumental"));
+        assert Conversation.parse(quiet,List.of(),"더 신나게").origin.equals("KR");
+        assert Conversation.parse(quiet,List.of(),"일본 시티팝으로 바꿔줘").origin.equals("JP");
+        assert Conversation.parse(quiet,List.of(),"한국 노래 말고").origin.isEmpty();
+        assert Conversation.parse(quiet,List.of(),"지역 상관없이").origin.isEmpty();
+        assert Conversation.parse(quiet,List.of(),"처음부터 팝").origin.isEmpty();
+        assert Conversation.copyConditions(quiet).origin.equals("KR");
+        Recommender.Conditions lower=new Recommender.Conditions();lower.origin="kr";assert Recommender.validate(lower).origin.equals("KR");
+        Recommender.Conditions bogus=new Recommender.Conditions();bogus.origin="Korea";
+        try{Recommender.validate(bogus);assert false:"invalid origin";}catch(IllegalArgumentException expected){}
+        assert Recommender.originLabel("KR").equals("한국")&&Recommender.originLabel("JP").equals("일본");
         Recommender.Conditions ballad=new Recommender.Conditions();ballad.tags.add("ballad");
         Recommender.Conditions lifted=Conversation.parse(ballad,List.of(),"너무 처지지 않게 해줘");
         assert lifted.tags.equals(List.of("ballad"))&&lifted.excludedTags.equals(List.of("sad"));
