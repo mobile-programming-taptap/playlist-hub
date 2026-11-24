@@ -372,6 +372,8 @@ public class MainActivity extends AppCompatActivity {
         TextInputLayout field = findViewById(R.id.prompt_layout);
         try { Recommender.parse(request); field.setError(null); }
         catch (IllegalArgumentException e) { field.setError(e.getMessage()); return; }
+        // 새 요청에는 가리킬 이전 곡이 없다. 곡 이름으로 오해하지 않게 AI에게 보내지 않는다.
+        if(com.mptaptap.core.TrackReference.mentions(request)){field.setError(com.mptaptap.core.TrackReference.MAIN_NOTICE);return;}
         if(api==null){settings.edit().putString("prompt",request).apply();hideKeyboard();connectService();return;}
         replacementPosition=-1;hideKeyboard(); stopPlayer(); settings.edit().putString("prompt", request).apply();
         recommendation.start(request,api);
