@@ -137,18 +137,30 @@ public class Api {
     /**
      * 첫 AI 요청이 시간 초과되면 한 번만 다시 묻는다. 첫 요청에는 유지할 결과가 없어 보충 요청처럼 넘어갈 수 없고,
      * 제한 시간을 늘리면 곡 확인 시간이 줄어든다. 재요청은 같은 30초 안에서 곡 확인 시간을 남긴 만큼만 기다린다.
+     * 후보를 0곡 제안한 경우에도 한 번 더 묻는다. 어느 쪽이든 첫 단계의 재요청은 한 번뿐이다.
      */
     private OpenAi.Plan firstPlan(Prompt body,Map<String,Integer> likedTags,String user,long deadline) throws Exception {
-        try{return ai.plan(body.prompt(),body.history(),body.previousConditions(),likedTags,FIRST_PLAN_TIMEOUT);}
+        var log=org.slf4j.LoggerFactory.getLogger(Api.class);
+        OpenAi.Plan plan;
+        try{plan=ai.plan(body.prompt(),body.history(),body.previousConditions(),likedTags,FIRST_PLAN_TIMEOUT);}
         catch(java.io.IOException error){
             // 헤더가 늦으면 HttpTimeoutException, 본문이 늦으면 BoundedHttp의 RESPONSE_TIMEOUT 이다.
             if(!(error instanceof java.net.http.HttpTimeoutException)&&!"RESPONSE_TIMEOUT".equals(error.getMessage()))throw error;
-            long wait=Math.min(FIRST_PLAN_TIMEOUT.toNanos(),deadline-System.nanoTime()-VERIFY_RESERVE.toNanos());
+            long wait=retryWait(deadline);
             if(wait<MIN_RETRY.toNanos()||!store.reserveAi(user))throw error;
-            org.slf4j.LoggerFactory.getLogger(Api.class).warn("AI plan timed out ({}); retrying once within {} ms",error.getClass().getSimpleName(),wait/1_000_000);
+            log.warn("AI plan timed out ({}); retrying once within {} ms",error.getClass().getSimpleName(),wait/1_000_000);
             return ai.plan(body.prompt(),body.history(),body.previousConditions(),likedTags,java.time.Duration.ofNanos(wait));
         }
+        if(!plan.candidates().isEmpty())return plan;
+        long wait=retryWait(deadline);
+        if(wait<MIN_RETRY.toNanos()||!store.reserveAi(user))return plan;
+        log.info("AI proposed no songs; asking once more within {} ms",wait/1_000_000);
+        // 재요청이 실패하면 첫 결과의 조건과 "후보를 제안하지 못했어요" 안내를 그대로 쓴다.
+        try{return ai.plan(body.prompt(),body.history(),body.previousConditions(),likedTags,java.time.Duration.ofNanos(wait));}
+        catch(InterruptedException interrupted){throw interrupted;}
+        catch(Exception error){log.warn("Retry after no AI proposals failed: {}: {}",error.getClass().getSimpleName(),error.getMessage());return plan;}
     }
+    private static long retryWait(long deadline){return Math.min(FIRST_PLAN_TIMEOUT.toNanos(),deadline-System.nanoTime()-VERIFY_RESERVE.toNanos());}
 
     @GetMapping("/me/feedback")
     public Map<String, Integer> feedback(@RequestHeader(value="Authorization", required=false) String auth) { return store.feedback(store.user(auth)); }

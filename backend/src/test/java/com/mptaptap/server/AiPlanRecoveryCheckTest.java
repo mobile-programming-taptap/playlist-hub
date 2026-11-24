@@ -83,6 +83,43 @@ class AiPlanRecoveryCheckTest {
         }finally{if(app!=null)app.close();ai.stop(0);mb.stop(0);}
     }
 
+    @Test void noProposalsAreAskedOnceMoreAndKeepTheNoticeWhenStillEmpty() throws Exception {
+        var aiCalls=new AtomicInteger();
+        // Each AI call takes the next planned answer: a song list, or null for an AI error.
+        java.util.Queue<java.util.Optional<List<Map<String,Object>>>> answers=new java.util.concurrent.ConcurrentLinkedQueue<>();
+        List<Map<String,Object>> songs=songs("Second",2);
+        HttpServer ai=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0),mb=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
+        ai.createContext("/responses",exchange->{
+            exchange.getRequestBody().readAllBytes();aiCalls.incrementAndGet();
+            var next=answers.poll();
+            if(next==null||next.isEmpty())respond(exchange,503,Map.of("error",Map.of("code","unavailable")));
+            else respond(exchange,200,envelope(plan(next.get())));
+        });
+        mb.createContext("/recording/",exchange->respond(exchange,200,Map.of("recordings",songs.stream().map(AiPlanRecoveryCheckTest::recording).toList())));
+        ai.start();mb.start();
+        ConfigurableApplicationContext app=null;
+        try {
+            app=start("http://127.0.0.1:"+ai.getAddress().getPort()+"/responses","http://127.0.0.1:"+mb.getAddress().getPort()+"/recording/");
+            String token=value("POST","/sessions",null,null,201).path("token").asString();
+            String noProposal="AI가 확실한 곡 후보를 제안하지 못했어요. 같은 요청으로 다시 시도해 주세요.";
+
+            answers.addAll(List.of(java.util.Optional.of(List.of()),java.util.Optional.of(songs)));
+            JsonNode recovered=value("POST","/recommendations",token,Map.of("prompt","재즈 추천"),200);
+            assertEquals(2,aiCalls.get());assertEquals(2,recovered.path("tracks").size(),"The second answer's proposals are verified");
+
+            answers.addAll(List.of(java.util.Optional.of(List.of()),java.util.Optional.of(List.of())));
+            JsonNode stillEmpty=value("POST","/recommendations",token,Map.of("prompt","재즈 추천"),200);
+            assertEquals(4,aiCalls.get(),"Only one retry for no proposals");
+            assertEquals(0,stillEmpty.path("tracks").size());assertEquals(noProposal,stillEmpty.path("notice").asString());
+
+            answers.addAll(List.of(java.util.Optional.of(List.of()),java.util.Optional.empty()));
+            JsonNode failedRetry=value("POST","/recommendations",token,Map.of("prompt","재즈 추천"),200);
+            assertEquals(6,aiCalls.get());
+            assertEquals(noProposal,failedRetry.path("notice").asString(),"A failed retry keeps the first answer instead of an error screen");
+            assertEquals("[\"jazz\"]",failedRetry.path("conditions").path("tags").toString());
+        }finally{if(app!=null)app.close();ai.stop(0);mb.stop(0);}
+    }
+
     private ConfigurableApplicationContext start(String ai,String mb) {
         var context=new SpringApplicationBuilder(TapTapApplication.class).run("--spring.config.import=","--server.port=0","--server.address=127.0.0.1",
             "--spring.datasource.url=jdbc:h2:mem:plan-recovery-"+UUID.randomUUID()+";MODE=PostgreSQL;DB_CLOSE_DELAY=-1","--spring.datasource.username=sa","--spring.datasource.password=",

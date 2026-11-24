@@ -129,12 +129,13 @@ class DynamicCatalogueCheckTest {
             assertEquals("openai",empty.path("mode").asString());assertEquals(0,empty.path("tracks").size());
             assertTrue(empty.path("conditions").path("tags").toString().contains("jpop"));
             assertTrue(empty.path("notice").asString().contains("제안하지 못"));
+            assertEquals(6,aiRequests.size(),"No proposals are asked exactly once more");
             catalogueStatus.set(200);model.set(plan("jazz",List.of(song("unverified "+UUID.randomUUID(),"Unknown performer",List.of("jazz"),"en"))));
             JsonNode unverified=value("POST","/recommendations",token,Map.of("prompt","재즈 추천"),200);
             assertEquals(0,unverified.path("tracks").size(),"Cached catalogue songs cannot replace unverified AI suggestions");
             assertTrue(unverified.path("notice").asString().contains("실제 곡 정보를 확인한 곡은 0곡"));
             assertFalse(unverified.path("notice").asString().contains("조건을 줄이면"));
-            assertEquals(6,aiRequests.size());assertEquals(4,queries.size());
+            assertEquals(7,aiRequests.size());assertEquals(4,queries.size());
             JsonNode saved=value("GET",path,token,null,200);
             assertEquals(track,saved.path("items").get(0).path("track"));
             app.close();app=null;app=start(database,username,password,aiEndpoint,mbEndpoint);
@@ -142,7 +143,7 @@ class DynamicCatalogueCheckTest {
             assertEquals(1,value("GET","/me/feedback",token,null,200).path(firstId).asInt());
             assertEquals(List.of(firstId),ids(value("GET","/me/saved-tracks",token,null,200)));
             assertEquals(saved,value("GET",path,token,null,200));
-            assertEquals(6,aiRequests.size(),"Reading durable catalogue, feedback and saved snapshots makes no AI call.");
+            assertEquals(7,aiRequests.size(),"Reading durable catalogue, feedback and saved snapshots makes no AI call.");
         } finally {
             if(app!=null)app.close();ai.stop(0);mb.stop(0);
             JdbcTemplate cleanup=new JdbcTemplate(new DriverManagerDataSource(database,username,password));
