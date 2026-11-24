@@ -12,6 +12,7 @@ public final class RecommendationCheck {
     public static void main(String[] args) {
         ImportMatchCheck.run();
         ConversationCheck.run();
+        TrackReferenceCheck.run();
         assert Track.matches("How You Like That BLACKPINK", "ｂｌａｃｋｐｉｎｋ LIKE");
         assert Track.matches("비 오는 밤", "오는 비");
         assert Track.matches("Anything", " ");
