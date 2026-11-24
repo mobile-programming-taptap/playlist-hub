@@ -644,10 +644,17 @@ public class MainActivity extends AppCompatActivity {
             recommendation.start(prompt.getText().toString(),api,new ArrayList<>(conversation),kept,new ArrayList<>(excluded),resultConditions);
             return;
         }
+        hideTracks(java.util.Collections.singletonList(track));
+    }
+
+    /** 이번 결과에서만 숨긴다. 싫어요로 기록하지 않는다. */
+    private void hideTracks(List<Track> tracks) {
+        Set<String> ids=new HashSet<>();for(Track track:tracks)ids.add(track.id);
         List<Recommender.Pick> before=picks, changed=new ArrayList<>(picks);
         Set<String> beforeHidden=new HashSet<>(hiddenTracks); int beforeIndex=pager.getCurrentItem();
-        changed.remove(index);
-        stopPlayer(); picks=changed; hiddenTracks.add(track.id); showResults();
+        changed.removeIf(pick->ids.contains(pick.track.id));
+        if(changed.size()==before.size())return;
+        stopPlayer(); picks=changed; hiddenTracks.addAll(ids); showResults();
         pager.setCurrentItem(Math.max(0, Math.min(beforeIndex, picks.size()-1)), false);
         snackbar("이번 추천에서 제외했어요.", Snackbar.LENGTH_LONG)
             .setAction("되돌리기", v -> {
