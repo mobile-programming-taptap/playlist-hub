@@ -68,6 +68,42 @@ final class ConversationCheck {
         assert Recommender.originLabel("1").equals("1"):"An invalid region code is shown as is";
         assert Recommender.originNotice("KR").equals("지역 조건(한국)은 반영되지 않았어요.");
         assert Recommender.originNotice("JP").equals("지역 조건(일본)은 반영되지 않았어요.");
+        // 연대는 직접 말한 표현만 읽는다. 범위와 나열은 그중 하나에만 속하면 통과하는 목록이 된다.
+        Object[][] decadeCases={{"90년대 발라드",List.of(1990)},{"1990년대 노래",List.of(1990)},{"80년대 팝",List.of(1980)},{"50년대 재즈",List.of(1950)},
+                {"2000년대 발라드",List.of(2000)},{"00년대 노래",List.of(2000)},{"10년대 노래",List.of(2010)},{"2020년대 팝",List.of(2020)},
+                {"90s pop",List.of(1990)},{"1990s rock",List.of(1990)},{"2000s",List.of(2000)},
+                {"90~2000년대 노래",List.of(1990,2000)},{"80~2000년대 노래",List.of(1980,1990,2000)},{"90년대~2000년대 노래",List.of(1990,2000)},
+                {"90년대와 2000년대 노래",List.of(1990,2000)},{"2000년대, 90년대",List.of(1990,2000)},{"90년대 후반 발라드",List.of(1990)}};
+        for(Object[] decadeCase:decadeCases){
+            Recommender.Conditions dated=Recommender.parse((String)decadeCase[0]);
+            assert dated.decades.equals(decadeCase[1])&&dated.unread.isEmpty():decadeCase[0]+" "+dated.decades+" "+dated.unread;
+        }
+        for(String request:List.of("옛날 노래","레트로 감성","요즘 노래","최신곡","2017년 노래","30년대 노래","1995년대 노래"))
+            assert Recommender.parse(request).decades.isEmpty():request;
+        Recommender.Conditions scenario=Recommender.parse("1990년대 한국 발라드 중에 가사 없는 곡만");
+        assert scenario.decades.equals(List.of(1990))&&scenario.origin.equals("KR")&&scenario.language.equals("none")&&scenario.tags.containsAll(List.of("ballad","instrumental"));
+        // 이어받기: 유지, 덮어쓰기, "말고"·"상관없이" 해제, 처음부터 초기화.
+        Recommender.Conditions nineties=Recommender.parse("90년대 발라드");
+        assert Conversation.parse(nineties,List.of(),"더 신나게").decades.equals(List.of(1990));
+        assert Conversation.parse(nineties,List.of(),"2000년대로 바꿔줘").decades.equals(List.of(2000));
+        assert Conversation.parse(nineties,List.of(),"90년대 말고").decades.isEmpty();
+        assert Conversation.parse(nineties,List.of(),"연대 상관없이").decades.isEmpty();
+        assert Conversation.parse(nineties,List.of(),"처음부터 팝").decades.isEmpty();
+        assert Conversation.copyConditions(nineties).decades.equals(List.of(1990));
+        assert Conversation.parse(List.of("90년대 발라드"),"더 잔잔하게").decades.equals(List.of(1990));
+        Recommender.Conditions unordered=new Recommender.Conditions();unordered.decades.addAll(List.of(2000,1990,1990));
+        assert Recommender.validate(unordered).decades.equals(List.of(1990,2000));
+        for(List<Integer> invalid:List.of(List.of(1995),List.of(1890),List.of(2100),List.of(1900,1910,1920,1930,1940,1950,1960,1970,1980))) {
+            Recommender.Conditions wrong=new Recommender.Conditions();wrong.decades.addAll(invalid);
+            try{Recommender.validate(wrong);assert false:invalid;}catch(IllegalArgumentException expected){}
+        }
+        assert Recommender.decadeLabel(List.of(1990,2000)).equals("1990년대, 2000년대");
+        // 발매 연도 판정은 ReleaseYear 한곳에 모여 있다.
+        assert ReleaseYear.of("2017-05-15",null)==2017&&ReleaseYear.of("1999",List.of())==1999&&ReleaseYear.of("2001-03",null)==2001;
+        assert ReleaseYear.of(null,List.of("2005-01-01","1998","bad"))==1998&&ReleaseYear.of("",java.util.Arrays.asList("",null))==ReleaseYear.UNKNOWN;
+        assert ReleaseYear.of("abcd",null)==ReleaseYear.UNKNOWN&&ReleaseYear.of("0000",null)==ReleaseYear.UNKNOWN;
+        assert ReleaseYear.judge(0,List.of(1990))==ReleaseYear.Verdict.UNDATED&&ReleaseYear.judge(1999,List.of(1990))==ReleaseYear.Verdict.MATCH
+                &&ReleaseYear.judge(2000,List.of(1990))==ReleaseYear.Verdict.OUTSIDE&&ReleaseYear.judge(2003,List.of(1990,2000))==ReleaseYear.Verdict.MATCH;
         Recommender.Conditions ballad=new Recommender.Conditions();ballad.tags.add("ballad");
         Recommender.Conditions lifted=Conversation.parse(ballad,List.of(),"너무 처지지 않게 해줘");
         assert lifted.tags.equals(List.of("ballad"))&&lifted.excludedTags.equals(List.of("sad"));

@@ -127,6 +127,31 @@ public final class RecommendationCheck {
         // 곡을 유지한 채 이어서 요청해도 미반영 안내는 맨 뒤에 한 번만 붙는다.
         String keptNotice=Conversation.recommend(expanded,Recommender.parse("한국 팝"),feedback,"openai",List.of(tracks.get(4).id),List.of()).notice;
         assert keptNotice.endsWith(Recommender.originNotice("KR"))&&keptNotice.indexOf(Recommender.originNotice("KR"))==keptNotice.lastIndexOf(Recommender.originNotice("KR")):keptNotice;
+        // 연대 필터: 연도를 모르면 제외, 요청 연대 중 하나에 속하면 통과(OR), 다른 조건과는 AND.
+        // 연대는 마지막에 보므로 장르로 먼저 빠진 곡(록 1997)은 연대 집계에 들어가지 않는다.
+        List<Track> dated=new ArrayList<>();
+        Object[][] years={{1995,"pop"},{2003,"pop"},{0,"pop"},{1988,"pop"},{1997,"rock"}};
+        for(int i=0;i<years.length;i++){
+            Track t=new Track();t.id=String.format("00000000-0000-0000-0000-%012d",100+i);t.title="Dated "+i;t.artist="Artist";t.language="en";
+            t.source="MusicBrainz";t.license="CC0-1.0";t.aiUseAllowed=true;t.sourceUrl="https://musicbrainz.org/recording/"+t.id;
+            t.releaseYear=(Integer)years[i][0];t.tags.add((String)years[i][1]);dated.add(t);
+        }
+        Recommender.Stats ninetiesStats=new Recommender.Stats();
+        Recommender.Result nineties=Recommender.recommend(dated,Recommender.parse("90년대 팝"),feedback,"openai",Set.of(),ninetiesStats);
+        assert nineties.tracks.size()==1&&nineties.tracks.get(0).track.releaseYear==1995:nineties.tracks.size();
+        assert ninetiesStats.undatedExcluded==1&&ninetiesStats.outsideDecadeExcluded==2:ninetiesStats.undatedExcluded+"/"+ninetiesStats.outsideDecadeExcluded;
+        Recommender.Result spanning=Recommender.recommend(dated,Recommender.parse("90~2000년대 팝"),feedback,"openai");
+        assert spanning.tracks.stream().map(pick->pick.track.releaseYear).sorted().toList().equals(List.of(1995,2003));
+        Recommender.Stats noDecade=new Recommender.Stats();
+        assert Recommender.recommend(dated,Recommender.parse("팝"),feedback,"openai",Set.of(),noDecade).tracks.size()==4&&noDecade.undatedExcluded==0&&noDecade.outsideDecadeExcluded==0;
+        // 0곡 안내 순서는 장르 → 언어 → 연대 → 일반이다.
+        assert Recommender.recommend(dated,Recommender.parse("70년대 재즈"),feedback,"openai").notice.startsWith("요청한 장르 조건");
+        assert Recommender.recommend(dated,Recommender.parse("70년대 일본어 노래"),feedback,"openai").notice.startsWith("요청한 언어 조건");
+        assert Recommender.recommend(dated,Recommender.parse("70년대 노래"),feedback,"openai").notice.startsWith("요청한 연대(1970년대) 조건에 맞는 곡을"):"decade notice";
+        // 연대만 있는 요청도 조건이 있는 요청으로 본다.
+        assert !Recommender.recommend(dated,Recommender.parse("90년대 노래"),feedback,"openai").notice.startsWith("구체적인");
+        String keptDecade=Conversation.recommend(dated,Recommender.parse("70년대 노래"),feedback,"openai",List.of(dated.get(0).id),List.of()).notice;
+        assert keptDecade.contains("연대 조건에 맞는 새 곡을 확인하지 못했어요"):keptDecade;
         Recommender.Result keptForeign=Conversation.recommend(expanded,foreignConditions,feedback,"openai",List.of(tracks.get(4).id),List.of());
         assert keptForeign.tracks.size()==2&&keptForeign.notice.contains("합해 2곡")&&!keptForeign.notice.contains("새 추천을 찾지 못"):"Count kept and new foreign-language songs together";
         Recommender.Result absentForeign=Conversation.recommend(tracks,foreignConditions,feedback,"basic",List.of(tracks.get(4).id),List.of());

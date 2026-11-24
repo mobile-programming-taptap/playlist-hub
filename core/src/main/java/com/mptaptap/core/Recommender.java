@@ -114,6 +114,14 @@ public final class Recommender {
         public List<String> excludedArtists = new ArrayList<>();
         /** "밤편지 같은 느낌"처럼 참고 곡·가수에서 추론한 tags 부분집합. 장르여도 필수로 만들지 않는다. */
         public List<String> inferredTags = new ArrayList<>();
+        /** 직접 말한 연대(1990 = 1990년대). 곡 발매 연도가 이 중 하나에 속해야 한다. 참고 곡에서 추론하지 않는다. */
+        public List<Integer> decades = new ArrayList<>();
+    }
+
+    /** 응답에 섞이지 않는 필터 집계. 다른 조건을 모두 통과하고 연대 때문에만 빠진 곡을 곡 id 기준 한 번씩 센다. */
+    public static final class Stats {
+        public int undatedExcluded;
+        public int outsideDecadeExcluded;
     }
 
     public static final class Pick {
@@ -247,11 +255,56 @@ public final class Recommender {
         List<LanguageMention> spoken=languages(input);
         for(LanguageMention mention:mentions(ORIGIN_WORDS,input))
             if(!mention.negative&&spoken.stream().noneMatch(language->language.start<mention.end&&mention.start<language.end))c.origin=mention.code;
+        for(DecadeMention mention:decadeMentions(input))if(!mention.negative)
+            for(int year:mention.years)if(!c.decades.contains(year))c.decades.add(year);
+        Collections.sort(c.decades);
         c.unread = unread(input);
         // "가사 없는/가사ㄴㄴ"은 연주곡을 원하는 요청이므로 language none 이다.
         // 반대로 "연주곡 제외"는 연주곡을 빼달라는 요청이므로 language 를 비운 채로 둔다.
         if (c.tags.contains("instrumental")) c.language = "none";
         return c;
+    }
+
+    /**
+     * "90년대", "1990년대", "00년대", "90s", "1990s", 범위 "80~2000년대"·"90년대~2000년대".
+     * "초반·중반·후반"은 연대 전체로 읽는다. 두 자리는 50~90년대와 00·10·20년대만 읽는다.
+     */
+    private static final Pattern DECADE = Pattern.compile(
+            "(?<!\\d)(\\d{4}|\\d{2})(?!\\d)(?:\\s*(?:년대)?\\s*(?:~|-|–|부터)\\s*(\\d{4}|\\d{2})(?!\\d))?"
+            + "(?:\\s*년대(?:\\s*(?:초반|중반|후반))?|'?s(?![a-z]))");
+    private static final class DecadeMention {
+        final List<Integer> years=new ArrayList<>();boolean negative;
+    }
+    private static int decadeYear(String digits){
+        int value=Integer.parseInt(digits);
+        if(value%10!=0)return -1;
+        if(digits.length()==4)return value>=1900&&value<=2090?value:-1;
+        if(value>=50)return 1900+value;
+        return value<=20?2000+value:-1;
+    }
+    private static List<DecadeMention> decadeMentions(String input){
+        List<DecadeMention> mentions=new ArrayList<>();
+        java.util.regex.Matcher match=DECADE.matcher(input);
+        while(match.find()){
+            int from=decadeYear(match.group(1)),to=match.group(2)==null?from:decadeYear(match.group(2));
+            if(from<0||to<0||to<from||(to-from)/10>=8)continue;
+            DecadeMention mention=new DecadeMention();
+            for(int year=from;year<=to;year+=10)mention.years.add(year);
+            mention.negative=negative(input,match.start(),match.end());
+            mentions.add(mention);
+        }
+        return mentions;
+    }
+    /** "90년대 말고"처럼 연대를 부정하면 지금 연대 조건을 푼다. 연대 제외 조건은 따로 두지 않는다. */
+    public static boolean decadesExcluded(String request){
+        for(DecadeMention mention:decadeMentions(Normalizer.normalize(request,Normalizer.Form.NFKC).toLowerCase(Locale.ROOT)))
+            if(mention.negative)return true;
+        return false;
+    }
+    public static String decadeLabel(List<Integer> decades){
+        StringBuilder label=new StringBuilder();
+        for(int year:decades){if(label.length()>0)label.append(", ");label.append(year).append("년대");}
+        return label.toString();
     }
 
     private static final Pattern SEPARATORS = Pattern.compile("[\\p{Z}\\s.,!?·/]+");
@@ -271,7 +324,7 @@ public final class Recommender {
             java.util.regex.Matcher matcher = Pattern.compile(pattern).matcher(body);
             while (matcher.find()) for (int i=matcher.start();i<matcher.end();i++) consumed[i]=true;
         }
-        for (String pattern : List.of(String.join("|",LANGUAGE_WORDS.values()),String.join("|",ORIGIN_WORDS.values()))) {
+        for (String pattern : List.of(String.join("|",LANGUAGE_WORDS.values()),String.join("|",ORIGIN_WORDS.values()),DECADE.pattern())) {
             java.util.regex.Matcher matcher = Pattern.compile(pattern).matcher(body);
             while (matcher.find()) for (int i=matcher.start();i<matcher.end();i++) consumed[i]=true;
         }
@@ -339,7 +392,10 @@ public final class Recommender {
 
     public static Conditions validate(Conditions c) {
         if (c != null) c.origin = c.origin == null ? "" : c.origin.toUpperCase(Locale.ROOT);
+        if (c != null && c.decades == null) c.decades = new ArrayList<>();
         if (c == null || c.tags == null || c.excludedTags == null || c.language == null || !validOrigin(c.origin)
+                || c.decades.stream().anyMatch(year -> year == null || year < 1900 || year > 2090 || year % 10 != 0)
+                || new java.util.TreeSet<>(c.decades).size() > 8
                 || c.tags.size()>64 || c.excludedTags.size()>64 || !c.tags.stream().allMatch(Recommender::validTag) || !c.excludedTags.stream().allMatch(Recommender::validTag)
                 || !validLanguage(c.language))
             throw new IllegalArgumentException("추천 조건을 해석하지 못했습니다.");
@@ -354,6 +410,7 @@ public final class Recommender {
         if (c.hardTags == null) c.hardTags = new ArrayList<>();
         if (c.softTags == null) c.softTags = new ArrayList<>();
         if (c.excludedArtists == null) c.excludedArtists = new ArrayList<>();
+        c.decades = new ArrayList<>(new java.util.TreeSet<>(c.decades));
         c.excludedArtists = c.excludedArtists.stream().map(Recommender::normalizeArtist)
                 .filter(name -> !name.isEmpty()).distinct().toList();
         // 명시한 제외와 겹치는 추론 값은 위에서 tags 에서 빠졌으므로 여기서도 사라진다.
@@ -373,6 +430,10 @@ public final class Recommender {
     }
 
     public static Result recommend(List<Track> catalogue, Conditions c, Map<String, Integer> feedback, String mode, Set<String> excludedTrackIds) {
+        return recommend(catalogue, c, feedback, mode, excludedTrackIds, new Stats());
+    }
+
+    public static Result recommend(List<Track> catalogue, Conditions c, Map<String, Integer> feedback, String mode, Set<String> excludedTrackIds, Stats stats) {
         validate(c);
         if (excludedTrackIds == null) throw new IllegalArgumentException("이번 추천에서 제외할 곡 정보를 확인해 주세요.");
         Map<String, Integer> likedTags = new LinkedHashMap<>();
@@ -406,6 +467,12 @@ public final class Recommender {
                 if (!track.tags.contains(tag)) { hardSatisfied = false; break; }
             }
             if (!hardSatisfied) continue;
+            // 연대는 맨 마지막에 본다. 다른 조건으로 빠질 곡을 연대 때문에 빠진 곡으로 세지 않기 위해서다.
+            if (!c.decades.isEmpty()) {
+                ReleaseYear.Verdict verdict = ReleaseYear.judge(track.releaseYear, c.decades);
+                if (verdict == ReleaseYear.Verdict.UNDATED) { stats.undatedExcluded++; continue; }
+                if (verdict == ReleaseYear.Verdict.OUTSIDE) { stats.outsideDecadeExcluded++; continue; }
+            }
             int score = feedback.getOrDefault(track.id, 0) == 1 ? 1 : 0;
             // 선호 조건은 곡을 버리지 않고 순서만 바꾼다.
             for (String tag : c.softTags) {
@@ -441,12 +508,14 @@ public final class Recommender {
                     + ")에 맞는 곡을 확인하지 못해 이번 추천은 0곡이에요. 조건을 줄이거나 다른 장르로 시도해 보세요.";
         else if (picks.isEmpty() && !c.language.isEmpty() && !c.language.equals("none"))
             notice = "요청한 언어 조건에 맞는 곡을 확인하지 못해 이번 추천은 0곡이에요. 조건을 바꿔 보세요.";
+        else if (picks.isEmpty() && !c.decades.isEmpty())
+            notice = "요청한 연대(" + decadeLabel(c.decades) + ") 조건에 맞는 곡을 확인하지 못해 이번 추천은 0곡이에요. 조건을 바꿔 보세요.";
         else if (picks.isEmpty())
             notice = "조건에 맞는 곡을 확인하지 못했어요. 조건을 줄이면 더 많은 곡을 찾을 수 있어요.";
         else if (picks.size() < 7)
             notice = "조건에 맞는 곡이 " + picks.size() + "곡이에요. 분위기 조건을 줄이면 더 많은 곡을 찾을 수 있어요.";
         else notice = "";
-        if (c.tags.isEmpty() && c.language.isEmpty()) notice = "구체적인 분위기나 장르를 더하면 요청에 맞춰 추천할 수 있어요.";
+        if (c.tags.isEmpty() && c.language.isEmpty() && c.decades.isEmpty()) notice = "구체적인 분위기나 장르를 더하면 요청에 맞춰 추천할 수 있어요.";
         return new Result(picks, c, mode, withOriginNotice(notice, c));
     }
 }
