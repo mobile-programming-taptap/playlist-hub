@@ -389,16 +389,32 @@ public class MainActivity extends AppCompatActivity {
         refinementPrompt=next;refinementChoices.clear();
         List<android.widget.CheckBox> choices=new ArrayList<>();
         List<Recommender.Pick> current=new ArrayList<>(picks);
+        // 영상 확인이 대화상자 뒤에서 카드를 지울 수 있으니 "첫 곡", "지금 듣는 곡"은 연 시점의 순서로 읽는다.
+        List<String> order=new ArrayList<>();for(Recommender.Pick pick:current)order.add(pick.track.id);
+        int watching=current.isEmpty()?-1:pager.getCurrentItem();
         for(Recommender.Pick pick:current){android.widget.CheckBox check=new androidx.appcompat.widget.AppCompatCheckBox(this);
             check.setText("유지 · "+pick.track.title);check.setMinHeight(dp(48));check.setChecked(restoredKeeps.contains(pick.track.id));
             refinementChoices.put(pick.track.id,check);choices.add(check);box.addView(check);}
         restoredKeeps.clear();
         AlertDialog dialog=dialogBuilder().setTitle("이어서 요청하기").setView(scroll(box)).setPositiveButton("추천 바꾸기",null).setNegativeButton("취소",null).create();
         dialog.setOnShowListener(d->dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{
-            String request=next.getText().toString().trim();try{com.mptaptap.core.Conversation.parse(resultConditions,conversation,request);next.setError(null);}catch(Exception e){next.setError(e.getMessage());return;}
-            List<String> kept=new ArrayList<>();for(int i=0;i<choices.size();i++)if(choices.get(i).isChecked())kept.add(current.get(i).track.id);
+            String request=next.getText().toString().trim();
+            Set<String> checked=new HashSet<>();for(int i=0;i<choices.size();i++)if(choices.get(i).isChecked())checked.add(current.get(i).track.id);
+            com.mptaptap.core.TrackReference.Result reference=com.mptaptap.core.TrackReference.parse(request,order,watching,feedback,checked);
+            if(reference.error!=null){next.setError(reference.error);return;}
+            // 곡을 가리키는 말은 떼어 내고 나머지만 보낸다. 남기기만 했다면 마지막 요청을 다시 보내고 기록에는 쌓지 않는다.
+            boolean record=!reference.referenced()||!reference.remaining.isEmpty();
+            String send=!reference.referenced()?request:record?reference.remaining:conversation.isEmpty()?prompt.getText().toString().trim():conversation.get(conversation.size()-1);
+            if(!record&&reference.kept.isEmpty()){
+                // 빼기만 했다면 새 곡을 받을 문장이 없다. 카드 메뉴의 "이번 추천에서 제외"와 같게 이번 결과에서만 숨긴다.
+                List<Track> hide=new ArrayList<>();for(Recommender.Pick pick:current)if(reference.excluded.contains(pick.track.id))hide.add(pick.track);
+                dialog.dismiss();hideKeyboard();hideTracks(hide);return;
+            }
+            try{com.mptaptap.core.Conversation.parse(resultConditions,conversation,send);next.setError(null);}catch(Exception e){next.setError(e.getMessage());return;}
+            List<String> kept=new ArrayList<>();for(String id:order)if(checked.contains(id)||reference.kept.contains(id))kept.add(id);
+            Set<String> excluded=new java.util.LinkedHashSet<>(hiddenTracks);excluded.addAll(reference.excluded);
             dialog.dismiss();hideKeyboard();stopPlayer();
-            replacementPosition=-1;recommendation.start(request,api,new ArrayList<>(conversation),kept,new ArrayList<>(hiddenTracks),resultConditions);
+            replacementPosition=-1;recommendation.start(send,api,new ArrayList<>(conversation),kept,new ArrayList<>(excluded),resultConditions,record);
         }));dialog.setOnDismissListener(d->{if(refinementPrompt==next){refinementPrompt=null;refinementChoices.clear();}});dialog.show();
     }
 
