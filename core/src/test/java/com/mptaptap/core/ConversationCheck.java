@@ -22,6 +22,15 @@ final class ConversationCheck {
         assert Recommender.parse("잔잔한 곡은 제외").excludedTags.equals(List.of("calm"));
         assert Recommender.parse("따뜻한 곡은 제외").excludedTags.equals(List.of("warm"));
         assert Recommender.parse("행복한 곡은 제외").excludedTags.equals(List.of("bright"));
+        // "처지"까지만 읽으면 꼬리 "지 않게"가 부정으로 읽히지 않아 sad 가 오히려 요청된다.
+        for(String request:List.of("너무 처지지 않게 해줘","처지는 노래는 싫어")) {
+            Recommender.Conditions upbeat=Recommender.parse(request);
+            assert upbeat.excludedTags.equals(List.of("sad"))&&!upbeat.tags.contains("sad"):request;
+        }
+        assert Recommender.parse("축 처져 있을 때 듣는 노래").tags.contains("sad");
+        Recommender.Conditions ballad=new Recommender.Conditions();ballad.tags.add("ballad");
+        Recommender.Conditions lifted=Conversation.parse(ballad,List.of(),"너무 처지지 않게 해줘");
+        assert lifted.tags.equals(List.of("ballad"))&&lifted.excludedTags.equals(List.of("sad"));
         for(String request:List.of("잔잔한 곡은 제외","따뜻한 곡은 제외","행복한 곡은 제외"))
             assert Recommender.isKnownConditionRequest(request)&&Recommender.parse(request).tags.isEmpty():request;
         Recommender.Conditions piano=Conversation.parse(jazz,List.of(),"피아노로 바꿔줘");

@@ -35,7 +35,8 @@ public final class Recommender {
                 {"bright", "밝은", "밝은|밝게|기분 전환|행복|bright|happy"},
                 {"energetic", "신나는", "신나|신나는|신나는 곡|활기|에너지|energetic|upbeat"},
                 {"warm", "따뜻한", "따뜻|포근|위로|warm|comfort"},
-                {"sad", "감성적인", "슬픈|슬프|우울|이별|감성|sad"},
+                // "처지"만 쓰면 꼬리가 "지 않게"로 남아 부정으로 읽히지 않는다. 활용형 전체를 맞춘다.
+                {"sad", "감성적인", "슬픈|슬프|우울|이별|감성|처지지|처지는|처져|sad"},
                 {"acoustic", "어쿠스틱", "어쿠스틱|acoustic"},
                 {"ballad", "발라드", "발라드|ballad"},
                 {"kpop", "K-pop", "케이팝|k[ -]?pop|아이돌"},
