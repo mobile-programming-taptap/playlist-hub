@@ -301,6 +301,10 @@ public final class Recommender {
             if(mention.negative)return true;
         return false;
     }
+    /** 연대 때문에 0곡일 때의 안내. 서버가 다른 안내로 덮어쓸 때도 이 문구를 찾아 남긴다. */
+    public static String decadeNotice(List<Integer> decades){
+        return "요청한 연대(" + decadeLabel(decades) + ") 조건에 맞는 곡을 확인하지 못해 이번 추천은 0곡이에요. 조건을 바꿔 보세요.";
+    }
     public static String decadeLabel(List<Integer> decades){
         StringBuilder label=new StringBuilder();
         for(int year:decades){if(label.length()>0)label.append(", ");label.append(year).append("년대");}
@@ -509,7 +513,7 @@ public final class Recommender {
         else if (picks.isEmpty() && !c.language.isEmpty() && !c.language.equals("none"))
             notice = "요청한 언어 조건에 맞는 곡을 확인하지 못해 이번 추천은 0곡이에요. 조건을 바꿔 보세요.";
         else if (picks.isEmpty() && !c.decades.isEmpty())
-            notice = "요청한 연대(" + decadeLabel(c.decades) + ") 조건에 맞는 곡을 확인하지 못해 이번 추천은 0곡이에요. 조건을 바꿔 보세요.";
+            notice = decadeNotice(c.decades);
         else if (picks.isEmpty())
             notice = "조건에 맞는 곡을 확인하지 못했어요. 조건을 줄이면 더 많은 곡을 찾을 수 있어요.";
         else if (picks.size() < 7)

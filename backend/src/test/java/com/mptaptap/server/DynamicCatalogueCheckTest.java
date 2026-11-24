@@ -513,6 +513,58 @@ class DynamicCatalogueCheckTest {
         } finally {ai.stop(0);}
     }
 
+    @Test void releaseYearsFilterDecadesAndBackfillCachedSongs() throws Exception {
+        String a=UUID.randomUUID().toString(),b=UUID.randomUUID().toString(),c=UUID.randomUUID().toString();
+        List<Map<String,Object>> songs=List.of(song("Decade Song A","Decade Artist A",List.of(),""),
+            song("Decade Song B","Decade Artist B",List.of(),""),song("Decade Song C","Decade Artist C",List.of(),""));
+        // AI가 연대를 장르로 만든 값은 조건에서 빠져야 한다(5-1의 korean_1990s).
+        Map<String,Object> payload=plan("genre:korean_1990s",songs);
+        AtomicReference<String> laterDate=new AtomicReference<>(null);List<String> queries=new CopyOnWriteArrayList<>();
+        HttpServer ai=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0),mb=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
+        ai.createContext("/responses",exchange->{exchange.getRequestBody().readAllBytes();respond(exchange,200,envelope(payload));});
+        mb.createContext("/recording/",exchange->{
+            queries.add(URLDecoder.decode(exchange.getRequestURI().getRawQuery(),StandardCharsets.UTF_8));
+            // A는 first-release-date, B는 발매본 날짜 중 가장 이른 연도, C는 처음엔 날짜가 없다.
+            respond(exchange,200,Map.of("recordings",List.of(dated(a,"Decade Song A","Decade Artist A","1995-03-01",List.of()),
+                dated(b,"Decade Song B","Decade Artist B",null,List.of("2004-05","2001")),
+                dated(c,"Decade Song C","Decade Artist C",laterDate.get(),List.of()))));
+        });
+        ai.start();mb.start();
+        try(var app=start("jdbc:h2:mem:decades"+UUID.randomUUID()+";MODE=PostgreSQL;DB_CLOSE_DELAY=-1","sa","",
+                "http://127.0.0.1:"+ai.getAddress().getPort()+"/responses","http://127.0.0.1:"+mb.getAddress().getPort()+"/recording/")) {
+            String token=value("POST","/sessions",null,null,201).path("token").asString();
+            JsonNode nineties=value("POST","/recommendations",token,Map.of("prompt","1990년대 노래"),200);
+            assertEquals(List.of(a),ids(nineties.path("tracks")));
+            assertEquals(1995,nineties.path("tracks").get(0).path("track").path("releaseYear").asInt());
+            assertEquals("[1990]",nineties.path("conditions").path("decades").toString());
+            assertFalse(nineties.path("conditions").path("tags").toString().contains("1990s"),nineties.path("conditions").toString());
+            assertEquals(1,queries.size());
+            // 연대 조건이 없으면 연도를 모르는 캐시 곡이 있어도 검색하지 않고, 연도로 거르지도 않는다.
+            JsonNode plain=value("POST","/recommendations",token,Map.of("prompt","노래 추천"),200);
+            assertEquals(new java.util.HashSet<>(List.of(a,b,c)),new java.util.HashSet<>(ids(plain.path("tracks"))));
+            assertEquals(1,queries.size());
+            // 연대 조건이 있으면 연도를 모르는 캐시 곡(C)만 같은 검색 한 번에 묶어 연도를 채운다.
+            laterDate.set("2008");
+            JsonNode noughties=value("POST","/recommendations",token,Map.of("prompt","2000년대 노래"),200);
+            assertEquals(new java.util.HashSet<>(List.of(b,c)),new java.util.HashSet<>(ids(noughties.path("tracks"))));
+            assertEquals(2,queries.size());
+            assertTrue(queries.get(1).contains("Decade Song C")&&!queries.get(1).contains("Decade Song A")&&!queries.get(1).contains("Decade Song B"),queries.get(1));
+            // 채운 연도는 저장되어 다음부터는 검색 없이 쓴다.
+            JsonNode again=value("POST","/recommendations",token,Map.of("prompt","2000년대 노래"),200);
+            assertEquals(new java.util.HashSet<>(List.of(b,c)),new java.util.HashSet<>(ids(again.path("tracks"))));
+            assertEquals(2,queries.size());
+        } finally {ai.stop(0);mb.stop(0);}
+    }
+    private static Map<String,Object> dated(String id,String title,String artist,String first,List<String> dates) {
+        Map<String,Object> row=new LinkedHashMap<>(recording(id,title,artist,"",UUID.randomUUID().toString()));
+        if(first!=null)row.put("first-release-date",first);
+        List<Map<String,Object>> releases=new ArrayList<>();
+        for(String date:dates)releases.add(Map.of("id",UUID.randomUUID().toString(),"date",date));
+        if(releases.isEmpty())releases.add(Map.of("id",UUID.randomUUID().toString()));
+        row.put("releases",releases);
+        return row;
+    }
+
     private ConfigurableApplicationContext start(String database,String username,String password,String ai,String mb) {
         var context=new SpringApplicationBuilder(TapTapApplication.class).run("--spring.config.import=","--server.port=0","--server.address=127.0.0.1",
             "--spring.datasource.url="+database,"--spring.datasource.username="+username,"--spring.datasource.password="+password,

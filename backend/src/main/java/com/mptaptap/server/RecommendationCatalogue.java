@@ -1,6 +1,7 @@
 package com.mptaptap.server;
 
 import com.mptaptap.core.Recommender;
+import com.mptaptap.core.ReleaseYear;
 import com.mptaptap.core.Track;
 import java.net.URI;
 import java.net.URLEncoder;
@@ -15,7 +16,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import java.util.stream.Collectors;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.http.HttpStatus;
@@ -91,6 +91,9 @@ final class RecommendationCatalogue {
         boolean wantsInstrumental=conditions!=null&&(conditions.tags.contains("instrumental")||conditions.language.equals("none"));
         List<String> excludedArtists=conditions==null?List.of():
                 (conditions.excludedArtists==null?List.of():conditions.excludedArtists);
+        // 연대 조건이 있으면 연도를 모르는 캐시 곡도 같은 검색에 묶어 연도를 채운다. 검색 요청 수는 늘지 않는다.
+        boolean wantsDecades=conditions!=null&&conditions.decades!=null&&!conditions.decades.isEmpty();
+        List<Track> undated=new ArrayList<>();
         List<Track> known=all();List<OpenAi.Suggestion> missing=new ArrayList<>();
         Map<String,Track> verified=new LinkedHashMap<>();Set<String> identities=new java.util.HashSet<>();
         int cachedHits=0,skippedByArtist=0;
@@ -109,16 +112,19 @@ final class RecommendationCatalogue {
                 cached.tagsSource="OpenAI song classification; recording identity verified by MusicBrainz";
                 verified.put(cached.id,cached);
                 cachedHits++;
+                if(wantsDecades&&cached.releaseYear==ReleaseYear.UNKNOWN)undated.add(cached);
             }
         }
         int searched=missing.size();
-        if(missing.isEmpty()){
+        if(missing.isEmpty()&&undated.isEmpty()){
             List<Track> result=new ArrayList<>(verified.values());
             logFunnel(proposed,cachedHits,searched,skippedByArtist,result.size());
             return result;
         }
-        String query=missing.stream().map(song->"(recording:"+literal(song.title())+" AND artist:"+literal(song.artist())+")")
-                .collect(Collectors.joining(" OR "));
+        List<String> clauses=new ArrayList<>();
+        for(OpenAi.Suggestion song:missing)clauses.add(clause(song.title(),song.artist()));
+        for(Track track:undated)clauses.add(clause(track.title,track.artist));
+        String query=String.join(" OR ",clauses);
         JsonNode rows;
         try{rows=search(query,deadline).path("recordings");}
         catch(Exception error){
@@ -157,6 +163,7 @@ final class RecommendationCatalogue {
                     String releaseId=release.path("id").asString();
                     if(releaseId.matches(UUID_PATTERN)){track.artworkUrl="https://coverartarchive.org/release/"+releaseId+"/front-500";break;}
                 }
+                track.releaseYear=releaseYear(row);
                 if(track.usable()){
                     verified.put(id,track);
                     if(!seeds.containsKey(id))discovered.add(track);
@@ -164,10 +171,45 @@ final class RecommendationCatalogue {
                 }
             }
         }
+        backfill(undated,rows,known);
         List<Track> result=new ArrayList<>(verified.values());
         logFunnel(proposed,cachedHits,searched,skippedByArtist,result.size());
         if(!discovered.isEmpty())remember(discovered);
         return result;
+    }
+
+    private static String clause(String title,String artist){return "(recording:"+literal(title)+" AND artist:"+literal(artist)+")";}
+
+    /** 녹음 검색 행의 발매 연도. 응답 형식은 API 문서 기준이고 실측하지 않았다. 판정 기준은 ReleaseYear 에 모여 있다. */
+    private static int releaseYear(JsonNode row){
+        List<String> dates=new ArrayList<>();
+        for(JsonNode release:row.path("releases"))dates.add(release.path("date").asString());
+        return ReleaseYear.of(row.path("first-release-date").asString(),dates);
+    }
+
+    /** 연도를 모르던 캐시 곡에 같은 녹음 id 의 검색 결과로 연도를 채우고 저장한다. 분류는 저장된 원래 값을 유지한다. */
+    private void backfill(List<Track> undated,JsonNode rows,List<Track> known){
+        if(undated.isEmpty())return;
+        List<Track> filled=new ArrayList<>();
+        for(Track track:undated)for(JsonNode row:rows) {
+            if(!row.path("id").asString().equals(track.id))continue;
+            int year=releaseYear(row);
+            if(year==ReleaseYear.UNKNOWN)break;
+            track.releaseYear=year;
+            Track original=known.stream().filter(candidate->candidate.id.equals(track.id)).findFirst().orElse(null);
+            if(original!=null){Track stored=json.readValue(json.writeValueAsString(original),Track.class);stored.releaseYear=year;filled.add(stored);}
+            break;
+        }
+        org.slf4j.LoggerFactory.getLogger(RecommendationCatalogue.class).info("Release year backfill: undated={}, filled={}",undated.size(),filled.size());
+        if(!filled.isEmpty())store(filled);
+    }
+
+    private synchronized void store(List<Track> tracks) {
+        tx.executeWithoutResult(status->{for(Track track:tracks) {
+            String snapshot=json.writeValueAsString(track);
+            if(db.update("UPDATE recommendation_tracks SET track_json=? WHERE id=?",snapshot,track.id)==0)
+                db.update("INSERT INTO recommendation_tracks (id,track_json) VALUES (?,?) ON CONFLICT DO NOTHING",track.id,snapshot);
+        }});
     }
 
     /** AI 후보가 어느 단계에서 줄었는지 남긴다. 조건 부족과 외부 오류를 구분하는 근거가 된다. */

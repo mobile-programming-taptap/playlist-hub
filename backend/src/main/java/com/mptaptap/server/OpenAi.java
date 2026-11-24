@@ -126,6 +126,8 @@ public class OpenAi {
                     "가사ㄴㄴ, 보컬ㄴㄴ, 노래방ㄴㄴ, 가사 no and similar chat abbreviations mean no vocals, so they set language none with instrumental in tags. " +
                     "A requested artist is not a requested genre; never infer a genre constraint from an artist name or the artist's nationality. Preserve genres directly requested by the user. " +
                     "A song or artist given as a style reference, such as 밤편지 같은 느낌 or X 같은 노래, is a song name, not a genre, mood or time-of-day request. Put genres and traits inferred from it only in inferredTags, never in tags. " +
+                    "Decades such as 90년대, 1990s or 80~2000년대 are read by the app outside this schema: never encode a decade or era as a genre or any tag. " +
+                    "When the latest request or the snapshot decades name decades, suggest only recordings first released in one of those decades. " +
                     "Explicit exclusions win over a reference: never put an excluded trait, or one the user said to avoid, in inferredTags. Keep snapshot inferredTags unless the latest request changes or resets them; a genre the user names directly goes in tags. " +
                     "Use excludedTags only for directly requested negatives or unchanged explicit snapshot exclusions; never expand only or a requested genre into a complement of other tags. " +
                     "Keep explicitly requested genres even when this catalogue has no matching songs; never replace it with a different genre or silently remove it. " +
@@ -180,6 +182,8 @@ public class OpenAi {
                 throw new IllegalStateException("AI_CONDITIONS_INVALID");
         boolean languageSpecified=object.remove("languageSpecified").asBoolean();
         Recommender.Conditions raw=json.treeToValue(object,Recommender.Conditions.class);
+        // 연대는 사전이 decades 로 읽는다. AI가 연대를 장르로 만든 값(genre:korean_1990s)은 버린다.
+        raw.tags.removeIf(OpenAi::decadeGenre);raw.inferredTags.removeIf(OpenAi::decadeGenre);
         // 추론 값도 조건에 들어가되 validate 에서 선호로만 분류된다.
         for(String inferred:raw.inferredTags)if(!raw.tags.contains(inferred))raw.tags.add(inferred);
         boolean positiveUnknown=raw!=null&&raw.tags!=null&&raw.tags.contains("unsupported_genre");
@@ -233,9 +237,14 @@ public class OpenAi {
      */
     private static Recommender.Conditions settled(Recommender.Conditions target,Recommender.Conditions previousConditions,List<String> history,String prompt) {
         Recommender.Conditions result=inferred(target,previousConditions,prompt);
-        result.origin=Conversation.parse(previousConditions,history,prompt).origin;
+        Recommender.Conditions direct=Conversation.parse(previousConditions,history,prompt);
+        result.origin=direct.origin;
+        // 연대도 직접 말한 표현만 조건이 된다. AI 응답에는 연대 칸이 없다.
+        result.decades=new ArrayList<>(direct.decades);
         return result;
     }
+
+    private static boolean decadeGenre(String tag){return tag!=null&&tag.matches("genre:(?:.*[_-])?[0-9]{2,4}s(?:[_-].*)?");}
 
     /** AI가 이전 턴의 추론 값을 tags 로 옮겨도, 사용자가 이번에 직접 말하지 않았다면 선호로 남긴다. */
     private static Recommender.Conditions inferred(Recommender.Conditions target,Recommender.Conditions previousConditions,String prompt) {

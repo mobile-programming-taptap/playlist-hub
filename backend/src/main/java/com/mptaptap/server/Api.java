@@ -101,7 +101,9 @@ public class Api {
         for(Track track:verified)if(!videos.fresh(track.id,now).map(YoutubeLinks.Link::none).orElse(false))candidates.put(track.id,track);
         for(List<String> ids:List.of(body.keptTrackIds()==null?List.<String>of():body.keptTrackIds(),body.excludedTrackIds()==null?List.<String>of():body.excludedTrackIds()))
             for(String id:ids)candidates.putIfAbsent(id,catalogue.track(id));
-        Recommender.Result result=Conversation.recommend(new ArrayList<>(candidates.values()),plan.conditions(),feedback,"openai",body.keptTrackIds(),body.excludedTrackIds());
+        // 연대 집계는 마지막 추천 결과의 값만 남겨 1회차와 보충 회차가 같은 곡을 두 번 세지 않게 한다.
+        Recommender.Stats stats=new Recommender.Stats();
+        Recommender.Result result=Conversation.recommend(new ArrayList<>(candidates.values()),plan.conditions(),feedback,"openai",body.keptTrackIds(),body.excludedTrackIds(),stats);
         var verifiedIds=verified.stream().map(track->track.id).collect(java.util.stream.Collectors.toSet());
         int proposed=plan.candidates().size();
         // Reserve one recording lookup; its retries must fit the same overall deadline.
@@ -115,7 +117,9 @@ public class Api {
                 var fresh=extra.candidates().stream().filter(song->!previous.contains(song.title()+"|"+song.artist())).toList();
                 proposed+=fresh.size();
                 for(Track track:catalogue.resolve(fresh,java.time.Duration.ofNanos(Math.max(1,deadline-System.nanoTime())),plan.conditions())){verifiedIds.add(track.id);if(!videos.fresh(track.id,now).map(YoutubeLinks.Link::none).orElse(false))candidates.putIfAbsent(track.id,track);}
-                result=Conversation.recommend(new ArrayList<>(candidates.values()),plan.conditions(),feedback,"openai",body.keptTrackIds(),body.excludedTrackIds());
+                Recommender.Stats retried=new Recommender.Stats();
+                result=Conversation.recommend(new ArrayList<>(candidates.values()),plan.conditions(),feedback,"openai",body.keptTrackIds(),body.excludedTrackIds(),retried);
+                stats=retried;
             } catch(InterruptedException interrupted){Thread.currentThread().interrupt();throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"AI 요청이 중단됐어요. 같은 요청으로 다시 시도해 주세요.");}
             // The AI call and the recording lookup share this catch, so keep the message and stack trace to tell them apart.
             catch(Exception error){org.slf4j.LoggerFactory.getLogger(Api.class).warn("Supplementary recommendation failed: {}: {}",error.getClass().getSimpleName(),error.getMessage(),error);}
@@ -126,7 +130,12 @@ public class Api {
             if(plan.candidates().isEmpty())notice="AI가 확실한 곡 후보를 제안하지 못했어요. 같은 요청으로 다시 시도해 주세요.";
             else if(verifiedIds.size()<proposed)notice="AI 후보 "+proposed+"곡 중 실제 곡 정보를 확인한 곡은 "+verifiedIds.size()+"곡이고, 요청과 반응을 반영한 추천은 "+shown+"곡이에요. 같은 요청으로 다른 후보를 찾아볼 수 있어요.";
         }
-        org.slf4j.LoggerFactory.getLogger(Api.class).info("Recommendation counts: proposed={}, verified={}, shown={}",proposed,verifiedIds.size(),shown);
+        // 연대 때문에 0곡이 된 안내는 7곡 미만 안내로 덮어써도 남긴다.
+        List<Integer> decades=result.conditions.decades;
+        if(!decades.isEmpty()&&!notice.equals(result.notice)&&result.notice.contains(Recommender.decadeNotice(decades)))notice=notice+" "+Recommender.decadeNotice(decades);
+        org.slf4j.LoggerFactory.getLogger(Api.class).info("Recommendation counts: proposed={}, verified={}, shown={}, decades={}, undatedExcluded={}, outsideDecadeExcluded={}",
+            proposed,verifiedIds.size(),shown,decades.isEmpty()?"-":decades.stream().map(String::valueOf).collect(java.util.stream.Collectors.joining("|")),
+            stats.undatedExcluded,stats.outsideDecadeExcluded);
         // 이미 찾은 공식 영상은 응답 카드에만 실어 바로 재생하게 한다. 곡 레코드에는 저장하지 않는다.
         for(Recommender.Pick pick:result.tracks)if(pick.track.youtubeVideoId.isEmpty())pick.track.youtubeVideoId=videos.fresh(pick.track.id,now).filter(YoutubeLinks.Link::verified).map(YoutubeLinks.Link::videoId).orElse("");
         // 7곡 미만 안내로 덮어써도 지역 미반영 안내는 남긴다.
