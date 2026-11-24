@@ -78,7 +78,7 @@ public class Api {
         try {
             for(Track track:known)if(feedback.getOrDefault(track.id,0)==1)
                 for(String tag:track.tags)likedTags.merge(tag,1,Integer::sum);
-            plan=ai.plan(body.prompt(),body.history(),body.previousConditions(),likedTags);
+            plan=firstPlan(body,likedTags,user,deadline);
         } catch(InterruptedException error) {
             Thread.currentThread().interrupt();throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"AI 요청이 중단됐어요. 같은 요청으로 다시 시도해 주세요.");
         } catch(Exception error) {
@@ -130,6 +130,24 @@ public class Api {
         // 이미 찾은 공식 영상은 응답 카드에만 실어 바로 재생하게 한다. 곡 레코드에는 저장하지 않는다.
         for(Recommender.Pick pick:result.tracks)if(pick.track.youtubeVideoId.isEmpty())pick.track.youtubeVideoId=videos.fresh(pick.track.id,now).filter(YoutubeLinks.Link::verified).map(YoutubeLinks.Link::videoId).orElse("");
         return new Recommender.Result(result.tracks,result.conditions,"openai",notice);
+    }
+
+    private static final java.time.Duration FIRST_PLAN_TIMEOUT=java.time.Duration.ofSeconds(15),VERIFY_RESERVE=java.time.Duration.ofSeconds(6),MIN_RETRY=java.time.Duration.ofSeconds(5);
+
+    /**
+     * 첫 AI 요청이 시간 초과되면 한 번만 다시 묻는다. 첫 요청에는 유지할 결과가 없어 보충 요청처럼 넘어갈 수 없고,
+     * 제한 시간을 늘리면 곡 확인 시간이 줄어든다. 재요청은 같은 30초 안에서 곡 확인 시간을 남긴 만큼만 기다린다.
+     */
+    private OpenAi.Plan firstPlan(Prompt body,Map<String,Integer> likedTags,String user,long deadline) throws Exception {
+        try{return ai.plan(body.prompt(),body.history(),body.previousConditions(),likedTags,FIRST_PLAN_TIMEOUT);}
+        catch(java.io.IOException error){
+            // 헤더가 늦으면 HttpTimeoutException, 본문이 늦으면 BoundedHttp의 RESPONSE_TIMEOUT 이다.
+            if(!(error instanceof java.net.http.HttpTimeoutException)&&!"RESPONSE_TIMEOUT".equals(error.getMessage()))throw error;
+            long wait=Math.min(FIRST_PLAN_TIMEOUT.toNanos(),deadline-System.nanoTime()-VERIFY_RESERVE.toNanos());
+            if(wait<MIN_RETRY.toNanos()||!store.reserveAi(user))throw error;
+            org.slf4j.LoggerFactory.getLogger(Api.class).warn("AI plan timed out ({}); retrying once within {} ms",error.getClass().getSimpleName(),wait/1_000_000);
+            return ai.plan(body.prompt(),body.history(),body.previousConditions(),likedTags,java.time.Duration.ofNanos(wait));
+        }
     }
 
     @GetMapping("/me/feedback")

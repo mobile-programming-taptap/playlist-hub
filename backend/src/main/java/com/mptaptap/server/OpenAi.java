@@ -52,6 +52,9 @@ public class OpenAi {
     Plan plan(String prompt, List<String> history, Recommender.Conditions previousConditions, Map<String,Integer> likedTags) throws Exception {
         return request(prompt,history,previousConditions,likedTags,true);
     }
+    Plan plan(String prompt,List<String> history,Recommender.Conditions previousConditions,Map<String,Integer> likedTags,Duration timeout) throws Exception {
+        return request(prompt,history,previousConditions,likedTags,true,List.of(),timeout);
+    }
     Plan supplement(String prompt,List<String> history,Recommender.Conditions conditions,Map<String,Integer> likedTags,List<Suggestion> previous,Duration timeout) throws Exception {
         return request(prompt,history,conditions,likedTags,true,previous,timeout);
     }
