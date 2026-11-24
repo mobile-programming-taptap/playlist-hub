@@ -64,7 +64,10 @@ final class ConversationCheck {
         Recommender.Conditions lower=new Recommender.Conditions();lower.origin="kr";assert Recommender.validate(lower).origin.equals("KR");
         Recommender.Conditions bogus=new Recommender.Conditions();bogus.origin="Korea";
         try{Recommender.validate(bogus);assert false:"invalid origin";}catch(IllegalArgumentException expected){}
-        assert Recommender.originLabel("KR").equals("한국")&&Recommender.originLabel("JP").equals("일본");
+        assert Recommender.originLabel("KR").equals("한국")&&Recommender.originLabel("JP").equals("일본")&&Recommender.originLabel("US").equals("미국");
+        assert Recommender.originLabel("1").equals("1"):"An invalid region code is shown as is";
+        assert Recommender.originNotice("KR").equals("지역 조건(한국)은 반영되지 않았어요.");
+        assert Recommender.originNotice("JP").equals("지역 조건(일본)은 반영되지 않았어요.");
         Recommender.Conditions ballad=new Recommender.Conditions();ballad.tags.add("ballad");
         Recommender.Conditions lifted=Conversation.parse(ballad,List.of(),"너무 처지지 않게 해줘");
         assert lifted.tags.equals(List.of("ballad"))&&lifted.excludedTags.equals(List.of("sad"));

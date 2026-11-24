@@ -177,14 +177,17 @@ public final class Recommender {
     }
     public static String originLabel(String origin){
         if(origin==null||origin.isEmpty())return "";if(origin.equals("KR"))return "한국";
-        String name=new Locale("",origin).getDisplayCountry(Locale.KOREAN);return name.isEmpty()||name.equals(origin)?origin:name;
+        String name;
+        try{name=new Locale.Builder().setRegion(origin).build().getDisplayCountry(Locale.KOREAN);}catch(java.util.IllformedLocaleException invalid){return origin;}
+        return name.isEmpty()||name.equals(origin)?origin:name;
     }
-    public static final String ORIGIN_NOTICE="지역 조건은 반영되지 않았어요.";
+    /** 어느 지역 표현이 무시됐는지 알린다. 조사는 괄호 앞 "조건"에 맞춘다. */
+    public static String originNotice(String origin){return "지역 조건("+originLabel(origin)+")은 반영되지 않았어요.";}
     /** 지역을 언급했으면 기존 안내 뒤에 미반영 안내를 붙인다. 이미 붙어 있으면 그대로 둔다. */
     public static String withOriginNotice(String notice,Conditions c){
         String base=notice==null?"":notice.trim();
-        if(c==null||c.origin==null||c.origin.isEmpty()||base.endsWith(ORIGIN_NOTICE))return base;
-        return (base+" "+ORIGIN_NOTICE).trim();
+        if(c==null||c.origin==null||c.origin.isEmpty()||base.endsWith(originNotice(c.origin)))return base;
+        return (base+" "+originNotice(c.origin)).trim();
     }
     public static boolean validOrigin(String origin){return origin!=null&&origin.matches("|[A-Z]{2}");}
 

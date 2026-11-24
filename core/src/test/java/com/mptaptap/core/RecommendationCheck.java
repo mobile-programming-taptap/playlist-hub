@@ -119,14 +119,14 @@ public final class RecommendationCheck {
             Recommender.Result plain=Recommender.recommend(expanded,Recommender.parse(pair[1]),feedback,"openai");
             assert regional.tracks.stream().map(pick->pick.track.id).toList().equals(plain.tracks.stream().map(pick->pick.track.id).toList()):pair[0];
             // 기존 안내는 순서 그대로이고, 미반영 안내는 맨 뒤에 붙는다. 0곡이어도 지역을 원인으로 말하지 않는다.
-            assert regional.notice.equals((plain.notice+" "+Recommender.ORIGIN_NOTICE).trim()):regional.notice;
+            assert regional.notice.equals((plain.notice+" "+Recommender.originNotice("KR")).trim()):regional.notice;
             assert !regional.notice.contains("지역(");
         }
         assert Recommender.recommend(expanded,Recommender.parse("한국 재즈"),feedback,"openai").notice.startsWith("요청한 장르 조건");
         assert Recommender.recommend(expanded,Recommender.parse("팝"),feedback,"openai").notice.indexOf("지역")<0;
         // 곡을 유지한 채 이어서 요청해도 미반영 안내는 맨 뒤에 한 번만 붙는다.
         String keptNotice=Conversation.recommend(expanded,Recommender.parse("한국 팝"),feedback,"openai",List.of(tracks.get(4).id),List.of()).notice;
-        assert keptNotice.endsWith(Recommender.ORIGIN_NOTICE)&&keptNotice.indexOf(Recommender.ORIGIN_NOTICE)==keptNotice.lastIndexOf(Recommender.ORIGIN_NOTICE):keptNotice;
+        assert keptNotice.endsWith(Recommender.originNotice("KR"))&&keptNotice.indexOf(Recommender.originNotice("KR"))==keptNotice.lastIndexOf(Recommender.originNotice("KR")):keptNotice;
         Recommender.Result keptForeign=Conversation.recommend(expanded,foreignConditions,feedback,"openai",List.of(tracks.get(4).id),List.of());
         assert keptForeign.tracks.size()==2&&keptForeign.notice.contains("합해 2곡")&&!keptForeign.notice.contains("새 추천을 찾지 못"):"Count kept and new foreign-language songs together";
         Recommender.Result absentForeign=Conversation.recommend(tracks,foreignConditions,feedback,"basic",List.of(tracks.get(4).id),List.of());
