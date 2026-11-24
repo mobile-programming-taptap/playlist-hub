@@ -53,10 +53,12 @@ final class TrackJson {
         // 이전 버전에서 저장한 조건에는 없을 수 있다.
         JSONArray inferred = value.optJSONArray("inferredTags");
         if (inferred != null) for (int i = 0; i < inferred.length(); i++) c.inferredTags.add(inferred.getString(i));
+        // 반영하지 않은 지역 표시. 이어서 요청할 때 안내가 계속 붙도록 저장한다. 옛 저장값에는 없다.
+        c.origin=value.optString("origin","");
         c.language=value.getString("language"); return Recommender.validate(c);
     }
     static JSONObject conditions(Recommender.Conditions c) throws JSONException {
         return new JSONObject().put("tags", new JSONArray(c.tags)).put("excludedTags", new JSONArray(c.excludedTags)).put("language", c.language)
-            .put("excludedArtists", new JSONArray(c.excludedArtists)).put("inferredTags", new JSONArray(c.inferredTags));
+            .put("excludedArtists", new JSONArray(c.excludedArtists)).put("inferredTags", new JSONArray(c.inferredTags)).put("origin", c.origin);
     }
 }
