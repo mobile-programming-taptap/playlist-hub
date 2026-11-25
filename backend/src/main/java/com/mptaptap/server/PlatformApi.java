@@ -289,6 +289,11 @@ public class PlatformApi {
                 else{job.put("createStarted",true);store.update(u,id,"transfer",job);if(!store.exists(u,id,"transfer"))return;playlist=remote.createPrivate(p,(String)job.get("title"),"TapTap transfer "+id,token);}
                 job.put("externalPlaylistId",playlist);job.put("playlistUrl",PlatformClient.playlistUrl(p,playlist));store.update(u,id,"transfer",job);
             }
+            if(!remote.ensurePrivate(p,playlist,token)){
+                job.put("status","PARTIAL");job.put("notice","Spotify가 새 목록을 비공개로 바꾸지 못해 곡을 추가하지 않았어요. Spotify에서 목록의 공개 설정을 확인한 뒤 다시 시도해 주세요.");
+                org.slf4j.LoggerFactory.getLogger(PlatformApi.class).warn("Transfer {}: playlist stayed public; no songs added",id);
+                store.update(u,id,"transfer",counted(job));return;
+            }
             List<String> existing=remote.existingIds(p,playlist,token);List<Map<String,Object>> rows=items(job,"items");
             boolean prefix=existing.size()<=rows.size();for(int i=0;prefix&&i<existing.size();i++)prefix=existing.get(i).equals(rows.get(i).get("targetId"));
             if(!prefix){job.put("status","UNKNOWN");job.put("notice","원격 목록의 순서가 바뀌었어요. 항목을 중복 추가하거나 덮어쓰지 않고 확인을 기다립니다.");store.update(u,id,"transfer",counted(job));return;}

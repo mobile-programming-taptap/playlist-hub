@@ -353,6 +353,20 @@ public class PlatformClient {
         JsonNode reply=api(provider,"POST",path,tokens.accessToken(),body);
         return required(reply,"id");
     }
+    /**
+     * Spotify can create a playlist as public even when asked for a private one. Before songs go into a playlist this
+     * server created, read its privacy back, set it private once if needed, and report whether it is now private.
+     * YouTube playlists are created with an explicit private status.
+     */
+    boolean ensurePrivate(String provider,String id,Tokens tokens) {
+        provider(provider);if(!provider.equals("spotify"))return true;validPlaylistId(provider,id);
+        if(isPrivate(api(provider,"GET","/playlists/"+id+"?fields=public",tokens.accessToken(),null)))return true;
+        api(provider,"PUT","/playlists/"+id,tokens.accessToken(),Map.of("public",false));
+        boolean fixed=isPrivate(api(provider,"GET","/playlists/"+id+"?fields=public",tokens.accessToken(),null));
+        org.slf4j.LoggerFactory.getLogger(PlatformClient.class).warn("Spotify created a public playlist; made private: {}",fixed);
+        return fixed;
+    }
+    private static boolean isPrivate(JsonNode playlist){return playlist.path("public").isBoolean()&&!playlist.path("public").asBoolean();}
     List<String> existingIds(String provider,String id,Tokens tokens) {
         validPlaylistId(provider,id);
         RemotePlaylist p=provider.equals("spotify")?spotifyPlaylist(id,"",tokens.accessToken()):youtubePlaylist(id,"",tokens.accessToken());

@@ -345,6 +345,21 @@ class PlatformCheckTest {
         }
     }
 
+    @Test void aSpotifyPlaylistCreatedPublicIsMadePrivateBeforeAnySongIsAdded() throws Exception {
+        try(Fixture f=new Fixture()){
+            var tokens=new PlatformClient.Tokens("test-access","refresh","owner","playlist-modify-private",java.time.Instant.now().plusSeconds(3600));
+            f.targetPublic.set(false);
+            assertTrue(f.remote.ensurePrivate("spotify",TARGET,tokens));assertEquals(0,f.privacyUpdates.get(),"A private playlist is left as it is");
+            f.targetPublic.set(true);
+            assertTrue(f.remote.ensurePrivate("spotify",TARGET,tokens),"A public answer is corrected and checked again");
+            assertEquals(1,f.privacyUpdates.get());assertFalse(f.targetPublic.get());
+            f.targetPublic.set(true);f.stubbornPublic.set(true);
+            assertFalse(f.remote.ensurePrivate("spotify",TARGET,tokens),"Still public after the update means songs must not be added");
+            assertTrue(f.remote.ensurePrivate("youtube","PLTARGET",null),"YouTube creates with an explicit private status");
+            f.assertHealthy();
+        }
+    }
+
     @Test void pagedMatchingDistinguishesUnsearchedRowsFromEmptySearchesAndKeepsReview() throws Exception {
         try(Fixture f=new Fixture()) {
             f.sourceItems.set(21);
@@ -630,6 +645,9 @@ class PlatformCheckTest {
         final List<String> remoteItems=new CopyOnWriteArrayList<>(),playlistPages=new CopyOnWriteArrayList<>();
         final java.util.concurrent.atomic.AtomicBoolean stallVideo=new java.util.concurrent.atomic.AtomicBoolean(),holdExchange=new java.util.concurrent.atomic.AtomicBoolean(),holdCreate=new java.util.concurrent.atomic.AtomicBoolean(),unavailableSpotifyItems=new java.util.concurrent.atomic.AtomicBoolean(),emptySearch=new java.util.concurrent.atomic.AtomicBoolean(),browsePlaylists=new java.util.concurrent.atomic.AtomicBoolean();
         final java.util.concurrent.atomic.AtomicBoolean noYoutubeChannel=new java.util.concurrent.atomic.AtomicBoolean();
+        /** Spotify can answer a create with a public playlist; stubborn keeps it public even after an update. */
+        final java.util.concurrent.atomic.AtomicBoolean targetPublic=new java.util.concurrent.atomic.AtomicBoolean(),stubbornPublic=new java.util.concurrent.atomic.AtomicBoolean();
+        final AtomicInteger privacyUpdates=new AtomicInteger();
         final java.util.concurrent.CountDownLatch videoStarted=new java.util.concurrent.CountDownLatch(1),releaseVideo=new java.util.concurrent.CountDownLatch(1),exchangeStarted=new java.util.concurrent.CountDownLatch(1),releaseExchange=new java.util.concurrent.CountDownLatch(1),createStarted=new java.util.concurrent.CountDownLatch(1),releaseCreate=new java.util.concurrent.CountDownLatch(1);
         final JdbcTemplate db;final Store users;final PlatformStore store;final PlatformClient remote;final PlatformApi api;
         final String owner,auth,otherAuth,testSchema;final JdbcTemplate schemaOwner;String challenge="";volatile String marker="";
@@ -681,6 +699,8 @@ class PlatformCheckTest {
                 }
                 else if(path.equals("/spotify/me/playlists")&&method.equals("GET"))response=Map.of("items",marker.isEmpty()?List.of():List.of(Map.of("id",TARGET,"description",marker)));
                 else if(path.equals("/spotify/me/playlists")&&method.equals("POST")){assertFalse(value.path("public").asBoolean(true));marker=value.path("description").asString();creates.incrementAndGet();if(holdCreate.get()){createStarted.countDown();assertTrue(releaseCreate.await(10,java.util.concurrent.TimeUnit.SECONDS));}lost(exchange);return;}
+                else if(path.equals("/spotify/playlists/"+TARGET)&&method.equals("GET"))response=Map.of("id",TARGET,"public",targetPublic.get());
+                else if(path.equals("/spotify/playlists/"+TARGET)&&method.equals("PUT")){assertFalse(value.path("public").asBoolean(true));assertEquals(1,value.size(),"Only the privacy changes");privacyUpdates.incrementAndGet();if(!stubbornPublic.get())targetPublic.set(false);response=Map.of();}
                 else if(path.equals("/spotify/playlists/"+TARGET+"/items")&&method.equals("GET"))response=Map.of("items",remoteItems.stream().map(id->Map.of("item",spotifyTrack(id))).toList());
                 else if(path.equals("/spotify/playlists/"+TARGET+"/items")&&method.equals("POST")){String uri=value.path("uris").get(0).asString();assertEquals("spotify:track:"+SONG,uri);remoteItems.add(SONG);if(adds.incrementAndGet()==1){lost(exchange);return;}response=Map.of("snapshot_id","snapshot");}
                 else if(path.equals("/youtube/channels"))response=Map.of("items",noYoutubeChannel.get()?List.of():List.of(Map.of("id","channel-owner")));
