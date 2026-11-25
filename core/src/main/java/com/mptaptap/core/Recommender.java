@@ -352,6 +352,8 @@ public final class Recommender {
         List<String> result = new ArrayList<>();
         for (String token : SEPARATORS.split(remaining)) {
             if (token.isEmpty()) continue;
+            // 조사 제거 전에 비교한다. "같은"·"싶은"·"정도"는 끝 글자가 조사로 잘려 목록과 어긋난다.
+            if (FILLER.matcher(token).matches()) continue;
             String stripped = token.replaceAll("(?:은|는|을|를|이|가|도|만|와|과|으로|로|에|의|께|서|까지|부터|할|하게|한|게|때|날|더)$", "");
             if (stripped.isEmpty() || FILLER.matcher(stripped).matches()) continue;
             result.add(token);

@@ -31,6 +31,12 @@ final class ConversationCheck {
         // 곡 이름 "밤편지"는 시간대 조건이 아니라 사전이 못 읽는 표현으로 남아 AI 해석에 맡겨진다.
         Recommender.Conditions letter=Recommender.parse("밤편지 같은 느낌으로 바꿔줘");
         assert !letter.tags.contains("night")&&letter.unread.contains("밤편지")&&!Recommender.isKnownConditionRequest("밤편지 같은 느낌으로 바꿔줘");
+        // 무시할 말은 조사가 잘리기 전에 걸러진다. 곡 이름만 남는다.
+        assert letter.unread.equals(List.of("밤편지")):letter.unread;
+        for(String request:List.of("재즈 같은 노래","듣고 싶은 재즈","재즈 정도"))
+            assert Recommender.parse(request).unread.isEmpty()&&!Recommender.isKnownConditionRequest(request):request;
+        // 사전 경로 여부는 바뀌지 않는다.
+        assert !Recommender.isKnownConditionRequest("재즈랑 팝");
         for(String request:List.of("밤에 듣는 노래","밤 노래","한밤중에","밤하늘 보면서","잔잔한 밤","night drive"))
             assert Recommender.parse(request).tags.contains("night"):request;
         // 참고 곡에서 추론한 장르는 선호다. 명시한 제외와 겹치는 추론은 버리고, 직접 말하면 필수가 된다.
