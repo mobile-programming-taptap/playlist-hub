@@ -118,7 +118,7 @@ final class RecommendationCatalogue {
         int searched=missing.size();
         if(missing.isEmpty()&&undated.isEmpty()){
             List<Track> result=new ArrayList<>(verified.values());
-            logFunnel(proposed,cachedHits,searched,skippedByArtist,result.size());
+            logFunnel(proposed,cachedHits,searched,skippedByArtist,0,result.size());
             return result;
         }
         List<String> clauses=new ArrayList<>();
@@ -132,11 +132,14 @@ final class RecommendationCatalogue {
             if(verified.isEmpty())throw error;
             org.slf4j.LoggerFactory.getLogger(RecommendationCatalogue.class).warn("Recording search failed; using {} verified songs: {}",verified.size(),error.getMessage());
             List<Track> result=new ArrayList<>(verified.values());
-            logFunnel(proposed,cachedHits,searched,skippedByArtist,result.size());
+            logFunnel(proposed,cachedHits,searched,skippedByArtist,0,result.size());
             return result;
         }
         List<Track> discovered=new ArrayList<>();
+        // 검색 뒤 가수 제외는 행이 아니라 곡 단위로 센다. 끝내 확인되지 않은 곡만 한 번 센다.
+        int excludedAfterSearch=0;
         for(OpenAi.Suggestion song:missing) {
+            boolean excludedMatch=false,found=false;
             for(JsonNode row:rows) {
                 String id=row.path("id").asString(),title=row.path("title").asString();
                 if(!id.matches(UUID_PATTERN)||row.path("video").asBoolean(false)||!normalized(title).equals(normalized(song.title())))continue;
@@ -152,7 +155,7 @@ final class RecommendationCatalogue {
                 }
                 artistMatches|=normalized(artist.toString()).equals(normalized(song.artist()));
                 if(!artistMatches||artist.isEmpty()||verified.containsKey(id))continue;
-                if(artistExcluded(artist.toString(),excludedArtists)){skippedByArtist++;continue;}
+                if(artistExcluded(artist.toString(),excludedArtists)){excludedMatch=true;continue;}
                 Track track=new Track();track.id=id;track.title=title;track.artist=artist.toString();
                 track.tags=new ArrayList<>(song.tags());track.language=song.language();
                 track.source="MusicBrainz";track.sourceUrl="https://musicbrainz.org/recording/"+id;
@@ -167,13 +170,15 @@ final class RecommendationCatalogue {
                 if(track.usable()){
                     verified.put(id,track);
                     if(!seeds.containsKey(id))discovered.add(track);
+                    found=true;
                     break;
                 }
             }
+            if(excludedMatch&&!found)excludedAfterSearch++;
         }
         backfill(undated,rows,known);
         List<Track> result=new ArrayList<>(verified.values());
-        logFunnel(proposed,cachedHits,searched,skippedByArtist,result.size());
+        logFunnel(proposed,cachedHits,searched,skippedByArtist,excludedAfterSearch,result.size());
         if(!discovered.isEmpty())remember(discovered);
         return result;
     }
@@ -213,11 +218,15 @@ final class RecommendationCatalogue {
     }
 
     /** AI 후보가 어느 단계에서 줄었는지 남긴다. 조건 부족과 외부 오류를 구분하는 근거가 된다. */
-    private void logFunnel(int proposed,int cachedHits,int searched,int skippedByArtist,int resolved) {
+    /** skippedBeforeSearch 는 검색하지 않은 곡, excludedAfterSearch 는 검색 뒤 가수 제외로 뺀 곡이다. 둘 다 곡 단위다. */
+    private void logFunnel(int proposed,int cachedHits,int searched,int skippedBeforeSearch,int excludedAfterSearch,int resolved) {
         org.slf4j.LoggerFactory.getLogger(RecommendationCatalogue.class).info(
             "Catalogue funnel: proposed={}, cached={}, searched={}, skippedByArtist={}, resolved={}, lostInSearch={}",
-            proposed,cachedHits,searched,skippedByArtist,resolved,(searched+skippedByArtist)-(resolved-cachedHits));
+            proposed,cachedHits,searched,skippedBeforeSearch+excludedAfterSearch,resolved,lostInSearch(searched,resolved,cachedHits,excludedAfterSearch));
     }
+
+    /** 검색한 곡 중 확인하지 못한 곡. 검색 전 가수 제외는 검색하지 않았고, 검색 뒤 가수 제외는 찾았지만 뺀 곡이라 넣지 않는다. */
+    static int lostInSearch(int searched,int resolved,int cachedHits,int excludedAfterSearch){return searched-(resolved-cachedHits)-excludedAfterSearch;}
 
     private static boolean artistExcluded(String credit,List<String> excludedArtists) {
         if(excludedArtists==null||excludedArtists.isEmpty())return false;

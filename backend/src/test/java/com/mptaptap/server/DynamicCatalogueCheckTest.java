@@ -447,6 +447,42 @@ class DynamicCatalogueCheckTest {
         }finally{if(app!=null)app.close();ai.stop(0);mb.stop(0);}
     }
 
+    @Test void lostInSearchCountsOnlySearchedSongsThatWereNotFound() {
+        // 가수 제외가 없을 때는 이전 식과 같은 값이다. 실측 2의 searched=12, resolved=0 회차도 12로 남는다.
+        assertEquals(12,RecommendationCatalogue.lostInSearch(12,0,0,0));
+        assertEquals(11,RecommendationCatalogue.lostInSearch(12,3,2,0));
+        assertEquals(1,RecommendationCatalogue.lostInSearch(4,4,1,0));
+        // 검색 뒤 가수 제외로 뺀 곡은 찾은 곡이라 잃은 곡에서 뺀다.
+        assertEquals(2,RecommendationCatalogue.lostInSearch(3,0,0,1));
+    }
+
+    @Test void artistExclusionsInTheFunnelAreCountedOncePerSong() throws Exception {
+        String release=UUID.randomUUID().toString();
+        // 제외한 가수가 앞에 적힌 공동 크레딧 행이 같은 곡으로 두 개 온다. 행마다 세면 2가 된다.
+        Map<String,Object> credits=Map.of("artist-credit",List.of(Map.of("name","Banned","artist",Map.of("name","Banned"),"joinphrase"," & "),
+            Map.of("name","Main","artist",Map.of("name","Main"),"joinphrase","")));
+        List<Map<String,Object>> rows=new ArrayList<>();
+        for(int i=0;i<2;i++){Map<String,Object> row=new LinkedHashMap<>(Map.of("id",UUID.randomUUID().toString(),"title","Shared song","video",false,"disambiguation","","releases",List.of(Map.of("id",release))));row.putAll(credits);rows.add(row);}
+        HttpServer mb=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
+        mb.createContext("/recording/",exchange->respond(exchange,200,Map.of("recordings",rows)));mb.start();
+        var logger=(ch.qos.logback.classic.Logger)org.slf4j.LoggerFactory.getLogger(RecommendationCatalogue.class);
+        var level=logger.getLevel();var logs=new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+        ConfigurableApplicationContext app=null;
+        try {
+            String endpoint="http://127.0.0.1:"+mb.getAddress().getPort();
+            app=start("jdbc:h2:mem:funnel-"+UUID.randomUUID()+";MODE=PostgreSQL;DB_CLOSE_DELAY=-1","sa","",endpoint+"/unused",endpoint+"/recording/");
+            // 다른 검사의 Spring 설정이 같은 JVM에서 로그 수준을 WARN으로 남길 수 있어 이 검사 동안만 INFO로 둔다.
+            logger.setLevel(ch.qos.logback.classic.Level.INFO);logs.start();logger.addAppender(logs);
+            var conditions=new Recommender.Conditions();conditions.excludedArtists=List.of(Recommender.normalizeArtist("Banned"));
+            var searchedSong=new OpenAi.Suggestion("Shared song","Main",List.of("genre:funnel_genre"),"en");
+            var skippedSong=new OpenAi.Suggestion("Other song","Banned",List.of("genre:funnel_genre"),"en");
+            assertTrue(app.getBean(RecommendationCatalogue.class).resolve(List.of(searchedSong,skippedSong),Duration.ofSeconds(10),conditions).isEmpty());
+            List<String> funnel=logs.list.stream().map(event->event.getFormattedMessage()).filter(line->line.startsWith("Catalogue funnel:")).toList();
+            assertEquals(List.of("Catalogue funnel: proposed=2, cached=0, searched=1, skippedByArtist=2, resolved=0, lostInSearch=0"),funnel,
+                "One song skipped before the search and one excluded after it; neither was lost in the search");
+        }finally{logger.detachAppender(logs);logger.setLevel(level);if(app!=null)app.close();mb.stop(0);}
+    }
+
     @Test void catalogueOutageStillReturnsAlreadyVerifiedSongs() throws Exception {
         var status=new AtomicInteger(200);String id=UUID.randomUUID().toString(),releaseId=UUID.randomUUID().toString();
         HttpServer mb=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
