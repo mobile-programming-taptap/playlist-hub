@@ -104,6 +104,12 @@ final class RecommendationCatalogue {
             Track cached=known.stream().filter(track->normalized(track.title).equals(normalized(song.title()))
                     &&normalized(track.artist).equals(normalized(song.artist()))).findFirst().orElse(null);
             if(cached==null)missing.add(song);
+            // "가사 없음"은 MusicBrainz로 검증하지 않고 AI 분류에 기댄다(발매 연도는 MusicBrainz에서 온 검증된 값이다).
+            // 그래서 연주곡 요청에서는 저장된 실제 언어(ko 등)와 이번 none 분류가 어긋나는 캐시 곡을 뺀다.
+            // 한계: 처음 보는 곡은 비교할 저장 값이 없어 잘못된 none 분류를 잡지 못한다.
+            else if(wantsInstrumental&&"none".equals(song.language())&&sungLanguage(cached.language))
+                org.slf4j.LoggerFactory.getLogger(RecommendationCatalogue.class).info(
+                    "Excluded cached song whose stored language contradicts no-vocals: id={}, stored={}",cached.id,cached.language);
             else {
                 // 기존 분류를 보존하고, 이번 추천에만 AI 분류를 사용한다.
                 cached=json.readValue(json.writeValueAsString(cached),Track.class);
@@ -227,6 +233,9 @@ final class RecommendationCatalogue {
 
     /** 검색한 곡 중 확인하지 못한 곡. 검색 전 가수 제외는 검색하지 않았고, 검색 뒤 가수 제외는 찾았지만 뺀 곡이라 넣지 않는다. */
     static int lostInSearch(int searched,int resolved,int cachedHits,int excludedAfterSearch){return searched-(resolved-cachedHits)-excludedAfterSearch;}
+
+    /** 실제 가창 언어 코드인지. 비었음(모름)·none·unsupported는 어긋남의 근거가 되지 않는다. */
+    private static boolean sungLanguage(String language){return language!=null&&!language.isEmpty()&&!language.equals("none")&&!language.equals("unsupported");}
 
     private static boolean artistExcluded(String credit,List<String> excludedArtists) {
         if(excludedArtists==null||excludedArtists.isEmpty())return false;

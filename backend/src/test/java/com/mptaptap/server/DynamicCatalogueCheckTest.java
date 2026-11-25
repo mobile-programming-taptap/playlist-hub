@@ -483,6 +483,30 @@ class DynamicCatalogueCheckTest {
         }finally{logger.detachAppender(logs);logger.setLevel(level);if(app!=null)app.close();mb.stop(0);}
     }
 
+    @Test void noVocalsRequestDropsCachedSongWhoseStoredLanguageContradictsItButNotUnseenSongs() throws Exception {
+        String sung=UUID.randomUUID().toString(),unseen=UUID.randomUUID().toString();
+        HttpServer mb=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
+        mb.createContext("/recording/",exchange->respond(exchange,200,Map.of("recordings",List.of(
+            recording(sung,"Sung ballad","Ballad singer","",UUID.randomUUID().toString()),
+            recording(unseen,"Unseen dance song","Dance singer","",UUID.randomUUID().toString())))));
+        mb.start();ConfigurableApplicationContext app=null;
+        try {
+            String endpoint="http://127.0.0.1:"+mb.getAddress().getPort();
+            app=start("jdbc:h2:mem:novocals-"+UUID.randomUUID()+";MODE=PostgreSQL;DB_CLOSE_DELAY=-1","sa","",endpoint+"/unused",endpoint+"/recording/");
+            var catalogue=app.getBean(RecommendationCatalogue.class);
+            // 앞선 추천에서 가사 있는 곡(ko)으로 저장된다.
+            catalogue.resolve(List.of(new OpenAi.Suggestion("Sung ballad","Ballad singer",List.of("genre:ballad"),"ko")));
+            var noVocals=new Recommender.Conditions();noVocals.tags=new ArrayList<>(List.of("instrumental"));noVocals.language="none";
+            var result=catalogue.resolve(List.of(
+                new OpenAi.Suggestion("Sung ballad","Ballad singer",List.of("genre:ballad","instrumental"),"none"),
+                new OpenAi.Suggestion("Unseen dance song","Dance singer",List.of("genre:dance","instrumental"),"none")),Duration.ofSeconds(10),noVocals);
+            // 박효신 경우: 저장 값 ko -> 이번 분류 none 이면 뺀다.
+            assertFalse(result.stream().anyMatch(track->track.id.equals(sung)),"A cached song stored with sung vocals must not pass as no-vocals");
+            // 김완선 경우: 처음 보는 곡은 비교할 저장 값이 없어 잘못된 none 분류도 통과한다. 이 한계가 바뀌면 이 검사를 고친다.
+            assertEquals(List.of(unseen),result.stream().map(track->track.id).toList(),"Known limit: an unseen song's no-vocals classification is not checked");
+        }finally{if(app!=null)app.close();mb.stop(0);}
+    }
+
     @Test void catalogueOutageStillReturnsAlreadyVerifiedSongs() throws Exception {
         var status=new AtomicInteger(200);String id=UUID.randomUUID().toString(),releaseId=UUID.randomUUID().toString();
         HttpServer mb=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);

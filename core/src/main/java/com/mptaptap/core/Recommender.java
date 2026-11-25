@@ -465,6 +465,8 @@ public final class Recommender {
         Set<String> seen = new LinkedHashSet<>();
         List<String> hardGenres = c.hardTags.stream().filter(Recommender::genre).toList();
         for (Track track : catalogue) {
+            // 언어 none(가사 없음)은 AI 분류 값이고 MusicBrainz로 검증되지 않는다. 연도와 달리 여기서는 분류를 믿는다.
+            // 캐시 곡의 어긋난 none은 RecommendationCatalogue 가 저장 값으로 거르지만, 처음 보는 곡은 걸러지지 않는다.
             if (!track.usable() || excludedTrackIds.contains(track.id) || !seen.add(track.id) || feedback.getOrDefault(track.id, 0) == -1
                     || !Collections.disjoint(track.tags, c.excludedTags)
                     || (!c.language.isEmpty() && (c.language.equals("unsupported")||!(c.language.equals(track.language)||track.language.startsWith(c.language+"-")))))
