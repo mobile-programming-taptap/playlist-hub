@@ -553,13 +553,14 @@ public class MainActivity extends AppCompatActivity {
         hasResults=true; findViewById(R.id.request_panel).setVisibility(View.GONE);
         findViewById(R.id.results).setVisibility(View.VISIBLE);
         findViewById(R.id.empty).setVisibility(picks.isEmpty() ? View.VISIBLE : View.GONE);
+        // 서버 안내(유지한 제외·지역 안내 포함)는 지우지 않고, 공식 영상이 없어 뺀 곡 수만 덧붙인다.
+        String notice=Recommender.withDroppedVideoNotice(resultNotice,droppedWithoutVideo,resultConditions);
         String emptyNotice=api==null?"AI 추천이 연결되지 않았어요.\nAI 추천을 연결하면 같은 요청으로 새 곡을 찾을 수 있어요."
-            :resultNotice.isEmpty()?"조건에 맞는 곡을 확인하지 못했어요. 같은 요청으로 다시 시도해 보세요.":resultNotice;
+            :notice.isEmpty()?"조건에 맞는 곡을 확인하지 못했어요. 같은 요청으로 다시 시도해 보세요.":notice;
         ((TextView)findViewById(R.id.empty)).setText(hiddenTracks.isEmpty()?emptyNotice:"이번 추천에서 모든 곡을 제외했어요.\n요청을 수정해 새로 추천받을 수 있어요.");
         ((TextView)findViewById(R.id.notice)).setText(resultMode.equals("openai")?"AI 추천":"이전 기본 추천 결과 · AI 연결 필요");
         TextView detail=findViewById(R.id.result_detail);
-        // After cards drop, the server's song count is out of date, so say what changed instead.
-        detail.setText((droppedWithoutVideo>0?"공식 영상을 찾지 못한 "+droppedWithoutVideo+"곡은 뺐어요.":resultNotice)+(hiddenTracks.isEmpty()?"":"\n이번 결과만 수정했어요. 좋아요·싫어요는 그대로예요."));
+        detail.setText(notice+(hiddenTracks.isEmpty()?"":"\n이번 결과만 수정했어요. 좋아요·싫어요는 그대로예요."));
         detail.setVisibility(!picks.isEmpty()&&!detail.getText().toString().isEmpty()?View.VISIBLE:View.GONE);
         List<String> conditions=new ArrayList<>();
         for (String tag:resultConditions.tags) conditions.add(Recommender.label(tag));

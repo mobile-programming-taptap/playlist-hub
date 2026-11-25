@@ -212,6 +212,20 @@ public final class Recommender {
         if(kept!=null&&!kept.isEmpty()&&!base.endsWith(keptExclusionNotice(kept)))base=(base+" "+keptExclusionNotice(kept)).trim();
         return withOriginNotice(base,c);
     }
+    public static String droppedVideoNotice(int dropped){return "공식 영상을 찾지 못한 "+dropped+"곡은 뺐어요.";}
+    /**
+     * 앱이 공식 영상이 없어 뺀 곡 수를 서버 안내를 지우지 않고 덧붙인다: [기존 안내] [유지한 제외] [영상] [지역].
+     * 서버 안내의 곡 수는 빼기 전 값이라, 뺀 수를 바로 뒤에 알려 차이를 설명한다. 지역 안내는 맨 끝에 남긴다.
+     */
+    public static String withDroppedVideoNotice(String notice,int dropped,Conditions c){
+        String base=notice==null?"":notice.trim();
+        if(dropped<=0)return base;
+        String origin=c==null||c.origin==null||c.origin.isEmpty()?"":originNotice(c.origin);
+        boolean originLast=!origin.isEmpty()&&base.endsWith(origin);
+        if(originLast)base=base.substring(0,base.length()-origin.length()).trim();
+        base=(base+" "+droppedVideoNotice(dropped)).trim();
+        return originLast?base+" "+origin:base;
+    }
     public static boolean validOrigin(String origin){return origin!=null&&origin.matches("|[A-Z]{2}");}
 
     /** ponytail: dictionary and fixed wording only; extend for verified requests, leave additional meaning to the interpreter. */

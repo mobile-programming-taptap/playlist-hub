@@ -137,6 +137,12 @@ public final class RecommendationCheck {
         assert Recommender.withKeptExclusionNotice(Recommender.withOriginNotice(few,korean),List.of("calm","energetic"),korean).equals(both);
         assert Recommender.withKeptExclusionNotice(both,List.of("calm","energetic"),korean).equals(both):"Applying twice keeps one notice";
         assert Recommender.withKeptExclusionNotice(few,List.of(),korean).equals(Recommender.withOriginNotice(few,korean));
+        // 앱이 공식 영상이 없어 곡을 빼도 서버 안내는 남고, 영상 안내는 유지한 제외 뒤·지역 안내 앞에 붙는다.
+        String video=Recommender.withDroppedVideoNotice(both,2,korean);
+        assert video.equals(few+" 잔잔한, 신나는 제외는 유지했어요. 공식 영상을 찾지 못한 2곡은 뺐어요. "+Recommender.originNotice("KR")):video;
+        assert Recommender.withDroppedVideoNotice(few,1,plainConditions).equals(few+" 공식 영상을 찾지 못한 1곡은 뺐어요.");
+        assert Recommender.withDroppedVideoNotice("",1,plainConditions).equals("공식 영상을 찾지 못한 1곡은 뺐어요.");
+        assert Recommender.withDroppedVideoNotice(both,0,korean).equals(both):"Nothing dropped keeps the server notice";
         // 연대 필터: 연도를 모르면 제외, 요청 연대 중 하나에 속하면 통과(OR), 다른 조건과는 AND.
         // 연대는 마지막에 보므로 장르로 먼저 빠진 곡(록 1997)은 연대 집계에 들어가지 않는다.
         List<Track> dated=new ArrayList<>();
