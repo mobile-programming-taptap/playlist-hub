@@ -37,6 +37,10 @@ public final class ImportMatch {
     }
     private static final Pattern QUALIFIER=Pattern.compile("\\([^)]*\\)|\\[[^]]*\\]|\\s[-–—]\\s.+$");
     private static final Pattern VERSION=Pattern.compile("(?i)(?<![\\p{L}])(?:live|remix|cover|instrumental|acoustic|demo|radio edit|sped up|slowed|remaster(?:ed)?)(?![\\p{L}])|라이브|리믹스|커버|연주곡|반주|어쿠스틱|리마스터");
+    /** Featured-artist credits ("(feat. X)", "[ft. X]", " feat. X") name collaborators, not a different song. */
+    private static final Pattern FEATURE=Pattern.compile("(?i)^[(\\[]?\\s*(?:feat\\.?|ft\\.?|featuring)\\s");
+    private static final Pattern TRAILING_FEATURE=Pattern.compile("(?i)\\s(?:feat\\.?|ft\\.?|featuring)\\s.+$");
+    private static final Pattern CREDIT_SPLIT=Pattern.compile("(?i)\\s*(?:,|&|/|;|\\bfeat\\.?|\\bft\\.?|\\bfeaturing\\b|\\bwith\\b|\\bx\\b)\\s*");
     private ImportMatch() {}
 
     public static ReviewItem match(PlatformTrack source,List<PlatformTrack> candidates) {
@@ -44,9 +48,8 @@ public final class ImportMatch {
         if(candidates==null||candidates.size()>MAX_CANDIDATES)throw new IllegalArgumentException("후보 곡은 100개까지 확인할 수 있어요.");
         ReviewItem result=new ReviewItem();result.source=source;
         for(PlatformTrack track:candidates){validate(track);result.candidates.add(score(source,track));}
-        result.candidates.sort(Comparator.comparingInt((Candidate c)->c.score).reversed()
-                .thenComparing(c->clean(c.track.platform)).thenComparing(c->clean(c.track.externalId))
-                .thenComparing(c->clean(c.track.title)).thenComparing(c->clean(c.track.artist)));
+        // Stable sort: equal scores keep the platform's search order, so the first suggestion is its most relevant result.
+        result.candidates.sort(Comparator.comparingInt((Candidate c)->c.score).reversed());
         if(result.candidates.isEmpty()||result.candidates.get(0).score<300)return result;
         Candidate best=result.candidates.get(0);
         boolean ambiguous=false;
@@ -67,7 +70,7 @@ public final class ImportMatch {
         boolean recording=!sourceIsrc.isEmpty()&&sourceIsrc.equals(targetIsrc);
         String sourceVersion=version(source),targetVersion=version(track);
         boolean title=!baseTitle(source.title).isEmpty()&&baseTitle(source.title).equals(baseTitle(track.title));
-        boolean artist=!clean(source.artist).isEmpty()&&clean(source.artist).equals(clean(track.artist));
+        boolean artist=!clean(source.artist).isEmpty()&&(clean(source.artist).equals(clean(track.artist))||credits(track.artist).containsAll(credits(source.artist)));
         candidate.identity=external||recording;candidate.exact=title&&artist&&sourceVersion.equals(targetVersion);
         if(external){candidate.score=1000;candidate.reasons.add("플랫폼 ID 일치");}
         else if(recording){candidate.score=950;candidate.reasons.add("ISRC 일치");}
@@ -100,8 +103,18 @@ public final class ImportMatch {
     }
     private static String baseTitle(String title) {
         String text=value(title);Matcher qualifier=QUALIFIER.matcher(text);StringBuffer result=new StringBuffer();
-        while(qualifier.find())qualifier.appendReplacement(result,VERSION.matcher(qualifier.group()).find()?"":Matcher.quoteReplacement(qualifier.group()));
-        qualifier.appendTail(result);return clean(result.toString());
+        while(qualifier.find()) {
+            String part=qualifier.group();
+            boolean drop=VERSION.matcher(part).find()||FEATURE.matcher(part.trim()).find();
+            qualifier.appendReplacement(result,drop?"":Matcher.quoteReplacement(part));
+        }
+        qualifier.appendTail(result);return clean(TRAILING_FEATURE.matcher(result.toString()).replaceAll(""));
+    }
+    /** The individual acts in a credit such as "Daft Punk, Pharrell Williams" or "Mark Ronson feat. Bruno Mars". */
+    private static java.util.Set<String> credits(String artist) {
+        java.util.Set<String> names=new java.util.LinkedHashSet<>();
+        for(String name:CREDIT_SPLIT.split(value(artist)))if(!clean(name).isEmpty())names.add(clean(name));
+        return names;
     }
     private static double similarity(String a,String b) {
         if(a.isEmpty()||b.isEmpty())return 0;
