@@ -655,6 +655,29 @@ public class HubFlowCheckTest {
         });
     }
 
+    @Test public void aNewVideoConversionDoesNotKeepAnEarlierListTitle() throws Exception {
+        AtomicReference<String> id=new AtomicReference<>();
+        String url="https://www.youtube.com/watch?v=0Y41XMkfROU";
+        hubFixture((method,path,body,status)->{
+            if(path.equals("/conversions/youtube")){id.set(body.getString("id"));JSONArray entries=new JSONArray().put(new JSONObject().put("sourceIndex",0).put("timestamp","00:00").put("seconds",0).put("startSeconds",0).put("title","Yellow").put("artist","Coldplay").put("sourceRow","0:00 Coldplay - Yellow"));
+                return new JSONObject().put("id",id.get()).put("provider","youtube").put("videoId","0Y41XMkfROU").put("title","사용자 타임라인").put("durationSeconds",3600).put("sourceUrl",url).put("entries",entries).put("items",new JSONArray());}
+            return null;
+        },app->{
+            // A name typed for an earlier playlist import (or left from one) must not name the converted list.
+            onView(withText("링크로 직접 가져오기")).perform(scrollTo(),click());
+            onView(withHint("새 목록 이름")).perform(scrollTo(),replaceText("헬스-f1"),closeSoftKeyboard());
+            onView(withHint("YouTube 영상 주소")).perform(scrollTo(),replaceText(url),closeSoftKeyboard());
+            onView(withText("영상에서 곡 목록 가져오기")).perform(scrollTo(),click());ready(app);
+            app.onActivity(a->assertFalse("The earlier list title leaked into the conversion",
+                findEditText(a.findViewById(android.R.id.content),"헬스-f1")));
+        });
+    }
+    private static boolean findEditText(android.view.View root,String text){
+        if(root instanceof android.widget.EditText&&text.contentEquals(((android.widget.EditText)root).getText()))return true;
+        if(root instanceof android.view.ViewGroup)for(int i=0;i<((android.view.ViewGroup)root).getChildCount();i++)if(findEditText(((android.view.ViewGroup)root).getChildAt(i),text))return true;
+        return false;
+    }
+
     @Test public void exportStopWorksWhileAPageIsLoading() throws Exception {
         AtomicInteger matchCalls=new AtomicInteger();
         exportFixture((method,path,body,status)->{

@@ -226,7 +226,8 @@ public final class HubActivity extends AppCompatActivity {
         if(rows!=null&&rows.trim().isEmpty()){timeline.setError("시간표를 입력해 주세요.");return;}
         beginSource("youtube:"+address+":"+(rows==null?"automatic":"manual:"+rows),"conversionRequestId");
         JSONObject body=json("id",value("conversionRequestId"),"url",address);if(rows!=null)set(body,"timeline",rows);
-        put("edits",new JSONArray());put("selections",new JSONArray());send("conversion","POST","/conversions/youtube",body);
+        // The converted list takes its own title; a name left from an earlier import or link form must not name it.
+        put("listTitle","");put("edits",new JSONArray());put("selections",new JSONArray());send("conversion","POST","/conversions/youtube",body);
     }
 
     private void openLibrary(String provider) {
