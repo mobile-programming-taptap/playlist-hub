@@ -197,6 +197,21 @@ public final class Recommender {
         if(c==null||c.origin==null||c.origin.isEmpty()||base.endsWith(originNotice(c.origin)))return base;
         return (base+" "+originNotice(c.origin)).trim();
     }
+    /** AI가 원한 태그를 앞선 제외 조건 때문에 빼고 제외를 지켰다고 알린다. */
+    public static String keptExclusionNotice(List<String> kept){
+        return kept.stream().map(Recommender::label).collect(java.util.stream.Collectors.joining(", "))+" 제외는 유지했어요.";
+    }
+    /**
+     * 유지한 제외가 있으면 기존 안내 뒤, 지역 미반영 안내 앞에 붙인다. 이미 붙어 있으면 그대로 둔다.
+     * 지역 안내가 이미 끝에 있으면 떼었다가 다시 붙여 지역 안내가 항상 맨 끝에 남는다.
+     */
+    public static String withKeptExclusionNotice(String notice,List<String> kept,Conditions c){
+        String base=notice==null?"":notice.trim();
+        String origin=c==null||c.origin==null||c.origin.isEmpty()?"":originNotice(c.origin);
+        if(!origin.isEmpty()&&base.endsWith(origin))base=base.substring(0,base.length()-origin.length()).trim();
+        if(kept!=null&&!kept.isEmpty()&&!base.endsWith(keptExclusionNotice(kept)))base=(base+" "+keptExclusionNotice(kept)).trim();
+        return withOriginNotice(base,c);
+    }
     public static boolean validOrigin(String origin){return origin!=null&&origin.matches("|[A-Z]{2}");}
 
     /** ponytail: dictionary and fixed wording only; extend for verified requests, leave additional meaning to the interpreter. */

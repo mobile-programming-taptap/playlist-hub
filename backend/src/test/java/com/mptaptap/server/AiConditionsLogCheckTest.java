@@ -40,6 +40,7 @@ class AiConditionsLogCheckTest {
                 "language","ko","languageSpecified",true,"excludedArtists",List.of("Secret Singer"),"candidates",List.of()));
             OpenAi.Plan plan=api.plan("비밀 문장 1990년대 발라드",List.of(),null,Map.of(),Duration.ofSeconds(5));
             assertFalse(plan.conditions().tags.contains("calm"),"Validation still removes a tag the request excludes");
+            assertEquals(List.of("calm"),plan.keptExclusions(),"The tag the model wanted but the exclusion kept out is reported for the notice");
             List<String> lines=logs.list.stream().map(ILoggingEvent::getFormattedMessage).filter(line->line.startsWith("AI conditions:")).toList();
             assertEquals(List.of("AI conditions: tags=[ballad, calm, genre:korean_1990s], excludedTags=[calm], inferredTags=[calm], language=ko, languageSpecified=true, excludedArtists=1"),lines);
             assertFalse(lines.get(0).contains("Secret Singer"));assertFalse(lines.get(0).contains("비밀 문장"));

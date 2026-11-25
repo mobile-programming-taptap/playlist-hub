@@ -37,7 +37,8 @@ public class OpenAi {
 
     boolean available() { return !key.isBlank(); }
 
-    record Plan(Recommender.Conditions conditions, List<Suggestion> candidates) {}
+    /** keptExclusions 는 AI가 원했지만 앞선 제외 조건 때문에 뺀 태그다. 안내에만 쓴다. */
+    record Plan(Recommender.Conditions conditions, List<Suggestion> candidates, List<String> keptExclusions) {}
     record Suggestion(String title, String artist, List<String> tags, String language) {}
 
     Recommender.Conditions extract(String prompt) throws Exception {
@@ -163,7 +164,7 @@ public class OpenAi {
                     JsonNode candidates=object.remove("candidates");
                     // 보충 요청은 조건을 쓰지 않으므로 원본 조건 로그를 남기지 않는다.
                     Recommender.Conditions conditions=conditions(object,prompt,history,previousConditions,requests,priorProposals.isEmpty());
-                    return new Plan(conditions,includeCandidates?suggestions(candidates):List.of());
+                    return new Plan(conditions,includeCandidates?suggestions(candidates):List.of(),keptExclusions(object,conditions));
                 }
             }
         }
@@ -247,6 +248,16 @@ public class OpenAi {
         // 연대도 직접 말한 표현만 조건이 된다. AI 응답에는 연대 칸이 없다.
         result.decades=new ArrayList<>(direct.decades);
         return result;
+    }
+
+    /** AI 원본의 tags 와 inferredTags 중 최종 조건에서 제외로 남은 태그. 모순 조합을 안내 없이 만들지 않게 한다. */
+    private static List<String> keptExclusions(ObjectNode object,Recommender.Conditions conditions) {
+        List<String> kept=new ArrayList<>();
+        for(String field:List.of("tags","inferredTags"))for(JsonNode tag:object.path(field)) {
+            String value=tag.asString();
+            if(conditions.excludedTags.contains(value)&&!kept.contains(value))kept.add(value);
+        }
+        return kept;
     }
 
     /** AI 원본 조건 한 줄. 가수 이름은 사용자가 쓴 값이라 개수만 남기고, 검증 어휘가 아닌 태그는 가린다. */

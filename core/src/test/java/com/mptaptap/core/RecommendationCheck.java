@@ -128,6 +128,15 @@ public final class RecommendationCheck {
         // 곡을 유지한 채 이어서 요청해도 미반영 안내는 맨 뒤에 한 번만 붙는다.
         String keptNotice=Conversation.recommend(expanded,Recommender.parse("한국 팝"),feedback,"openai",List.of(tracks.get(4).id),List.of()).notice;
         assert keptNotice.endsWith(Recommender.originNotice("KR"))&&keptNotice.indexOf(Recommender.originNotice("KR"))==keptNotice.lastIndexOf(Recommender.originNotice("KR")):keptNotice;
+        // 유지한 제외 안내는 기존 안내 뒤, 지역 안내 앞에 한 번만 붙는다. 지역 안내가 이미 끝에 있어도 맨 끝에 남긴다.
+        Recommender.Conditions korean=Recommender.parse("한국 팝"),plainConditions=Recommender.parse("팝");
+        String few="조건에 맞는 곡이 3곡이에요. 분위기 조건을 줄이면 더 많은 곡을 찾을 수 있어요.";
+        assert Recommender.withKeptExclusionNotice("",List.of("calm"),plainConditions).equals("잔잔한 제외는 유지했어요.");
+        String both=few+" 잔잔한, 신나는 제외는 유지했어요. "+Recommender.originNotice("KR");
+        assert Recommender.withKeptExclusionNotice(few,List.of("calm","energetic"),korean).equals(both):Recommender.withKeptExclusionNotice(few,List.of("calm","energetic"),korean);
+        assert Recommender.withKeptExclusionNotice(Recommender.withOriginNotice(few,korean),List.of("calm","energetic"),korean).equals(both);
+        assert Recommender.withKeptExclusionNotice(both,List.of("calm","energetic"),korean).equals(both):"Applying twice keeps one notice";
+        assert Recommender.withKeptExclusionNotice(few,List.of(),korean).equals(Recommender.withOriginNotice(few,korean));
         // 연대 필터: 연도를 모르면 제외, 요청 연대 중 하나에 속하면 통과(OR), 다른 조건과는 AND.
         // 연대는 마지막에 보므로 장르로 먼저 빠진 곡(록 1997)은 연대 집계에 들어가지 않는다.
         List<Track> dated=new ArrayList<>();

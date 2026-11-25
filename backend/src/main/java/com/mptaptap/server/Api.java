@@ -138,8 +138,8 @@ public class Api {
             stats.undatedExcluded,stats.outsideDecadeExcluded);
         // 이미 찾은 공식 영상은 응답 카드에만 실어 바로 재생하게 한다. 곡 레코드에는 저장하지 않는다.
         for(Recommender.Pick pick:result.tracks)if(pick.track.youtubeVideoId.isEmpty())pick.track.youtubeVideoId=videos.fresh(pick.track.id,now).filter(YoutubeLinks.Link::verified).map(YoutubeLinks.Link::videoId).orElse("");
-        // 7곡 미만 안내로 덮어써도 지역 미반영 안내는 남긴다.
-        return new Recommender.Result(result.tracks,result.conditions,"openai",Recommender.withOriginNotice(notice,result.conditions));
+        // 7곡 미만 안내로 덮어써도 유지한 제외 안내와 지역 미반영 안내는 남긴다. 지역 안내가 맨 끝이다.
+        return new Recommender.Result(result.tracks,result.conditions,"openai",Recommender.withKeptExclusionNotice(notice,plan.keptExclusions(),result.conditions));
     }
 
     private static final java.time.Duration FIRST_PLAN_TIMEOUT=java.time.Duration.ofSeconds(15),VERIFY_RESERVE=java.time.Duration.ofSeconds(6),MIN_RETRY=java.time.Duration.ofSeconds(5);
