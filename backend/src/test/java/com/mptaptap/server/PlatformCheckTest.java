@@ -348,7 +348,7 @@ class PlatformCheckTest {
     @Test void aSpotifyPlaylistCreatedPublicIsMadePrivateBeforeAnySongIsAdded() throws Exception {
         try(Fixture f=new Fixture()){
             var tokens=new PlatformClient.Tokens("test-access","refresh","owner","playlist-modify-private",java.time.Instant.now().plusSeconds(3600));
-            f.targetPublic.set(false);
+            f.listTarget.set(true);f.targetPublic.set(false);
             assertTrue(f.remote.ensurePrivate("spotify",TARGET,tokens));assertEquals(0,f.privacyUpdates.get(),"A private playlist is left as it is");
             f.targetPublic.set(true);
             assertTrue(f.remote.ensurePrivate("spotify",TARGET,tokens),"A public answer is corrected and checked again");
@@ -648,6 +648,7 @@ class PlatformCheckTest {
         /** Spotify can answer a create with a public playlist; stubborn keeps it public even after an update. */
         final java.util.concurrent.atomic.AtomicBoolean targetPublic=new java.util.concurrent.atomic.AtomicBoolean(),stubbornPublic=new java.util.concurrent.atomic.AtomicBoolean();
         final AtomicInteger privacyUpdates=new AtomicInteger();
+        final java.util.concurrent.atomic.AtomicBoolean listTarget=new java.util.concurrent.atomic.AtomicBoolean();
         final java.util.concurrent.CountDownLatch videoStarted=new java.util.concurrent.CountDownLatch(1),releaseVideo=new java.util.concurrent.CountDownLatch(1),exchangeStarted=new java.util.concurrent.CountDownLatch(1),releaseExchange=new java.util.concurrent.CountDownLatch(1),createStarted=new java.util.concurrent.CountDownLatch(1),releaseCreate=new java.util.concurrent.CountDownLatch(1);
         final JdbcTemplate db;final Store users;final PlatformStore store;final PlatformClient remote;final PlatformApi api;
         final String owner,auth,otherAuth,testSchema;final JdbcTemplate schemaOwner;String challenge="";volatile String marker="";
@@ -697,9 +698,9 @@ class PlatformCheckTest {
                     if(offset.equals("0"))response=Map.of("items",List.of(Map.of("id",SOURCE,"name","Spotify own","owner",Map.of("id","owner"),"items",Map.of("total",2),"tracks",Map.of("total",999),"public",true,"external_urls",Map.of("spotify","https://attacker.invalid/")),Map.of("id",TARGET,"name","Followed","owner",Map.of("id","another-owner"),"items",Map.of("total",1))),"next","https://attacker.invalid/?access_token=test-access");
                     else{assertEquals("50",offset);response=Map.of("items",List.of(Map.of("id",TARGET,"name","Another own","owner",Map.of("id","owner"),"tracks",Map.of("total",3))));}
                 }
-                else if(path.equals("/spotify/me/playlists")&&method.equals("GET"))response=Map.of("items",marker.isEmpty()?List.of():List.of(Map.of("id",TARGET,"description",marker)));
+                else if(path.equals("/spotify/me/playlists")&&method.equals("GET"))response=Map.of("items",marker.isEmpty()&&!listTarget.get()?List.of():List.of(Map.of("id",TARGET,"description",marker,"public",targetPublic.get())));
                 else if(path.equals("/spotify/me/playlists")&&method.equals("POST")){assertFalse(value.path("public").asBoolean(true));marker=value.path("description").asString();creates.incrementAndGet();if(holdCreate.get()){createStarted.countDown();assertTrue(releaseCreate.await(10,java.util.concurrent.TimeUnit.SECONDS));}lost(exchange);return;}
-                else if(path.equals("/spotify/playlists/"+TARGET)&&method.equals("GET"))response=Map.of("id",TARGET,"public",targetPublic.get());
+                else if(path.equals("/spotify/playlists/"+TARGET)&&method.equals("GET"))throw new AssertionError("Privacy is read from the owner's playlist list");
                 else if(path.equals("/spotify/playlists/"+TARGET)&&method.equals("PUT")){assertFalse(value.path("public").asBoolean(true));assertEquals(1,value.size(),"Only the privacy changes");privacyUpdates.incrementAndGet();if(!stubbornPublic.get())targetPublic.set(false);response=Map.of();}
                 else if(path.equals("/spotify/playlists/"+TARGET+"/items")&&method.equals("GET"))response=Map.of("items",remoteItems.stream().map(id->Map.of("item",spotifyTrack(id))).toList());
                 else if(path.equals("/spotify/playlists/"+TARGET+"/items")&&method.equals("POST")){String uri=value.path("uris").get(0).asString();assertEquals("spotify:track:"+SONG,uri);remoteItems.add(SONG);if(adds.incrementAndGet()==1){lost(exchange);return;}response=Map.of("snapshot_id","snapshot");}

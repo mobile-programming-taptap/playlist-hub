@@ -360,13 +360,22 @@ public class PlatformClient {
      */
     boolean ensurePrivate(String provider,String id,Tokens tokens) {
         provider(provider);if(!provider.equals("spotify"))return true;validPlaylistId(provider,id);
-        if(isPrivate(api(provider,"GET","/playlists/"+id+"?fields=public",tokens.accessToken(),null)))return true;
+        // Read privacy from the owner's playlist list: on a real account the single-playlist read answered 503 or left "public" out.
+        if(Boolean.FALSE.equals(spotifyPublic(id,tokens)))return true;
         api(provider,"PUT","/playlists/"+id,tokens.accessToken(),Map.of("public",false));
-        boolean fixed=isPrivate(api(provider,"GET","/playlists/"+id+"?fields=public",tokens.accessToken(),null));
-        org.slf4j.LoggerFactory.getLogger(PlatformClient.class).warn("Spotify created a public playlist; made private: {}",fixed);
+        Boolean after=spotifyPublic(id,tokens);boolean fixed=Boolean.FALSE.equals(after);
+        org.slf4j.LoggerFactory.getLogger(PlatformClient.class).warn("Spotify playlist was not private; after update public={}; granted scopes: {}",after,tokens.scopes());
         return fixed;
     }
-    private static boolean isPrivate(JsonNode playlist){return playlist.path("public").isBoolean()&&!playlist.path("public").asBoolean();}
+    /** The playlist's "public" flag as the owner's playlist list reports it, or null when it is not listed. */
+    private Boolean spotifyPublic(String id,Tokens tokens) {
+        for(int page=0;page<10;page++) {
+            JsonNode reply=api("spotify","GET","/me/playlists?limit=50&offset="+(page*50),tokens.accessToken(),null);
+            for(JsonNode row:reply.path("items"))if(id.equals(row.path("id").asString("")))return row.path("public").isBoolean()?row.path("public").asBoolean():null;
+            if(reply.path("next").asString("").isEmpty())break;
+        }
+        return null;
+    }
     List<String> existingIds(String provider,String id,Tokens tokens) {
         validPlaylistId(provider,id);
         RemotePlaylist p=provider.equals("spotify")?spotifyPlaylist(id,"",tokens.accessToken()):youtubePlaylist(id,"",tokens.accessToken());
