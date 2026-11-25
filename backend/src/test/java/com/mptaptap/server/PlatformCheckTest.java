@@ -31,6 +31,7 @@ import static org.junit.jupiter.api.Assertions.*;
 /** Real JDBC and HTTP; all provider requests stay on the fixture's loopback server. */
 class PlatformCheckTest {
     private static final String SOURCE="S".repeat(22), SONG="T".repeat(22), TARGET="R".repeat(22), VIDEO="dQw4w9WgXcQ";
+    private static final String ARTWORK="https://i.scdn.co/image/"+"a".repeat(40);
     private final ObjectMapper json=new ObjectMapper();
 
     @Test void unavailableOAuthIdentifiesOnlyRequiredSettingsAndCanRecover() throws Exception {
@@ -310,7 +311,7 @@ class PlatformCheckTest {
             agedTrack.put("checkedAt",fetchedAt.minus(Duration.ofDays(2)).toString());
             f.db.update("UPDATE playlist_items SET track_json=? WHERE id=?",json.writeValueAsString(agedTrack),agedItem.get("id"));
             f.db.update("UPDATE platform_documents SET metadata_expires_at=? WHERE id=?",Instant.now().minusSeconds(1).toString(),id);f.store.purgeExpired();f.users.purgeExpiredExternal();
-            assertEquals(true,f.api.imported(f.auth,id).get("needsRefresh"));for(Map<String,Object> expired:List.of(map(rows(f.users.playlist(f.owner,id),"items").get(0).get("track")))){assertEquals(true,expired.get("needsRefresh"));for(String field:List.of("title","artist","album","isrc","durationMs"))assertFalse(expired.containsKey(field));}
+            assertEquals(true,f.api.imported(f.auth,id).get("needsRefresh"));for(Map<String,Object> expired:List.of(map(rows(f.users.playlist(f.owner,id),"items").get(0).get("track")))){assertEquals(true,expired.get("needsRefresh"));for(String field:List.of("title","artist","album","isrc","durationMs","artworkUrl"))assertFalse(expired.containsKey(field));}
             assertNotNull(preview.get("previewId"));
             f.api.deleteTransfer(f.auth,jobId);assertEquals(404,assertThrows(ResponseStatusException.class,()->f.api.transferStatus(f.auth,jobId)).getStatusCode().value());assertEquals(List.of(SONG,SONG),f.remoteItems);
             f.api.deleteImport(f.auth,id);assertTrue(f.store.documents(f.owner,"sync").isEmpty());assertEquals(1,rows(f.users.playlist(f.owner,id),"items").size(),"Deleting a source record keeps the app playlist and remote playlist.");
@@ -323,6 +324,8 @@ class PlatformCheckTest {
             String id=UUID.randomUUID().toString(),jobId=UUID.randomUUID().toString();
             Map<String,Object> imported=f.api.importPlaylist(f.auth,new PlatformApi.ImportBody(id,"spotify","https://open.spotify.com/playlist/"+SOURCE,null));
             assertEquals(List.of(0,2,4),rows(imported,"items").stream().map(row->row.get("sourceIndex")).toList(),"Readable recordings retain their original source positions.");
+            assertEquals(ARTWORK,map(rows(imported,"items").get(0).get("track")).get("artworkUrl"));
+            assertEquals(ARTWORK,map(rows(f.users.playlist(f.owner,id),"items").get(0).get("track")).get("artworkUrl"));
             assertEquals(3,imported.get("skippedCount"));assertEquals(List.of(1,3,5),rows(imported,"skippedItems").stream().map(row->row.get("sourceIndex")).toList());
             String notice=(String)imported.get("notice");for(String reason:List.of("3개 항목","로컬 파일","음악 곡이 아닌","곡 정보를 제공하지"))assertTrue(notice.contains(reason));
             assertEquals(3,rows(f.users.playlist(f.owner,id),"items").size());
@@ -333,6 +336,7 @@ class PlatformCheckTest {
             f.api.retry(f.auth,jobId,new PlatformApi.Confirm(true));Map<String,Object> result=f.awaitJob(jobId,"COMPLETED");
             assertEquals(List.of(4),result.get("excludedSourceIndices"));assertEquals(1,map(result.get("counts")).get("excluded"));assertEquals(2,map(result.get("counts")).get("added"));
             assertEquals(List.of(0,2),rows(result,"items").stream().map(row->row.get("sourceIndex")).toList());assertEquals(List.of(SONG,SONG),f.remoteItems);
+            assertEquals(ARTWORK,rows(result,"items").get(0).get("artworkUrl"));
             assertEquals(List.of(4),f.api.transferStatus(f.auth,jobId).get("excludedSourceIndices"));assertEquals(1,map(f.api.transferHistory(f.auth,true).get(0).get("counts")).get("excluded"));
             f.api.retry(f.auth,jobId,new PlatformApi.Confirm(true));assertEquals(1,f.creates.get());assertEquals(2,f.adds.get());assertEquals(Map.of(),f.users.feedback(f.owner));
             f.sourceItems.set(0);var unreadableRequest=new PlatformApi.ImportBody(UUID.randomUUID().toString(),"spotify","https://open.spotify.com/playlist/"+SOURCE,null);
@@ -645,7 +649,8 @@ class PlatformCheckTest {
             remote=new PlatformClient(json,config,endpoints);api=new PlatformApi(users,store,remote,json,manager);
             }catch(Exception|Error error){server.stop(0);worker.shutdownNow();if(schemaOwner!=null)try{schemaOwner.execute("DROP SCHEMA IF EXISTS "+testSchema+" CASCADE");}catch(RuntimeException cleanup){error.addSuppressed(cleanup);}throw error;}
         }
-        private Map<String,Object> spotifyTrack(String id){return Map.of("id",id,"type","track","name","Song","artists",List.of(Map.of("name","Artist")),"duration_ms",180000,"external_ids",Map.of("isrc","USABC1234567"),"album",Map.of("name","Album"));}
+        private Map<String,Object> spotifyTrack(String id){return Map.of("id",id,"type","track","name","Song","artists",List.of(Map.of("name","Artist")),"duration_ms",180000,"external_ids",Map.of("isrc","USABC1234567"),"album",Map.of("name","Album","images",List.of(Map.of("url","https://untrusted.invalid/image","width",1024),
+                Map.of("url","https://i.scdn.co/image/"+"b".repeat(40),"width",64),Map.of("url",ARTWORK,"width",640))));}
         private Map<String,Object> youtubeRow(int position,String id,String title,String artist){return Map.of("contentDetails",Map.of("videoId",id),"snippet",Map.of("position",position,"title",title,"videoOwnerChannelTitle",artist));}
         private void serve(HttpExchange exchange) {
             try {

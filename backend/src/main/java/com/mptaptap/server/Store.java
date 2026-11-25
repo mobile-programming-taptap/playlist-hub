@@ -458,6 +458,8 @@ public class Store {
             String url = text(row.get("sourceUrl"),2048,true);
             if (!url.isEmpty() && !safeExternalUrl(provider,url)) throw new IllegalArgumentException("원본 곡 링크를 확인해 주세요.");
             snapshot.put("sourceUrl",url);
+            if(provider.equals("spotify")&&row.get("artworkUrl") instanceof String image
+                    &&com.mptaptap.core.ImportMatch.spotifyArtwork(image))snapshot.put("artworkUrl",image);
             Object index = row.containsKey("sourceIndex")?row.get("sourceIndex"):row.getOrDefault("position",i);
             snapshot.put("sourceIndex",integer(index,1_000_000));
             for (String field:List.of("durationMs","videoDurationSeconds","timestamp","sourceLine")) if (row.get(field)!=null) snapshot.put(field,integer(row.get(field),Integer.MAX_VALUE));

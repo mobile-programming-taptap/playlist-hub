@@ -233,7 +233,9 @@ public class PlatformApi {
         String id=PlatformStore.uuid(body.id()),p=provider(body.targetProvider());confirmed(body.confirmed());String name=title(body.title());
         if(store.exists(u,id,"transfer")){Map<String,Object> existing=store.document(u,id,"transfer");if(!body.importId().equals(existing.get("importId"))||!p.equals(existing.get("provider"))||!name.equals(existing.get("title")))throw new ResponseStatusException(HttpStatus.CONFLICT,"같은 작업 ID로 원래 이전을 다시 시도해 주세요.");if(!"COMPLETED".equals(existing.get("status")))launch(u,id);return counted(existing);}
         Map<String,Object> source=store.document(u,body.importId(),"import");provider((String)source.get("provider"));if(!p.equals(source.get("targetProvider")))throw new IllegalArgumentException("대상 플랫폼의 곡 후보를 먼저 검토해 주세요.");List<Map<String,Object>> selected=new ArrayList<>();List<Integer> excluded=new ArrayList<>();
-        for(Map<String,Object> row:items(source,"reviews")){if(!Boolean.TRUE.equals(row.get("approved")))throw new IllegalArgumentException("모든 곡을 선택하거나 제외한 뒤 이전해 주세요.");if("USER_EXCLUDED".equals(row.get("status"))){excluded.add(((Number)row.get("sourceIndex")).intValue());continue;}Map<String,Object> track=cast(row.get("selected"));Map<String,Object> item=new LinkedHashMap<>(Map.of("sourceIndex",row.get("sourceIndex"),"targetId",track.get("externalId"),"status","PENDING","message",""));selected.add(item);}
+        for(Map<String,Object> row:items(source,"reviews")){if(!Boolean.TRUE.equals(row.get("approved")))throw new IllegalArgumentException("모든 곡을 선택하거나 제외한 뒤 이전해 주세요.");if("USER_EXCLUDED".equals(row.get("status"))){excluded.add(((Number)row.get("sourceIndex")).intValue());continue;}Map<String,Object> track=cast(row.get("selected"));Map<String,Object> item=new LinkedHashMap<>(Map.of("sourceIndex",row.get("sourceIndex"),"targetId",track.get("externalId"),"status","PENDING","message",""));
+            if(track.get("artworkUrl") instanceof String image&&ImportMatch.spotifyArtwork(image))item.put("artworkUrl",image);
+            selected.add(item);}
         if(selected.isEmpty())throw new IllegalArgumentException("이전할 곡을 하나 이상 선택해 주세요.");token(u,p);Map<String,Object> job=new LinkedHashMap<>(Map.of("id",id,"importId",body.importId(),"provider",p,"title",name,"status","PENDING","externalPlaylistId","","items",selected,"createStarted",false,"playlistUrl","","notice","사용자가 확인한 곡만 비공개 목록으로 이전합니다."));job.put("excludedSourceIndices",excluded);store.create(u,id,"transfer",p,counted(job));launch(u,id);return job;
     });}
     @GetMapping("/transfers") public List<Map<String,Object>> transferHistory(@RequestHeader(value="Authorization",required=false)String auth,@RequestParam(defaultValue="false")boolean summary){String u=user(auth);List<Map<String,Object>> jobs=(summary?store.summaries(u,"transfer"):store.documents(u,"transfer")).stream().filter(row->PlatformClient.PROVIDERS.contains(row.get("provider"))).toList();for(Map<String,Object> job:jobs){if(!summary)counted(job);job.put("playlistUrl",PlatformClient.playlistUrl((String)job.get("provider"),(String)job.getOrDefault("externalPlaylistId","")));if(activeTransfers.contains(u+":"+job.get("id")))job.put("status","RUNNING");}return jobs;}
@@ -327,7 +329,13 @@ public class PlatformApi {
             item.put("track",track);item.put("sourceIndex",snapshot.get("sourceIndex"));if(snapshot.containsKey("timestamp"))item.put("timestamp",snapshot.get("timestamp"));result.add(item);
         }return result;
     }
-    private static Map<String,Object> trackMetadata(Map<String,Object> snapshot){Map<String,Object> result=new LinkedHashMap<>();for(String field:List.of("platform","externalId","isrc","title","artist","version","album","durationMs","sourceUrl"))if(snapshot.containsKey(field)){Object value=snapshot.get(field);result.put(field,value instanceof Number n?n.longValue():value);}return result;}
+    private static Map<String,Object> trackMetadata(Map<String,Object> snapshot){
+        Map<String,Object> result=new LinkedHashMap<>();
+        for(String field:List.of("platform","externalId","isrc","title","artist","version","album","durationMs","sourceUrl"))
+            if(snapshot.containsKey(field)){Object value=snapshot.get(field);result.put(field,value instanceof Number n?n.longValue():value);}
+        if(snapshot.get("artworkUrl") instanceof String image&&ImportMatch.spotifyArtwork(image))result.put("artworkUrl",image);
+        return result;
+    }
     private static Map<String,Integer> difference(List<Map<String,Object>> before,List<Map<String,Object>> after){
         Map<String,java.util.ArrayDeque<Map.Entry<Integer,Map<String,Object>>>> occurrences=new LinkedHashMap<>();
         for(int i=0;i<before.size();i++){Map<String,Object> track=cast(before.get(i).get("track"));String key=track.get("platform")+"|"+track.get("externalId");occurrences.computeIfAbsent(key,k->new java.util.ArrayDeque<>()).add(Map.entry(i,before.get(i)));}

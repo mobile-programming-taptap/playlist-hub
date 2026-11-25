@@ -73,6 +73,7 @@ public class LiveVideoConversionCheckTest {
         var created=new java.util.ArrayList<String>();
         var individualPlaylists=new java.util.ArrayList<String>();
         boolean checkIndividual=InstrumentationRegistry.getArguments().getString("liveIndividual","false").equals("true");
+        boolean checkArtwork=InstrumentationRegistry.getArguments().getString("liveArtwork","false").equals("true");
         try {
             api.connect();
             for(int index=0;index<videos.length;index++){
@@ -96,6 +97,7 @@ public class LiveVideoConversionCheckTest {
                     });
                     if(index==2)onView(withText("곡명과 아티스트 순서 바꾸기")).perform(scrollTo(),click());
                     onView(withText(firstTitle)).perform(scrollTo()).check(matches(isDisplayed()));
+                    if(checkArtwork)awaitArtwork(firstTitle,video);
                     onView(withText("선택한 곡을 앱 목록에 저장 ("+count+"곡)")).perform(scrollTo(),click());ready(app);
                     onView(withText("내 목록에 저장했어요")).inRoot(isDialog()).check(matches(isDisplayed()));
                     app.onActivity(a->savedId.set(data(a).optString("saveId")));
@@ -115,6 +117,7 @@ public class LiveVideoConversionCheckTest {
                             }
                         });
                         assertFalse(expectedVideos.isEmpty());
+                        if(checkArtwork)awaitArtwork("1. 집 앞 · 태리 (Terry)",expectedVideos.get(0));
                         onView(withText("개별 영상 "+expectedVideos.size()+"곡 내 목록에 저장")).perform(scrollTo(),click());ready(app);
                         app.onActivity(a->individualPlaylists.add(data(a).optString("matchedSaveId")));
                         String matchedId=individualPlaylists.get(0);
@@ -139,6 +142,23 @@ public class LiveVideoConversionCheckTest {
                     int seconds=timestamps.get().getJSONObject(j).getInt("seconds");
                     assertEquals(url+"&t="+seconds+"s",tracks.getJSONObject(j).getJSONObject("track").getString("sourceUrl"));
                 }
+                if(checkArtwork&&index==3){
+                    try(ActivityScenario<MainActivity> app=ActivityScenario.launch(MainActivity.class)){
+                        waitForMain(app,false);
+                        onView(withId(R.id.nav_library)).perform(click());
+                        waitForMain(app,false);
+                        String playlistTitle=api.object("GET","/playlists/"+savedId.get(),null).getString("title");
+                        onView(withText(playlistTitle)).perform(scrollTo(),click());waitForMain(app,false);
+                        awaitArtwork(firstTitle,video);
+                        onView(withContentDescription("곡 메뉴 · Bloodshot")).perform(scrollTo(),click());
+                        onView(withText("여기서 들어보기")).inRoot(isDialog()).check(matches(isDisplayed()));
+                        onView(withText("닫기")).inRoot(isDialog()).perform(click());
+                        onView(withContentDescription("여기서 들어보기 · Bloodshot")).perform(scrollTo(),click());
+                        waitForMain(app,true);
+                        onView(withContentDescription("Bloodshot YouTube 공식 플레이어")).inRoot(isDialog()).check(matches(isDisplayed()));
+                        android.util.Log.i("TapTapTimelineCheck","Saved list thumbnail and direct playback verified for "+video);
+                    }
+                }
                 android.util.Log.i("TapTapTimelineCheck",video+" "+source+" "+count+" saved and verified");
             }
         } finally {
@@ -155,6 +175,23 @@ public class LiveVideoConversionCheckTest {
         }
     }
 
+    private static void awaitArtwork(String title,String key) {
+        long until=SystemClock.uptimeMillis()+12_000;
+        var artwork=onView(org.hamcrest.Matchers.allOf(withId(R.id.row_artwork),hasSibling(hasDescendant(withText(title)))));
+        AssertionError failure=null;
+        while(SystemClock.uptimeMillis()<until){
+            try{
+                artwork.check((view,error)->{
+                    if(error!=null)throw error;
+                    assertEquals("Artwork for "+title,key,view.getTag());
+                    assertTrue(((android.widget.ImageView)view).getDrawable() instanceof android.graphics.drawable.BitmapDrawable);
+                });
+                return;
+            }catch(AssertionError error){failure=error;}
+            SystemClock.sleep(100);
+        }
+        throw new AssertionError("Thumbnail did not load for "+title,failure);
+    }
     private static JSONObject data(HubActivity activity){return ((HubRequest)get(activity,"requests")).data;}
     private static void ready(ActivityScenario<HubActivity> app){long end=SystemClock.uptimeMillis()+60000;while(SystemClock.uptimeMillis()<end){AtomicBoolean done=new AtomicBoolean();app.onActivity(activity->done.set(!((HubRequest)get(activity,"requests")).busy()));if(done.get()){InstrumentationRegistry.getInstrumentation().waitForIdleSync();return;}SystemClock.sleep(100);}fail("Live conversion timed out");}
     private static void waitForMain(ActivityScenario<MainActivity> app,boolean player){long end=SystemClock.uptimeMillis()+35000;AtomicReference<String> title=new AtomicReference<>("");while(SystemClock.uptimeMillis()<end){AtomicBoolean done=new AtomicBoolean();app.onActivity(activity->{WebView web=(WebView)get(activity,"player");if(web!=null)title.set(web.getTitle()==null?"":web.getTitle());done.set(player?web!=null&&title.get().contains("재생 버튼"):!((Boolean)get(activity,"busy")));});if(done.get())return;SystemClock.sleep(150);}fail("App/player not ready: "+title.get());}

@@ -13,8 +13,11 @@ public final class ImportMatch {
     public static final int MAX_CANDIDATES=100;
     public enum Status { UNKNOWN, NEEDS_REVIEW, MATCHED, USER_EXCLUDED }
     public static final class PlatformTrack {
-        public String platform="",externalId="",isrc="",title="",artist="",version="",album="",sourceUrl="";
+        public String platform="",externalId="",isrc="",title="",artist="",version="",album="",sourceUrl="",artworkUrl="";
         public long durationMs;
+    }
+    public static boolean spotifyArtwork(String url) {
+        return url!=null&&url.matches("https://(?:i\\.scdn\\.co|image-cdn-[a-z]{2}\\.spotifycdn\\.com)/image/[0-9a-fA-F]{40}");
     }
     public static final class Candidate {
         public PlatformTrack track;

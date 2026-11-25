@@ -333,17 +333,20 @@ public final class HubActivity extends AppCompatActivity {
         if(!groups.needsReview().isEmpty()){content.addView(text("확인이 필요한 곡 ("+groups.needsReview().size()+")",16,true));
             for(JSONObject item:groups.needsReview()){int index=item.optInt("sourceIndex");LinearLayout box=card(content);box.addView(text((index+1)+". "+song(item.optJSONObject("source")),15,true));
                 JSONArray candidates=item.optJSONArray("candidates");JSONObject top=candidates==null||candidates.length()==0?null:candidates.optJSONObject(0);JSONObject track=top==null?null:top.optJSONObject("track");
-                box.addView(text(item.optString("status").equals("NOT_SEARCHED")?"후보 조회 전 · 이어서 찾기를 눌러 주세요":track==null?"후보 없음":"추천 후보: "+song(track)+(track.optString("album").isEmpty()?"":" · "+track.optString("album")),13,false));
+                if(track!=null)box.addView(artworkLine(box,track,"추천 후보: "+song(track)+(track.optString("album").isEmpty()?"":" · "+track.optString("album"))));
+                else box.addView(text(item.optString("status").equals("NOT_SEARCHED")?"후보 조회 전 · 이어서 찾기를 눌러 주세요":"후보 없음",13,false));
                 LinearLayout actions=new LinearLayout(this);box.addView(actions,new LinearLayout.LayoutParams(-1,-2));
                 if(track!=null){MaterialButton pick=button("이 곡으로",()->{select(index,track,false);render();});actions.addView(pick,new LinearLayout.LayoutParams(0,-2,1));}
                 if(candidates!=null&&candidates.length()>0){MaterialButton other=button("다른 후보",()->chooseCandidate(item,index));actions.addView(other,new LinearLayout.LayoutParams(0,-2,1));}
                 MaterialButton skip=button("제외",()->{select(index,null,true);render();});actions.addView(skip,new LinearLayout.LayoutParams(0,-2,1));
             }}
         if(!groups.excluded().isEmpty()){content.addView(text("찾지 못한 곡 ("+groups.excluded().size()+") · 제외됨",16,true));
-            for(JSONObject item:groups.excluded()){int index=item.optInt("sourceIndex");LinearLayout box=card(content);box.addView(text((index+1)+". "+song(item.optJSONObject("source")),15,true));box.addView(text("전송에서 제외됨",13,false));addButton(box,"다른 후보",()->chooseCandidate(item,index));}}
+            for(JSONObject item:groups.excluded()){int index=item.optInt("sourceIndex");LinearLayout box=card(content);box.addView(artworkLine(box,item.optJSONObject("source"),(index+1)+". "+song(item.optJSONObject("source"))));box.addView(text("전송에서 제외됨",13,false));addButton(box,"다른 후보",()->chooseCandidate(item,index));}}
         if(!groups.selected().isEmpty()){boolean open=value("exportExpanded").equals("true");
             MaterialButton toggle=button("선택된 곡 ("+groups.selected().size()+")",()->{put("exportExpanded",String.valueOf(!value("exportExpanded").equals("true")));render();});toggle.setContentDescription("선택된 곡 "+groups.selected().size()+"곡 "+(open?"접기":"펼치기"));content.addView(toggle,new LinearLayout.LayoutParams(-1,-2));
-            if(open)for(JSONObject item:groups.selected()){int index=item.optInt("sourceIndex");JSONObject chosen=ExportReview.find(selections,index);LinearLayout box=card(content);box.addView(text((index+1)+". "+song(item.optJSONObject("source")),13,false));box.addView(text(selectionLabel(item,chosen),15,true));
+            if(open)for(JSONObject item:groups.selected()){int index=item.optInt("sourceIndex");JSONObject chosen=ExportReview.find(selections,index);LinearLayout box=card(content);JSONObject selected=selectedTrack(item,chosen);
+                box.addView(artworkLine(box,selected==null?item.optJSONObject("source"):selected,(index+1)+". "+song(item.optJSONObject("source"))));
+                box.addView(text(selectionLabel(item,chosen),15,true));
                 addButton(box,"다른 후보",()->chooseCandidate(item,index));
                 if(value("targetProvider").equals("youtube"))addButton(box,"선택한 YouTube 영상 확인",()->open("https://www.youtube.com/watch?v="+Uri.encode(chosen.optString("targetId"))));}
         }
@@ -567,7 +570,7 @@ public final class HubActivity extends AppCompatActivity {
             View item=LayoutInflater.from(this).inflate(R.layout.item_import_track,content,false);item.setTag("importRow "+(index+1));content.addView(item);LinearLayout box=item.findViewById(R.id.import_body);
             View header=item.findViewById(R.id.import_header);TextView heading=header.findViewById(R.id.row_title),meta=header.findViewById(R.id.row_subtitle),number=header.findViewById(R.id.row_index);
             number.setText(String.valueOf(index+1));number.setVisibility(View.VISIBLE);header.findViewById(R.id.row_trailing).setVisibility(View.GONE);
-            artwork.load(header.findViewById(R.id.row_artwork),track!=null&&"youtube".equals(track.optString("platform"))?track.optString("externalId"):"");
+            artwork.loadTrack(header.findViewById(R.id.row_artwork),track==null?row:track);
             String label=timeline?row.optString("timestamp"):track==null?"":track.optString("album");
             Runnable summary=()->{String title=edit.optString("title").trim(),artist=edit.optString("artist").trim(),line=artist.isEmpty()?"아티스트 입력 필요":artist;heading.setText(title.isEmpty()?"곡명 입력 필요":title);meta.setText(label.isEmpty()?line:line+" · "+label);header.setContentDescription((index+1)+". "+heading.getText()+", "+meta.getText());};summary.run();
             if(row.optBoolean("needsReview"))item.findViewById(R.id.import_badge).setVisibility(View.VISIBLE);
@@ -663,7 +666,8 @@ public final class HubActivity extends AppCompatActivity {
             JSONObject item=items.optJSONObject(i);
             JSONObject selection=find(array("selections"),"sourceIndex",item.optInt("sourceIndex",i));
             LinearLayout box=card(content);
-            box.addView(text((i+1)+". "+song(item.optJSONObject("source")),16,true));
+            JSONObject selected=selectedTrack(item,selection);
+            box.addView(artworkLine(box,selected==null?item.optJSONObject("source"):selected,(i+1)+". "+song(item.optJSONObject("source"))));
             if(selection.optBoolean("excluded"))box.addView(text("찾지 못함",13,false));
             else {
                 box.addView(text(selection.optString("label"),13,false));
@@ -678,7 +682,8 @@ public final class HubActivity extends AppCompatActivity {
         JSONArray items=review.optJSONArray("items");if(items==null)items=new JSONArray();
         for(int i=0;i<items.length();i++) {
             JSONObject item=items.optJSONObject(i);if(item==null)continue;int index=item.optInt("sourceIndex",i);JSONObject source=item.optJSONObject("source");LinearLayout box=card(content);
-            box.addView(text((index+1)+". "+song(source),16,true));JSONObject chosen=find(requests.data.optJSONArray("selections"),"sourceIndex",index);
+            JSONObject chosen=find(requests.data.optJSONArray("selections"),"sourceIndex",index),selected=selectedTrack(item,chosen);
+            box.addView(artworkLine(box,selected==null?source:selected,(index+1)+". "+song(source)));
             String label="곡 후보 상태를 확인하지 못했어요. 후보를 직접 확인해 주세요.";
             if(chosen!=null)label=chosen.optBoolean("excluded")?"전송에서 제외됨":"선택한 곡: "+selectionLabel(item,chosen);
             else switch(item.optString("status")) {
@@ -705,7 +710,14 @@ public final class HubActivity extends AppCompatActivity {
         String[] labels=new String[candidates.length()+1];
         for(int i=0;i<candidates.length();i++){JSONObject candidate=candidates.optJSONObject(i);JSONObject track=candidate==null?null:candidate.optJSONObject("track");labels[i]=song(track)+(track==null||track.optString("album").isEmpty()?"":" · "+track.optString("album"));}
         labels[candidates.length()]="이 곡은 전송에서 제외";JSONArray choices=candidates;
-        dialog().setTitle("곡과 버전을 확인해 주세요").setItems(labels,(d,which)->{
+        var adapter=new android.widget.ArrayAdapter<String>(this,android.R.layout.simple_list_item_1,labels){
+            @Override public View getView(int position,View convertView,ViewGroup parent){
+                JSONObject candidate=choices.optJSONObject(position);
+                if(candidate==null)return super.getView(position,null,parent);
+                return artworkLine(parent,candidate.optJSONObject("track"),labels[position]);
+            }
+        };
+        dialog().setTitle("곡과 버전을 확인해 주세요").setAdapter(adapter,(d,which)->{
             if(which==choices.length())select(index,null,true);else {JSONObject candidate=choices.optJSONObject(which);select(index,candidate==null?null:candidate.optJSONObject("track"),false);}render();
         }).setNegativeButton("취소",null).show();
     }
@@ -733,10 +745,12 @@ public final class HubActivity extends AppCompatActivity {
         for(int pass=0;pass<2&&items!=null;pass++)for(int i=0;i<items.length();i++) {
             JSONObject item=items.optJSONObject(i);if(item==null)continue;String state=item.optString("status");if(state.equals("ADDED")!=(pass==1))continue;
             if(state.equals("ADDED"))success++;else if(state.equals("FAILED"))failed++;else if(state.equals("PENDING"))pending++;else if(state.equals("UNKNOWN"))unknown++;
-            if(!item.has("sourceIndex"))set(item,"sourceIndex",i);paragraph(ExportReview.transferLine(item,reviewItems));
+            if(!item.has("sourceIndex"))set(item,"sourceIndex",i);
+            JSONObject image=json("platform",transfer.optString("provider"),"externalId",item.optString("targetId"),"artworkUrl",item.optString("artworkUrl"));
+            content.addView(artworkLine(content,image,ExportReview.transferLine(item,reviewItems)));
         }
         JSONArray excluded=transfer.optJSONArray("excludedSourceIndices");int excludedCount=excluded==null?0:excluded.length();
-        if(excluded!=null)for(int i=0;i<excluded.length();i++){JSONObject row=ExportReview.find(reviewItems,excluded.optInt(i)),source=row==null?null:row.optJSONObject("source");paragraph((source==null?(excluded.optInt(i)+1)+"번째 곡":song(source))+" · 사용자가 제외");}
+        if(excluded!=null)for(int i=0;i<excluded.length();i++){JSONObject row=ExportReview.find(reviewItems,excluded.optInt(i)),source=row==null?null:row.optJSONObject("source");content.addView(artworkLine(content,source,(source==null?(excluded.optInt(i)+1)+"번째 곡":song(source))+" · 사용자가 제외"));}
         paragraph("완료 "+success+"곡 · 실패 "+failed+"곡 · 제외 "+excludedCount+"곡 · 대기 "+pending+"곡 · 확인 필요 "+unknown+"곡");
         if(!transfer.optString("notice").isEmpty())paragraph(transfer.optString("notice"));
         if(!value("exportSourceUrl").isEmpty()&&transfer.optString("importId").equals(value("importId")))paragraph("앱의 내 목록에도 사본이 저장됐어요.");
@@ -751,10 +765,14 @@ public final class HubActivity extends AppCompatActivity {
         for(String key:new String[]{"added","removed","changed"}) {
             Object change=preview.opt(key);JSONArray rows=change instanceof JSONArray?(JSONArray)change:null;
             paragraph((key.equals("added")?"추가":key.equals("removed")?"삭제":"정보 변경")+" · "+(rows==null?preview.optInt(key):rows.length())+"곡");
-            if(rows!=null)for(int i=0;i<rows.length();i++){JSONObject row=rows.optJSONObject(i);if(row!=null)paragraph(song(row.optJSONObject("track")!=null?row.optJSONObject("track"):row));}
+            if(rows!=null)for(int i=0;i<rows.length();i++){JSONObject row=rows.optJSONObject(i);if(row!=null){
+                JSONObject track=row.optJSONObject("track");
+                if(track==null)track=row;
+                content.addView(artworkLine(content,track,song(track)));
+            }}
         }
         JSONObject after=preview.optJSONObject("after");JSONArray afterItems=after==null?null:after.optJSONArray("items");
-        if(afterItems!=null){heading("반영 후 곡 목록");for(int i=0;i<afterItems.length();i++){JSONObject row=afterItems.optJSONObject(i);if(row!=null)paragraph((i+1)+". "+song(row.optJSONObject("track")));}}
+        if(afterItems!=null){heading("반영 후 곡 목록");for(int i=0;i<afterItems.length();i++){JSONObject row=afterItems.optJSONObject(i);if(row!=null)content.addView(artworkLine(content,row.optJSONObject("track"),(i+1)+". "+song(row.optJSONObject("track"))));}}
         addButton(content,"이 변경 내용을 반영",()->dialog().setTitle("가져온 목록에 반영할까요?").setMessage("위에서 확인한 추가·삭제·정보 변경을 반영해요.").setPositiveButton("반영",(d,w)->send("syncApplied","POST","/sync/"+Uri.encode(value("importId"))+"/apply",json("confirmed",true,"previewId",preview.optString("previewId")))).setNegativeButton("취소",null).show());
     }
 
@@ -929,7 +947,31 @@ public final class HubActivity extends AppCompatActivity {
     private void clearSource(){for(String key:new String[]{"importId","imported","importRequestId","conversionRequestId","saveId","transferId","transferKey","transfer","review","sync"})requests.data.remove(key);put("edits",new JSONArray());put("selections",new JSONArray());}
     private String transferKey(){JSONArray sorted=new JSONArray();JSONObject review=requests.data.optJSONObject("review");JSONArray items=review==null?null:review.optJSONArray("items");if(items!=null)for(int i=0;i<items.length();i++){JSONObject item=items.optJSONObject(i);JSONObject selected=item==null?null:find(array("selections"),"sourceIndex",item.optInt("sourceIndex",i));if(selected!=null)sorted.put(json("sourceIndex",selected.optInt("sourceIndex"),"targetId",selected.optString("targetId"),"excluded",selected.optBoolean("excluded")));}return UUID.nameUUIDFromBytes((value("importId")+":"+provider("targetProvider")+":"+value("listTitle").trim()+":"+sorted).getBytes(StandardCharsets.UTF_8)).toString();}
     private void restoreApprovals(JSONObject review){JSONArray items=review.optJSONArray("items");if(items==null)return;for(int i=0;i<items.length();i++){JSONObject item=items.optJSONObject(i);if(item==null||!item.optBoolean("approved")||find(array("selections"),"sourceIndex",item.optInt("sourceIndex",i))!=null)continue;boolean excluded=item.optString("status").equals("USER_EXCLUDED");if(excluded||item.optJSONObject("selected")!=null)select(item.optInt("sourceIndex",i),item.optJSONObject("selected"),excluded);}}
-    private String selectionLabel(JSONObject item,JSONObject selection){if(!selection.optString("label").isEmpty())return selection.optString("label");JSONArray candidates=item.optJSONArray("candidates");if(candidates!=null)for(int i=0;i<candidates.length();i++){JSONObject candidate=candidates.optJSONObject(i),track=candidate==null?null:candidate.optJSONObject("track");if(track!=null&&track.optString("externalId").equals(selection.optString("targetId")))return song(track);}JSONObject selected=item.optJSONObject("selected");return selected!=null&&selected.optString("externalId").equals(selection.optString("targetId"))?song(selected):"곡 정보 확인 필요";}
+    private JSONObject selectedTrack(JSONObject item,JSONObject selection) {
+        if(selection==null||selection.optBoolean("excluded"))return null;
+        String id=selection.optString("targetId");
+        JSONArray candidates=item.optJSONArray("candidates");
+        if(candidates!=null)for(int i=0;i<candidates.length();i++){
+            JSONObject candidate=candidates.optJSONObject(i);
+            JSONObject track=candidate==null?null:candidate.optJSONObject("track");
+            if(track!=null&&id.equals(track.optString("externalId")))return track;
+        }
+        JSONObject selected=item.optJSONObject("selected");
+        return selected!=null&&id.equals(selected.optString("externalId"))?selected:null;
+    }
+    private View artworkLine(ViewGroup parent,JSONObject track,String label) {
+        View row=LayoutInflater.from(this).inflate(R.layout.item_media_row,parent,false);
+        row.setClickable(false);
+        row.setFocusable(false);
+        TextView title=row.findViewById(R.id.row_title);
+        title.setText(label);
+        title.setMaxLines(2);
+        row.findViewById(R.id.row_subtitle).setVisibility(View.GONE);
+        row.findViewById(R.id.row_trailing).setVisibility(View.GONE);
+        artwork.loadTrack(row.findViewById(R.id.row_artwork),track);
+        return row;
+    }
+    private String selectionLabel(JSONObject item,JSONObject selection){if(!selection.optString("label").isEmpty())return selection.optString("label");JSONObject track=selectedTrack(item,selection);return track==null?"곡 정보 확인 필요":song(track);}
     private void scheduleTransferRefresh(){handler.removeCallbacks(transferRefresh);JSONObject transfer=requests.data.optJSONObject("transfer");if(resumed&&transfer!=null&&supportedProvider(transfer.optString("provider"))&&(transfer.optString("status").equals("RUNNING")||transfer.optString("status").equals("PENDING"))&&transferPolls<20)handler.postDelayed(transferRefresh,2000);}
     private void send(String route,String method,String path,JSONObject body){if(base.isEmpty()){message("서비스 이용 안내를 확인해 주세요.");return;}if(!ApiClient.consentAccepted(this,base)){render();return;}if(body!=null&&(body.has("provider")&&!supportedProvider(body.optString("provider"))||body.has("targetProvider")&&!supportedProvider(body.optString("targetProvider")))){message("지원하는 음악 서비스를 선택해 주세요.");return;}requests.send(getApplicationContext(),base,route,method,path,body);}
     private void busy(boolean loading){if(progress==null)return;if(loading)clearRetry();progress.setVisibility(loading?View.VISIBLE:View.GONE);for(View control:controls)control.setEnabled(!loading);if(navigation!=null)for(int i=0;i<navigation.getMenu().size();i++)navigation.getMenu().getItem(i).setEnabled(!loading);if(headerTitle!=null){ViewGroup header=(ViewGroup)headerTitle.getParent();for(int i=0;i<header.getChildCount();i++)if(header.getChildAt(i) instanceof MaterialButton)header.getChildAt(i).setEnabled(!loading||i==0&&requests.kakaoPending());}if(loading)message(requests.kakaoPending()?"카카오 로그인 확인 중이에요. 돌아가기를 누르면 취소할 수 있어요.":"처리 중이에요…");else if(status!=null&&(status.getText().toString().equals("처리 중이에요…")||status.getText().toString().startsWith("카카오 로그인 확인 중"))){status.setText("");status.setVisibility(View.GONE);}}

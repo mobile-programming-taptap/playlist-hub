@@ -1,5 +1,6 @@
 package com.mptaptap.server;
 
+import com.mptaptap.core.ImportMatch;
 import com.mptaptap.core.ImportMatch.PlatformTrack;
 import com.mptaptap.core.Track;
 import jakarta.annotation.PreDestroy;
@@ -428,7 +429,15 @@ public class PlatformClient {
     private static String form(Map<String,String> params) { return params.entrySet().stream().map(e->encode(e.getKey())+"="+encode(e.getValue())).collect(java.util.stream.Collectors.joining("&")); }
     private static PlatformTrack spotifyTrack(JsonNode row) {
         List<String> names=new ArrayList<>();for(JsonNode artist:row.path("artists"))names.add(artist.path("name").asString(""));String artists=String.join(", ",names);
-        return track("spotify",row.path("id").asString(""),row.path("name").asString(""),artists,row.path("duration_ms").asLong(0),row.path("external_ids").path("isrc").asString(""),row.path("album").path("name").asString(""));
+        JsonNode album=row.path("album");
+        PlatformTrack result=track("spotify",row.path("id").asString(""),row.path("name").asString(""),artists,row.path("duration_ms").asLong(0),row.path("external_ids").path("isrc").asString(""),album.path("name").asString(""));
+        int bestWidth=-1;
+        for(JsonNode image:album.path("images")){
+            String url=image.path("url").asString("");
+            int width=image.path("width").asInt(0);
+            if(ImportMatch.spotifyArtwork(url)&&width>bestWidth){result.artworkUrl=url;bestWidth=width;}
+        }
+        return result;
     }
     private static PlatformTrack track(String platform,String id,String title,String artist,long duration,String isrc,String album) {
         PlatformTrack t=new PlatformTrack();t.platform=platform;t.externalId=id;t.title=title;t.artist=artist;t.durationMs=duration;t.isrc=isrc;t.album=album;t.version="";t.sourceUrl=trackUrl(platform,id);return t;
