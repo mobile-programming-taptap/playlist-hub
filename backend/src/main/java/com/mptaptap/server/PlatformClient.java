@@ -383,6 +383,7 @@ public class PlatformClient {
                 byte[] bytes=input.readNBytes(2*1024*1024+1);
                 if(expired.get())throw new Failure(504);
                 if(response.statusCode()<200||response.statusCode()>=300) {
+                    logRejection(method,url,response.statusCode(),bytes);
                     boolean commentsDisabled=false;
                     if(response.statusCode()==403&&request.build().uri().getPath().endsWith("/commentThreads")
                             &&bytes.length>0&&bytes.length<=2*1024*1024) {
@@ -399,6 +400,18 @@ public class PlatformClient {
             }finally{timer.cancel(false);}
         }catch(InterruptedException error){Thread.currentThread().interrupt();throw new Failure(503);}
         catch(IOException|tools.jackson.core.JacksonException error){throw new Failure(502);}
+    }
+    /** Records why a provider refused a call: status and the provider's own reason, never the query string (it may hold the API key). */
+    private void logRejection(String method,String url,int status,byte[] bytes) {
+        String reason="";
+        try{JsonNode error=json.readTree(bytes).path("error");
+            reason=error.path("errors").path(0).path("reason").asString(error.path("status").isString()?error.path("status").asString(""):"");
+            String message=error.isString()?error.asString(""):error.path("message").asString("");
+            if(!message.isEmpty())reason=(reason.isEmpty()?"":reason+": ")+message;}
+        catch(RuntimeException unreadable){}
+        URI target=URI.create(url);
+        org.slf4j.LoggerFactory.getLogger(PlatformClient.class).warn("Platform API {} {}{} -> HTTP {} {}",method,target.getHost(),target.getPath(),status,
+            reason.length()>200?reason.substring(0,200):reason);
     }
     static String playlistUrl(String provider,String id){provider(provider);if(id==null||id.isEmpty())return "";validPlaylistId(provider,id);return provider.equals("spotify")?"https://open.spotify.com/playlist/"+id:"https://www.youtube.com/playlist?list="+id;}
     static String playlistId(String provider,String url) {

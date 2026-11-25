@@ -303,6 +303,9 @@ public class PlatformApi {
             boolean complete=rows.stream().allMatch(r->"ADDED".equals(r.get("status")));job.put("status",complete?"COMPLETED":rows.stream().anyMatch(r->"UNKNOWN".equals(r.get("status")))?"UNKNOWN":"PARTIAL");job.put("notice",complete?"플랫폼 목록에 저장했어요.":"항목별 상태를 확인하세요. 응답이 유실된 항목은 원격 조회로 확인하며 중복 전송하지 않습니다. 한 번에 최대 20곡을 처리합니다.");
         }catch(PlatformClient.Failure failure){if(failure.status>=400&&failure.status<500&&((String)job.get("externalPlaylistId")).isEmpty())job.put("createStarted",false);job.put("status","PARTIAL");job.put("notice",failure.getMessage());}
         catch(RuntimeException error){job.put("status","UNKNOWN");job.put("notice","원격 상태를 확인하지 못했어요. 같은 작업으로 다시 상태를 확인해 주세요.");}
+        List<Map<String,Object>> outcome=items(job,"items");
+        org.slf4j.LoggerFactory.getLogger(PlatformApi.class).info("Transfer {}: provider={}, status={}, added={}/{}, failed={}, notice={}",id,job.get("provider"),job.get("status"),
+            outcome.stream().filter(r->"ADDED".equals(r.get("status"))).count(),outcome.size(),outcome.stream().filter(r->"FAILED".equals(r.get("status"))).count(),job.get("notice"));
         try{store.update(u,id,"transfer",counted(job));}catch(ResponseStatusException removed){}
     }
     @PostMapping("/sync/{id}/preview") public Map<String,Object> syncPreview(@RequestHeader(value="Authorization",required=false)String auth,@PathVariable String id){return withOwner(auth,u->{
