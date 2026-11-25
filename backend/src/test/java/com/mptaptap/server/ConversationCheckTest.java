@@ -148,4 +148,70 @@ class ConversationCheckTest {
             assertEquals(503,vocals.statusCode(),vocals.body());assertFalse(json.readTree(vocals.body()).has("tracks"));
         } finally {stub.stop(0);}
     }
+
+    /** 참고 곡에서 추론한 사전 장르는 AI가 tags 로 내도 선호로 내리고, 직접 말한 장르는 필수로 남긴다. */
+    @Test void referenceGenresStayPreferencesUnlessDirect() throws Exception {
+        ObjectMapper json=new ObjectMapper();
+        AtomicReference<String> modelConditions=new AtomicReference<>();
+        HttpServer stub=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
+        stub.createContext("/responses",exchange->{
+            exchange.getRequestBody().readAllBytes();
+            byte[] body=json.writeValueAsBytes(Map.of("status","completed","output",List.of(Map.of("type","message","content",List.of(Map.of(
+                "type","output_text","text",ApiCheckTest.modelPlan(json,modelConditions.get())))))));
+            exchange.sendResponseHeaders(200,body.length);exchange.getResponseBody().write(body);exchange.close();
+        });stub.start();
+        try(var app=new SpringApplicationBuilder(TapTapApplication.class).run("--spring.config.import=","--server.port=0","--server.address=127.0.0.1",
+                "--spring.datasource.url=jdbc:h2:mem:reference"+UUID.randomUUID()+";MODE=PostgreSQL",
+                "--taptap.openai.key=check-only","--taptap.openai.endpoint=http://127.0.0.1:"+stub.getAddress().getPort()+"/responses",
+                "--logging.level.root=WARN","--spring.main.banner-mode=off")) {
+            String base="http://127.0.0.1:"+((WebServerApplicationContext)app).getWebServer().getPort();HttpClient client=HttpClient.newHttpClient();
+            String first="한국어 가사 노래로 찾아줘 잔잔한 건 싫어";
+            Map<String,Object> afterFirst=Map.of("tags",List.of(),"excludedTags",List.of("calm"),"language","ko");
+            java.util.function.BiFunction<String,Map<String,Object>,JsonNode> ask=(ai,body)->{
+                try {
+                    modelConditions.set(ai);
+                    var session=client.send(HttpRequest.newBuilder(URI.create(base+"/sessions")).POST(HttpRequest.BodyPublishers.noBody()).build(),HttpResponse.BodyHandlers.ofString());
+                    var response=client.send(HttpRequest.newBuilder(URI.create(base+"/recommendations")).header("Authorization","Bearer "+json.readTree(session.body()).path("token").asString())
+                            .header("Content-Type","application/json").POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(body))).build(),HttpResponse.BodyHandlers.ofString());
+                    assertEquals(200,response.statusCode(),response.body());
+                    return json.readTree(response.body()).path("conditions");
+                } catch(Exception e){throw new RuntimeException(e);}
+            };
+            java.util.function.Function<JsonNode,List<String>> sorted=node->{List<String> values=new java.util.ArrayList<>();node.forEach(value->values.add(value.asString()));java.util.Collections.sort(values);return values;};
+
+            // 1: 실측 1회차. 참고 곡 턴에서 AI가 추론 장르를 tags 에만 넣어도 선호가 된다.
+            JsonNode reference=ask.apply("{\"tags\":[\"ballad\"],\"excludedTags\":[\"calm\"],\"language\":\"ko\",\"languageSpecified\":true,\"inferredTags\":[]}",
+                    Map.of("prompt","밤편지 같은 느낌으로 바꿔줘","history",List.of(first),"previousConditions",afterFirst));
+            assertEquals("[]",reference.path("hardTags").toString());assertEquals("[\"ballad\"]",reference.path("softTags").toString());
+            assertEquals("[\"ballad\"]",reference.path("inferredTags").toString());
+            // 2: 직접 말한 장르는 필수로 남는다.
+            JsonNode direct=ask.apply("{\"tags\":[\"ballad\"],\"excludedTags\":[\"calm\"],\"language\":\"ko\",\"languageSpecified\":true,\"inferredTags\":[]}",
+                    Map.of("prompt","발라드로 바꿔줘","history",List.of(first),"previousConditions",afterFirst));
+            assertEquals("[\"ballad\"]",direct.path("hardTags").toString());
+            // 3: 참고 곡과 함께 직접 말한 장르도 필수다.
+            JsonNode mixed=ask.apply("{\"tags\":[\"ballad\"],\"excludedTags\":[],\"language\":\"\",\"languageSpecified\":false,\"inferredTags\":[]}",
+                    Map.of("prompt","밤편지 같은 발라드"));
+            assertEquals("[\"ballad\"]",mixed.path("hardTags").toString());
+            // 3′: AI가 직접 말한 장르를 inferredTags 에도 넣으면 추론에서 빠진다(Conversation 의 직접 태그 규칙).
+            JsonNode both=ask.apply("{\"tags\":[\"ballad\"],\"excludedTags\":[],\"language\":\"\",\"languageSpecified\":false,\"inferredTags\":[\"ballad\"]}",
+                    Map.of("prompt","밤편지 같은 발라드"));
+            assertEquals("[\"ballad\"]",both.path("hardTags").toString());assertEquals("[]",both.path("inferredTags").toString());
+            // 4: 참고 곡이 없는 문장은 후처리가 건드리지 않는다.
+            JsonNode noReference=ask.apply("{\"tags\":[\"pop\"],\"excludedTags\":[\"calm\"],\"language\":\"ko\",\"languageSpecified\":true,\"inferredTags\":[]}",
+                    Map.of("prompt",first));
+            assertEquals("[\"pop\"]",noReference.path("hardTags").toString());assertEquals("[]",noReference.path("inferredTags").toString());
+            // 5: 직접 말한 연주곡·피아노는 그대로 필수다.
+            JsonNode study=ask.apply("{\"tags\":[\"study\",\"piano\",\"instrumental\"],\"excludedTags\":[],\"language\":\"none\",\"languageSpecified\":true,\"inferredTags\":[]}",
+                    Map.of("prompt","공부할 때 들을 거 가사 없는 피아노곡"));
+            assertEquals(List.of("instrumental","piano"),sorted.apply(study.path("hardTags")));assertEquals("none",study.path("language").asString());
+            // 6: 동적 장르는 사전이 읽지 못해도 옮기지 않는다.
+            JsonNode dynamic=ask.apply("{\"tags\":[\"genre:indie_folk\"],\"excludedTags\":[],\"language\":\"\",\"languageSpecified\":false,\"inferredTags\":[]}",
+                    Map.of("prompt","밤편지 같은 인디 포크"));
+            assertEquals("[\"genre:indie_folk\"]",dynamic.path("hardTags").toString());
+            // 7: 이전 턴에 직접 말한 장르를 AI가 이번 추론에 넣어도 필수로 남는다.
+            JsonNode earlier=ask.apply("{\"tags\":[\"ballad\"],\"excludedTags\":[],\"language\":\"\",\"languageSpecified\":false,\"inferredTags\":[\"ballad\"]}",
+                    Map.of("prompt","밤편지 같은 느낌으로 바꿔줘","history",List.of("발라드로 찾아줘"),"previousConditions",Map.of("tags",List.of("ballad"),"excludedTags",List.of(),"language","")));
+            assertEquals("[\"ballad\"]",earlier.path("hardTags").toString());assertEquals("[]",earlier.path("inferredTags").toString());
+        } finally {stub.stop(0);}
+    }
 }

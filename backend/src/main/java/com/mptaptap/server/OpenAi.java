@@ -222,9 +222,9 @@ public class OpenAi {
                     ?Conversation.parse(previousConditions,history,prompt)
                     :Conversation.parse(interpreted,List.of(),prompt);
             // 부정 표현이 결과에서 사라졌다면 AI 해석을 유지한다.
-            if(missingNegation(interpreted,known))return settled(interpreted,previousConditions,history,prompt);
+            if(missingNegation(interpreted,known))return settled(interpreted,previousConditions,history,prompt,rawTags,rawInferred);
             affected(known,interpreted);
-            return settled(known,previousConditions,history,prompt);
+            return settled(known,previousConditions,history,prompt,rawTags,rawInferred);
         }
         // The model already interpreted reset; replay explicit overrides without erasing its new semantic tags.
         String explicit=prompt.replaceAll("(?i)(처음부터|새로 시작|조건 초기화|start over|reset)","").trim();
@@ -235,15 +235,16 @@ public class OpenAi {
         if(interpretedGenres.stream().anyMatch(value->value.startsWith("genre:"))){resolved.tags.removeIf(Recommender::genre);resolved.tags.addAll(interpretedGenres);}
         if(unlisted&&!resolved.tags.contains("unsupported_genre"))resolved.tags.add("unsupported_genre");
         affected(resolved,interpreted);
-        return settled(Recommender.validate(resolved),previousConditions,history,prompt);
+        return settled(Recommender.validate(resolved),previousConditions,history,prompt,rawTags,rawInferred);
     }
 
     /**
      * 모든 반환 경로의 마무리. AI 응답에는 지역이 없으므로 지역 표시는 사전 규칙으로만 정한다.
      * 이어받기·덮어쓰기·"말고"·"상관없이" 해제·처음부터 초기화가 core 와 같게 동작한다.
      */
-    private static Recommender.Conditions settled(Recommender.Conditions target,Recommender.Conditions previousConditions,List<String> history,String prompt) {
-        Recommender.Conditions result=inferred(target,previousConditions,prompt);
+    private static Recommender.Conditions settled(Recommender.Conditions target,Recommender.Conditions previousConditions,List<String> history,String prompt,
+            List<String> rawTags,List<String> rawInferred) {
+        Recommender.Conditions result=inferred(target,previousConditions,history,prompt,rawTags,rawInferred);
         Recommender.Conditions direct=Conversation.parse(previousConditions,history,prompt);
         result.origin=direct.origin;
         // 연대도 직접 말한 표현만 조건이 된다. AI 응답에는 연대 칸이 없다.
@@ -268,14 +269,42 @@ public class OpenAi {
             +", language="+(Recommender.validLanguage(language)?language:"<invalid>")+", languageSpecified="+languageSpecified+", excludedArtists="+excludedArtists;
     }
 
+    /**
+     * 이번 턴에 참고 곡·가수가 있는가: (a) AI가 inferredTags 를 냈거나 (b) 같은·처럼·스타일 바로 앞 말을 사전이 못 읽었다.
+     * 누락: "BTS 노래 같은"처럼 앞말이 사전이 지우는 일반어이고 AI도 inferredTags 를 비우면 놓친다.
+     * 오탐: "카페 같은 느낌"처럼 곡이 아닌 말을 사전이 못 읽으면 참고 곡으로 본다.
+     * 오탐이어도 사용자가 말하지 않은 사전 장르가 필수에서 선호로 내려갈 뿐이라 결과가 좁아지지는 않는다.
+     */
+    private static boolean styleReference(String prompt,List<String> rawInferred) {
+        if(!rawInferred.isEmpty())return true;
+        String input=Normalizer.normalize(prompt,Normalizer.Form.NFKC).toLowerCase(Locale.ROOT);
+        for(String word:Recommender.parse(prompt).unread)
+            if(word.matches(".+(?:같은|처럼|스타일).*")||input.matches("(?s).*"+java.util.regex.Pattern.quote(word)+"\\s*(?:같은|처럼|스타일).*"))return true;
+        return false;
+    }
+
     private static boolean decadeGenre(String tag){return tag!=null&&tag.matches("genre:(?:.*[_-])?[0-9]{2,4}s(?:[_-].*)?");}
 
-    /** AI가 이전 턴의 추론 값을 tags 로 옮겨도, 사용자가 이번에 직접 말하지 않았다면 선호로 남긴다. */
-    private static Recommender.Conditions inferred(Recommender.Conditions target,Recommender.Conditions previousConditions,String prompt) {
-        if(previousConditions==null||previousConditions.inferredTags==null)return target;
-        List<String> direct=Recommender.parse(prompt).tags;
-        boolean changed=false;
-        for(String tag:previousConditions.inferredTags)
+    /**
+     * 참고 곡에서 추론한 값은 AI가 tags 로 내도, 사용자가 직접 말하지 않았다면 선호로 남긴다.
+     * 후보는 이전 턴의 inferredTags 와, 참고 곡이 있는 턴에서 AI가 tags 에만 넣은 사전 장르·연주곡이다.
+     * 동적 장르(genre:)는 직접 말해도 사전이 읽지 못하므로 옮기지 않는다. 분위기는 원래 선호라 옮길 필요가 없다.
+     * 이전 턴에 직접 말한 태그(이전 턴의 추론이 아닌 tags)는 AI가 inferredTags 에 넣어도 빼서 필수로 남긴다.
+     * 이번 문장에서 직접 말한 태그는 Conversation.parse 가 이미 inferredTags 에서 뺀다.
+     */
+    private static Recommender.Conditions inferred(Recommender.Conditions target,Recommender.Conditions previousConditions,List<String> history,String prompt,
+            List<String> rawTags,List<String> rawInferred) {
+        List<String> direct=new ArrayList<>(Recommender.parse(prompt).tags);
+        if(history!=null)for(String request:history)direct.addAll(Recommender.parse(request).tags);
+        List<String> previousInferred=previousConditions==null||previousConditions.inferredTags==null?List.of():previousConditions.inferredTags;
+        List<String> previousDirect=previousConditions==null||previousConditions.tags==null?List.of()
+                :previousConditions.tags.stream().filter(tag->!previousInferred.contains(tag)).toList();
+        List<String> candidates=new ArrayList<>(previousInferred);
+        if(styleReference(prompt,rawInferred))for(String tag:rawTags)
+            if(!rawInferred.contains(tag)&&!previousDirect.contains(tag)&&(tag.equals("instrumental")||Recommender.GENRES.contains(tag)&&!tag.equals("unsupported_genre")))
+                candidates.add(tag);
+        boolean changed=target.inferredTags.removeIf(previousDirect::contains);
+        for(String tag:candidates)
             if(target.tags.contains(tag)&&!direct.contains(tag)&&!target.inferredTags.contains(tag)){target.inferredTags.add(tag);changed=true;}
         if(!changed)return target;
         target.hardTags=null;target.softTags=null;
