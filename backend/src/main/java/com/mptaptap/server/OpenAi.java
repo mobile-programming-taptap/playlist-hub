@@ -85,7 +85,7 @@ public class OpenAi {
                             "description","Official artist credit, in its original release spelling, that the user directly asked to exclude."),
                         "description","Only artists the user directly asked to exclude, in their original credit spelling, such as BTS 말고 or 아이유 빼줘. Never infer an exclusion from a genre, a mood, a language or a negative mood statement. Keep an exclusion from the snapshot when the latest request does not change or reset it. Empty array when none."),
                     "inferredTags", Map.of("type","array","maxItems",16,"items",tag,
-                        "description","Genres and traits inferred only from a song or artist given as a style reference, such as 밤편지 같은 느낌. Preferences, not requirements. Never include a trait that is excluded. Empty array when none.")));
+                        "description","Genres and traits inferred only from a song or artist given as a style reference, such as 밤편지 같은 느낌. Preferences, not requirements. Omit only tags that are in excludedTags; keep the reference's other genres and traits. Empty array only when no style reference is given.")));
         List<String> required = new ArrayList<>(List.of("tags", "excludedTags", "language", "languageSpecified","excludedArtists","inferredTags"));
         String candidateInstructions="";
         if(includeCandidates) {
@@ -129,7 +129,8 @@ public class OpenAi {
                     "A song or artist given as a style reference, such as 밤편지 같은 느낌 or X 같은 노래, is a song name, not a genre, mood or time-of-day request. Put genres and traits inferred from it only in inferredTags, never in tags. " +
                     "Decades such as 90년대, 1990s or 80~2000년대 are read by the app outside this schema: never encode a decade or era as a genre or any tag. " +
                     "When the latest request or the snapshot decades name decades, suggest only recordings first released in one of those decades. " +
-                    "Explicit exclusions win over a reference: never put an excluded trait, or one the user said to avoid, in inferredTags. Keep snapshot inferredTags unless the latest request changes or resets them; a genre the user names directly goes in tags. " +
+                    "Only when a song or artist is given as a style reference, always infer its characteristic genres and traits into inferredTags. Drop only the inferred tags that are themselves in excludedTags; keep every other inferred tag. " +
+                    "For example, with calm excluded, 밤편지 같은 느낌 drops calm but keeps ballad or sad. An exclusion never empties inferredTags by itself. Keep snapshot inferredTags unless the latest request changes or resets them; a genre the user names directly goes in tags. " +
                     "Use excludedTags only for directly requested negatives or unchanged explicit snapshot exclusions; never expand only or a requested genre into a complement of other tags. " +
                     "Keep explicitly requested genres even when this catalogue has no matching songs; never replace it with a different genre or silently remove it. " +
                     "J-pop/제이팝 is jpop; Japanese lyrics use language ja. City pop/시티팝 is citypop, bossa nova/보사노바 is bossa_nova. " +
