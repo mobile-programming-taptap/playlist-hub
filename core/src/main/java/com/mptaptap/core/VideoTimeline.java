@@ -9,10 +9,12 @@ import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/** Parses only a description explicitly supplied by the user; no catalogue or AI access. */
+/** Parses timestamped track lists from video descriptions, comments, or user input. */
 public final class VideoTimeline {
     public static final int MAX_ENTRIES=100, MAX_DESCRIPTION_CHARS=65536, MAX_ROW_CHARS=2000;
     private static final Pattern TIME=Pattern.compile("(?<![\\d:])\\d{1,4}(?:[\\p{Z}\\t]*:[\\p{Z}\\t]*\\d{1,3}){1,3}(?![\\d:])");
+    private static final Pattern ROW_PREFIX=Pattern.compile("[\\[({#*•·-]*\\s*(?:\\d{1,3}[.)]?)?\\s*");
+    private static final Pattern RANGE_SEPARATOR=Pattern.compile("[\\p{Z}\\s\\]}):]*[~～∼–—-][\\p{Z}\\s]*");
     private static final Pattern SEPARATOR=Pattern.compile("\\s*[–—|]\\s*|\\s+[-/]\\s+|\\s+(?i:by)\\s+");
     private static final Pattern TITLE_FIRST=Pattern.compile("(?i)^(?:title|곡명|제목)\\s*:\\s*(.+?)\\s*[|;/]\\s*(?:artist|아티스트|가수)\\s*:\\s*(.+)$");
     private static final Pattern ARTIST_FIRST=Pattern.compile("(?i)^(?:artist|아티스트|가수)\\s*:\\s*(.+?)\\s*[|;/]\\s*(?:title|곡명|제목)\\s*:\\s*(.+)$");
@@ -31,7 +33,13 @@ public final class VideoTimeline {
     }
 
     public static Result parse(String description,String videoId) { return parse(description,videoId,-1); }
+    public static Result parseAutomatic(String description,String videoId,int durationSeconds) {
+        return parse(description,videoId,durationSeconds,true);
+    }
     public static Result parse(String description,String videoId,int durationSeconds) {
+        return parse(description,videoId,durationSeconds,false);
+    }
+    private static Result parse(String description,String videoId,int durationSeconds,boolean automatic) {
         if(description==null||description.length()>MAX_DESCRIPTION_CHARS||durationSeconds< -1
                 ||videoId==null||(!videoId.isEmpty()&&!videoId.matches("[A-Za-z0-9_-]{11}")))
             throw new IllegalArgumentException("영상 ID와 설명 길이를 확인해 주세요.");
@@ -39,19 +47,30 @@ public final class VideoTimeline {
         Result result=new Result(); Map<Integer,Entry> times=new HashMap<>(); Map<String,Entry> songs=new HashMap<>();
         int lineNumber=0, previous=-1;
         for(String row:description.split("\\r\\n|\\r|\\n",-1)) {
-            lineNumber++; if(row.length()>MAX_ROW_CHARS)throw new IllegalArgumentException("설명 한 줄은 2000자까지 입력할 수 있어요.");
+            lineNumber++; if(!automatic&&row.length()>MAX_ROW_CHARS)throw new IllegalArgumentException("설명 한 줄은 2000자까지 입력할 수 있어요.");
             String normalized=Normalizer.normalize(row,Normalizer.Form.NFKC);
             Matcher time=TIME.matcher(normalized); if(!time.find())continue;
-            if(result.entries.size()==MAX_ENTRIES) { result.truncated=true; break; }
+            int begin=time.start(),end=time.end();
+            String before=normalized.substring(0,begin).trim();
+            if(ROW_PREFIX.matcher(before).matches()&&!(begin>0&&normalized.charAt(begin-1)=='-'))before="";
+            if(automatic&&(!before.isEmpty()||row.length()>MAX_ROW_CHARS))continue;
             Entry entry=new Entry();entry.sourceRow=row;entry.sourceLine=lineNumber;entry.timestamp=time.group();
-            int begin=time.start(),end=time.end(); entry.seconds=seconds(entry.timestamp);entry.startSeconds=entry.seconds;
+            entry.seconds=seconds(entry.timestamp);entry.startSeconds=entry.seconds;
             if(begin>0&&normalized.charAt(begin-1)=='-')entry.seconds=entry.startSeconds=-1;
             if(entry.seconds<0)entry.review("시간 형식 확인");
-            if(time.find())entry.review("한 줄에 여러 시간 표시");
-            String before=normalized.substring(0,begin).trim();
-            if(before.matches("[\\[({#*•·-]*\\s*(?:\\d{1,3}[.)]?)?\\s*"))before="";
+            if(time.find()) {
+                if(RANGE_SEPARATOR.matcher(normalized.substring(end,time.start())).matches()) {
+                    int rangeEnd=seconds(time.group());
+                    if(rangeEnd>entry.seconds&&entry.seconds>=0&&(durationSeconds<0||rangeEnd<=durationSeconds))entry.endSeconds=rangeEnd;
+                    else entry.review("종료 시간 확인");
+                    end=time.end();
+                    if(time.find())entry.review("한 줄에 여러 시간 표시");
+                } else entry.review("한 줄에 여러 시간 표시");
+            }
             String after=normalized.substring(end).replaceFirst("^[\\p{Z}\\s\\]})|:;,-]+","").trim();
-            String body=spaces(before+" "+after); parseSong(entry,body);
+            parseSong(entry,spaces(before+" "+after));
+            if(automatic&&(entry.title.isEmpty()||entry.seconds<=previous||durationSeconds>=0&&entry.seconds>=durationSeconds))continue;
+            if(result.entries.size()==MAX_ENTRIES) { result.truncated=true; break; }
             if(entry.title.isEmpty())entry.review("곡명 누락");
             if(entry.artist.isEmpty())entry.review("아티스트 누락");
             if(entry.seconds>=0) {
@@ -70,7 +89,7 @@ public final class VideoTimeline {
         }
         for(int i=0;i<result.entries.size();i++) {
             Entry current=result.entries.get(i);
-            if(current.seconds<0)continue;
+            if(current.seconds<0||current.endSeconds>=0)continue;
             int next=i+1<result.entries.size()?result.entries.get(i+1).seconds:result.truncated?-1:durationSeconds;
             if(next>current.seconds&&(durationSeconds<0||next<=durationSeconds))current.endSeconds=next;
         }

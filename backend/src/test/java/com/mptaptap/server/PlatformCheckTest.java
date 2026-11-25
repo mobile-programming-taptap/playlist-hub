@@ -450,15 +450,25 @@ class PlatformCheckTest {
     @Test void commentsProvideTimelineOnlyWhenDescriptionHasNone() throws Exception {
         try(Fixture f=new Fixture()) {
             String url="https://www.youtube.com/watch?v="+VIDEO;
-            f.videoDescription="This is a playlist";
-            f.comments=List.of(comment("1:00 Nice moment"),comment("0:00 Artist - First\n1:00 Artist - Second\n2:00 Artist - Third"),comment("0:10 Other - One\n1:20 Other - Two"));
+            f.videoDescription="광고 제거 2:59 리플레이 버튼을 눌러주세요";
+            f.comments=List.of(comment("1:00 Nice moment"),comment("광고 제거 2:59\n00:00:00 ~ 00:00:55 Artist - First\n1:00 Artist - Second\n2:00 Artist - Third"),comment("0:10 Other - One\n1:20 Other - Two"));
             var result=f.api.conversion(f.auth,new PlatformApi.Conversion(null,url,null,null));
             assertEquals("official_comment",result.get("metadataMode"));assertEquals(3,rows(result,"entries").size());assertEquals("First",rows(result,"entries").get(0).get("title"));
+            assertEquals(55,((Number)rows(result,"entries").get(0).get("endSeconds")).intValue());
+            String id=(String)result.get("id");f.api.saveImport(f.auth,id,new PlatformApi.SaveImport("Comment playlist",null,null));
+            assertEquals(3,rows(f.users.playlist(f.owner,id),"items").size());
             assertEquals(1,f.commentReads.get());assertTrue(((String)result.get("notice")).contains("댓글"));
-            f.videoDescription="0:00 Artist - Description";
+            f.videoDescription="0:00 Artist - Description\n1:00 Title only";
             result=f.api.conversion(f.auth,new PlatformApi.Conversion(null,url,null,null));assertEquals("official_metadata",result.get("metadataMode"));assertEquals(1,f.commentReads.get());
             f.videoDescription="No timeline";f.comments=List.of(comment("0:30 I love this"));
-            result=f.api.conversion(f.auth,new PlatformApi.Conversion(null,url,null,null));assertTrue(rows(result,"entries").isEmpty());
+            result=f.api.conversion(f.auth,new PlatformApi.Conversion(null,url,null,null));assertTrue(rows(result,"entries").isEmpty());assertEquals("해당 영상은 변환할 수 없음",result.get("notice"));
+            f.laterComments=List.of(comment("0:00 Artist - Later one\n1:30 Artist - Later two"));
+            result=f.api.conversion(f.auth,new PlatformApi.Conversion(null,url,null,null));
+            assertEquals("Later one",rows(result,"entries").get(0).get("title"));
+            f.laterComments=List.of();f.commentsDisabled=true;
+            result=f.api.conversion(f.auth,new PlatformApi.Conversion(null,url,null,null));
+            assertEquals("해당 영상은 변환할 수 없음",result.get("notice"));
+            f.commentsDisabled=false;
             f.comments="invalid response";result=f.api.conversion(f.auth,new PlatformApi.Conversion(null,url,null,null));assertTrue(((String)result.get("notice")).contains("댓글을 확인하지 못했어요"));
         }
     }
@@ -613,7 +623,7 @@ class PlatformCheckTest {
         final java.util.concurrent.CountDownLatch videoStarted=new java.util.concurrent.CountDownLatch(1),releaseVideo=new java.util.concurrent.CountDownLatch(1),exchangeStarted=new java.util.concurrent.CountDownLatch(1),releaseExchange=new java.util.concurrent.CountDownLatch(1),createStarted=new java.util.concurrent.CountDownLatch(1),releaseCreate=new java.util.concurrent.CountDownLatch(1);
         final JdbcTemplate db;final Store users;final PlatformStore store;final PlatformClient remote;final PlatformApi api;
         final String owner,auth,otherAuth,testSchema;final JdbcTemplate schemaOwner;String challenge="";volatile String marker="";
-        volatile String videoDescription="0:00 Artist - Song one\n1:10 Artist - Song two";volatile Object comments=List.of();final AtomicInteger commentReads=new AtomicInteger();
+        volatile String videoDescription="0:00 Artist - Song one\n1:10 Artist - Song two";volatile Object comments=List.of();volatile List<Object> laterComments=List.of();volatile boolean commentsDisabled;final AtomicInteger commentReads=new AtomicInteger();
         Fixture() throws Exception {this(null);}
         Fixture(Runnable beforeCommit) throws Exception {
             String configured=System.getenv("TAPTAP_TEST_DATABASE_URL");boolean postgres=configured!=null&&!configured.isBlank();
@@ -674,7 +684,17 @@ class PlatformCheckTest {
                 else if(path.equals("/youtube/playlists")){String query=exchange.getRequestURI().getRawQuery();if(query.contains("id=PLTEST")||browsePlaylists.get()&&query.contains("id=PLSECOND"))response=Map.of("items",List.of(Map.of("id",query.contains("id=PLSECOND")?"PLSECOND":"PLTEST","snippet",Map.of("title","YouTube own","channelId","channel-owner"))));else if(marker.isEmpty())response=Map.of("items",List.of());else if(query.contains("pageToken=")){markerPages.incrementAndGet();response=Map.of("items",List.of(Map.of("id","PLTARGET","snippet",Map.of("description",marker))));}else response=Map.of("items",List.of(),"nextPageToken","page-two");}
                 else if(path.equals("/youtube/playlistItems")&&method.equals("POST")){assertEquals("PLTARGET",value.path("snippet").path("playlistId").asString());assertEquals(VIDEO,value.path("snippet").path("resourceId").path("videoId").asString());remoteItems.add(VIDEO);if(adds.incrementAndGet()==1){lost(exchange);return;}response=Map.of("id","added");}
                 else if(path.equals("/youtube/playlistItems")){boolean source=exchange.getRequestURI().getRawQuery().contains("playlistId=PLTEST")||browsePlaylists.get()&&exchange.getRequestURI().getRawQuery().contains("playlistId=PLSECOND");List<Object> overridden=source?youtubeSourceRows.get():youtubeTargetRows.get();int count=source?2:remoteItems.size();List<Object> items=new ArrayList<>();for(int i=0;i<count;i++)items.add(youtubeRow(i,VIDEO,"Song","Artist"));response=Map.of("items",overridden==null?items:overridden);}
-                else if(path.equals("/youtube/commentThreads")){commentReads.incrementAndGet();assertTrue(exchange.getRequestURI().getRawQuery().contains("textFormat=plainText"));response=Map.of("items",comments);}
+                else if(path.equals("/youtube/commentThreads")){
+                    commentReads.incrementAndGet();assertTrue(exchange.getRequestURI().getRawQuery().contains("textFormat=plainText"));
+                    if(commentsDisabled){
+                        byte[] error=json.writeValueAsBytes(Map.of("error",Map.of("errors",List.of(Map.of("reason","commentsDisabled")))));
+                        exchange.sendResponseHeaders(403,error.length);exchange.getResponseBody().write(error);return;
+                    }
+                    String cursor=query(exchange.getRequestURI(),"pageToken");
+                    if(!cursor.isEmpty()){
+                        assertEquals("c".repeat(1084)+"&results=bad",cursor);response=Map.of("items",laterComments);
+                    }else response=laterComments.isEmpty()?Map.of("items",comments):Map.of("items",comments,"nextPageToken","c".repeat(1084)+"&results=bad");
+                }
                 else if(path.equals("/youtube/videos")){videos.incrementAndGet();if(stallVideo.get()){exchange.sendResponseHeaders(200,64);exchange.getResponseBody().write('{');exchange.getResponseBody().flush();videoStarted.countDown();releaseVideo.await(25,java.util.concurrent.TimeUnit.SECONDS);return;}response=Map.of("items",List.of(Map.of("id",VIDEO,"snippet",Map.of("title","Official video","description",videoDescription),"contentDetails",Map.of("duration","PT3M"))));}
                 else throw new AssertionError("Unexpected mocked provider request: "+method+" "+path);
                 byte[] result=json.writeValueAsBytes(response);exchange.getResponseHeaders().set("Content-Type","application/json");exchange.sendResponseHeaders(200,result.length);exchange.getResponseBody().write(result);

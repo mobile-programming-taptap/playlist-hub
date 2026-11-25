@@ -507,6 +507,41 @@ public class HubFlowCheckTest {
         });
     }
 
+    @Test public void timelineCanSwapSongAndArtistBeforeSaving() throws Exception {
+        AtomicReference<String> importId=new AtomicReference<>();
+        AtomicReference<JSONArray> savedRows=new AtomicReference<>();
+        String url="https://www.youtube.com/watch?v=aaaaaaaaaa1";
+        hubFixture((method,path,body,status)->{
+            if(path.equals("/conversions/youtube")){
+                importId.set(body.getString("id"));
+                JSONArray entries=new JSONArray();
+                entries.put(new JSONObject().put("sourceIndex",0).put("seconds",0).put("timestamp","00:00")
+                    .put("title","Maroon 5").put("artist","Payphone")
+                    .put("reviewReasons",new JSONArray().put("아티스트·곡명 순서 확인")));
+                entries.put(new JSONObject().put("sourceIndex",1).put("seconds",227).put("timestamp","03:47")
+                    .put("title","제목만 있는 곡").put("artist",""));
+                return new JSONObject().put("id",importId.get()).put("videoId","aaaaaaaaaa1")
+                    .put("title","검사 목록").put("durationSeconds",800).put("entries",entries);
+            }
+            if(path.equals("/imports/playlists/"+importId.get()+"/save")){
+                savedRows.set(body.getJSONArray("entries"));
+                return new JSONObject().put("id",importId.get()).put("title",body.getString("title")).put("size",2).put("items",new JSONArray());
+            }
+            return null;
+        },app->{
+            onView(withHint("YouTube 영상 주소")).perform(scrollTo(),replaceText(url),closeSoftKeyboard());
+            onView(withText("영상에서 곡 목록 가져오기")).perform(scrollTo(),click());ready(app);
+            onView(withText("곡명과 아티스트 순서 바꾸기")).perform(scrollTo(),click());
+            onView(withText("Payphone")).perform(scrollTo()).check(matches(isDisplayed()));
+            onView(saveButton()).perform(scrollTo(),click());ready(app);
+            assertNotNull(savedRows.get());
+            assertEquals("Payphone",savedRows.get().optJSONObject(0).optString("title"));
+            assertEquals("Maroon 5",savedRows.get().optJSONObject(0).optString("artist"));
+            assertEquals("제목만 있는 곡",savedRows.get().optJSONObject(1).optString("title"));
+            assertEquals(227,savedRows.get().optJSONObject(1).optInt("seconds"));
+        });
+    }
+
     @Test public void titleOnlyTimelineSavesAndFindsCandidatesInTheExportScreen() throws Exception {
         AtomicReference<String> id=new AtomicReference<>();AtomicInteger saves=new AtomicInteger(),matches=new AtomicInteger();AtomicReference<JSONArray> savedEntries=new AtomicReference<>();
         String url="https://www.youtube.com/watch?v=0Y41XMkfROU";
@@ -563,7 +598,7 @@ public class HubFlowCheckTest {
         Map<String,?> oldSettings=settings.getAll(),oldCredentials=credentials.getAll();
         AtomicBoolean running=new AtomicBoolean(true);AtomicReference<Throwable> serverFailure=new AtomicReference<>();
         AtomicInteger automatic=new AtomicInteger(),manual=new AtomicInteger();AtomicReference<String> emptyId=new AtomicReference<>(),automaticId=new AtomicReference<>(),manualId=new AtomicReference<>();
-        String emptyUrl="https://www.youtube.com/watch?v=dQw4w9WgXcQ",url="https://www.youtube.com/watch?v=aaaaaaaaaa1",draft="00:00 검사 가수 - 직접 입력 곡",emptyNotice="설명에서 시간표를 찾지 못했어요. 직접 가진 시간표를 입력해 주세요.",failureMessage="자동 조회 검사 오류";
+        String emptyUrl="https://www.youtube.com/watch?v=dQw4w9WgXcQ",url="https://www.youtube.com/watch?v=aaaaaaaaaa1",draft="00:00 검사 가수 - 직접 입력 곡",emptyNotice="해당 영상은 변환할 수 없음",failureMessage="자동 조회 검사 오류";
         var worker=Executors.newSingleThreadExecutor();
         try(ServerSocket server=new ServerSocket(0,5,InetAddress.getByName("127.0.0.1"))) {
             server.setSoTimeout(500);String base="http://127.0.0.1:"+server.getLocalPort(),token=String.join("",java.util.Collections.nCopies(43,"T"));

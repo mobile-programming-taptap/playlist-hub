@@ -41,7 +41,9 @@ public class PlatformClient {
     public record PlaylistPage(String provider,List<PlaylistSummary> items,String nextCursor) {}
     static final class Failure extends RuntimeException {
         final int status;
-        Failure(int status) { super(status==429?"플랫폼 요청 한도에 도달했어요. 잠시 후 다시 시도해 주세요.":status==401?"플랫폼 계정을 다시 연결해 주세요.":status==403?"플랫폼이 이 작업을 허용하지 않았어요. 계정 권한과 앱의 이용 모드를 확인해 주세요.":"플랫폼 응답을 확인하지 못했어요. 상태를 확인한 뒤 다시 시도해 주세요.");this.status=status; }
+        final boolean commentsDisabled;
+        Failure(int status) { this(status,false); }
+        Failure(int status,boolean commentsDisabled) { super(status==429?"플랫폼 요청 한도에 도달했어요. 잠시 후 다시 시도해 주세요.":status==401?"플랫폼 계정을 다시 연결해 주세요.":status==403?"플랫폼이 이 작업을 허용하지 않았어요. 계정 권한과 앱의 이용 모드를 확인해 주세요.":"플랫폼 응답을 확인하지 못했어요. 상태를 확인한 뒤 다시 시도해 주세요.");this.status=status;this.commentsDisabled=commentsDisabled; }
     }
     private final ObjectMapper json;
     private final Map<String,String> config;
@@ -127,16 +129,23 @@ public class PlatformClient {
         catch(RuntimeException error){throw new Failure(502);}
         return new Video(id,row.path("snippet").path("title").asString(""),row.path("snippet").path("description").asString(""),duration,trackUrl("youtube",id));
     }
-    List<String> videoComments(String id,String token) {
+    record VideoComments(List<String> texts,String nextCursor) {}
+
+    VideoComments videoComments(String id,String token,String cursor) {
         validId("youtube",id);
-        JsonNode rows=youtubeLookup("/commentThreads?part=snippet&videoId="+id+"&maxResults=100&order=relevance&textFormat=plainText",token).path("items");
+        if(cursor.length()>4096||cursor.chars().anyMatch(c->c<33||c>126))throw new Failure(502);
+        String path="/commentThreads?part=snippet&videoId="+id+"&maxResults=100&order=relevance&textFormat=plainText";
+        JsonNode page=youtubeLookup(path+(cursor.isEmpty()?"":"&pageToken="+encode(cursor)),token);
+        JsonNode rows=page.path("items");
         if(!rows.isArray()||rows.size()>100)throw new Failure(502);
         List<String> comments=new ArrayList<>();
         for(JsonNode row:rows) {
             String comment=row.path("snippet").path("topLevelComment").path("snippet").path("textDisplay").asString("");
             if(!comment.isBlank()&&comment.length()<=com.mptaptap.core.VideoTimeline.MAX_DESCRIPTION_CHARS)comments.add(comment);
         }
-        return comments;
+        String next=page.path("nextPageToken").asString("");
+        if(!next.isEmpty()&&next.equals(cursor))throw new Failure(502);
+        return new VideoComments(comments,next);
     }
     Playback playback(String id,String token) {
         validId("youtube",id);
@@ -372,7 +381,18 @@ public class PlatformClient {
             try(var input=response.body()) {
                 byte[] bytes=input.readNBytes(2*1024*1024+1);
                 if(expired.get())throw new Failure(504);
-                if(response.statusCode()<200||response.statusCode()>=300)throw new Failure(response.statusCode());
+                if(response.statusCode()<200||response.statusCode()>=300) {
+                    boolean commentsDisabled=false;
+                    if(response.statusCode()==403&&request.build().uri().getPath().endsWith("/commentThreads")
+                            &&bytes.length>0&&bytes.length<=2*1024*1024) {
+                        try {
+                            JsonNode errorBody=json.readTree(bytes);
+                            if(errorBody!=null)for(JsonNode error:errorBody.path("error").path("errors"))
+                                if("commentsDisabled".equals(error.path("reason").asString()))commentsDisabled=true;
+                        }catch(tools.jackson.core.JacksonException ignored){}
+                    }
+                    throw new Failure(response.statusCode(),commentsDisabled);
+                }
                 if(bytes.length>2*1024*1024)throw new Failure(502);
                 return bytes.length==0?json.createObjectNode():json.readTree(bytes);
             }finally{timer.cancel(false);}

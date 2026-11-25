@@ -97,22 +97,31 @@ public class PlatformApi {
         if(store.exists(u,id,"import")){Map<String,Object> existing=store.document(u,id,"import");if(!fingerprint.equals(existing.get("requestFingerprint")))throw new ResponseStatusException(HttpStatus.CONFLICT,"같은 작업 ID로 원래 변환을 다시 시도해 주세요.");return existing;}String title="사용자 타임라인",description=body.timeline(),mode="provided_timeline";int duration=body.durationSeconds()==null?-1:body.durationSeconds();
         String access=null;boolean commentLookupFailed=false;
         if(description==null){if(remote.setting("YOUTUBE_API_KEY").isBlank())access=token(u,"youtube").accessToken();PlatformClient.Video metadata=remote.video(video,access);title=metadata.title();description=metadata.description();duration=metadata.durationSeconds();mode="official_metadata";}
-        if(duration<-1||duration>21600)throw new IllegalArgumentException("영상 길이는 최대 6시간까지 지원해요.");VideoTimeline.Result parsed=VideoTimeline.parse(description,video,duration);
-        if(mode.equals("official_metadata")&&parsed.entries.isEmpty()) {
+        if(duration<-1||duration>21600)throw new IllegalArgumentException("영상 길이는 최대 6시간까지 지원해요.");
+        boolean automatic=body.timeline()==null;
+        VideoTimeline.Result parsed=automatic?VideoTimeline.parseAutomatic(description,video,duration):VideoTimeline.parse(description,video,duration);
+        if(automatic&&parsed.entries.size()<2) {
+            parsed=new VideoTimeline.Result();
             try {
-                int best=1;
-                for(String comment:remote.videoComments(video,access)) {
-                    try {
-                        VideoTimeline.Result candidate=VideoTimeline.parse(comment,video,duration);
-                        int valid=0;for(VideoTimeline.Entry row:candidate.entries)if(row.seconds>=0&&!row.title.isBlank()&&(duration<=0||row.seconds<duration))valid++;
-                        if(valid>best){parsed=candidate;best=valid;mode="official_comment";}
-                    }catch(IllegalArgumentException ignored){}
+                String cursor="";
+                // shortcut: scan up to 200 top-level comments; use an async job if deeper searches are needed.
+                for(int page=0;page<2;page++){
+                    PlatformClient.VideoComments comments=remote.videoComments(video,access,cursor);
+                    for(String comment:comments.texts()) {
+                        VideoTimeline.Result candidate=VideoTimeline.parseAutomatic(comment,video,duration);
+                        if(candidate.entries.size()>=2&&candidate.entries.size()>parsed.entries.size()){
+                            parsed=candidate;mode="official_comment";
+                        }
+                    }
+                    cursor=comments.nextCursor();
+                    if(!parsed.entries.isEmpty()||cursor.isEmpty())break;
                 }
-            }catch(PlatformClient.Failure|ResponseStatusException error){commentLookupFailed=true;}
+            }catch(PlatformClient.Failure error){commentLookupFailed=!error.commentsDisabled;}
+            catch(ResponseStatusException error){commentLookupFailed=true;}
         }
         List<Map<String,Object>> entries=new ArrayList<>(),items=new ArrayList<>();
         for(int i=0;i<parsed.entries.size();i++){VideoTimeline.Entry entry=parsed.entries.get(i);Map<String,Object> row=map(entry);row.put("sourceIndex",i);entries.add(row);PlatformTrack track=new PlatformTrack();track.platform="youtube";track.externalId=video;track.title=entry.title;track.artist=entry.artist;track.sourceUrl=entry.sourceUrl;track.durationMs=0;Map<String,Object> item=new LinkedHashMap<>();item.put("sourceIndex",i);item.put("track",map(track));item.put("sourceRow",entry.sourceRow);item.put("timestamp",entry.seconds);item.put("sourceType","timeline");item.put("videoDurationSeconds",Math.max(0,duration));item.put("segmentDurationMs",entry.endSeconds>entry.startSeconds&&entry.startSeconds>=0?(entry.endSeconds-entry.startSeconds)*1000L:0);item.put("recommendationTrackId",null);items.add(item);}
-        Map<String,Object> result=new LinkedHashMap<>();result.putAll(Map.of("id",id,"provider","youtube","videoId",video,"externalPlaylistId","","title",title,"durationSeconds",duration,"sourceUrl",body.url(),"entries",entries,"truncated",parsed.truncated,"metadataMode",mode));result.put("items",items);result.put("notice",entries.isEmpty()?(commentLookupFailed?"영상 댓글을 확인하지 못했어요. 다시 시도하거나 시간표를 직접 입력해 주세요.":"영상 설명과 댓글에서 시간표를 찾지 못했어요. 직접 입력할 수 있어요."):(mode.equals("official_comment")?"댓글에서 시간표를 찾았어요. 곡명·아티스트·시간을 확인해 저장해 주세요.":"곡명·아티스트·시간을 확인해 저장해 주세요. 음원 분리나 곡 추측은 하지 않아요."));result.put("saved",false);result.put("requestFingerprint",fingerprint);store.create(u,id,"import","youtube",result);return result;
+        Map<String,Object> result=new LinkedHashMap<>();result.putAll(Map.of("id",id,"provider","youtube","videoId",video,"externalPlaylistId","","title",title,"durationSeconds",duration,"sourceUrl",body.url(),"entries",entries,"truncated",parsed.truncated,"metadataMode",mode));result.put("items",items);result.put("notice",entries.isEmpty()?(commentLookupFailed?"영상 댓글을 확인하지 못했어요. 다시 시도하거나 시간표를 직접 입력해 주세요.":"해당 영상은 변환할 수 없음"):(mode.equals("official_comment")?"댓글에서 시간표를 찾았어요. 곡명·아티스트·시간을 확인해 저장해 주세요.":"곡명·아티스트·시간을 확인해 저장해 주세요. 음원 분리나 곡 추측은 하지 않아요."));result.put("saved",false);result.put("requestFingerprint",fingerprint);if(!entries.isEmpty())store.create(u,id,"import","youtube",result);return result;
     });}
     public record ImportBody(String id,String provider,String url,String title){}
     @PostMapping("/imports/playlists") public Map<String,Object> importPlaylist(@RequestHeader(value="Authorization",required=false)String auth,@RequestBody ImportBody body){return withOwner(auth,u->{

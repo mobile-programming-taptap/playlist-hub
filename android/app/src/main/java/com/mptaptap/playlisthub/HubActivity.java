@@ -530,6 +530,30 @@ public final class HubActivity extends AppCompatActivity {
         if(!imported.optString("notice").isEmpty())paragraph(imported.optString("notice"));
         field(content,"새 목록 이름","listTitle",80,false);
         JSONArray entries=previewEntries(imported);boolean timeline=imported.has("entries");
+        if(timeline) {
+            List<JSONObject> ambiguous=new ArrayList<>();
+            for(int i=0;i<entries.length();i++) {
+                JSONObject row=entries.optJSONObject(i);
+                if(row==null)continue;
+                JSONArray reasons=row.optJSONArray("reviewReasons");
+                if(reasons==null)continue;
+                for(int j=0;j<reasons.length();j++){
+                    if("아티스트·곡명 순서 확인".equals(reasons.optString(j))){
+                        ambiguous.add(edit(row.optInt("sourceIndex",i),row));
+                        break;
+                    }
+                }
+            }
+            if(!ambiguous.isEmpty())addButton(content,"곡명과 아티스트 순서 바꾸기",()->{
+                for(JSONObject row:ambiguous){
+                    String title=row.optString("title");
+                    set(row,"title",row.optString("artist"));
+                    set(row,"artist",title);
+                    set(row,"edited",true);
+                }
+                render();
+            });
+        }
         List<CheckBox> includes=new ArrayList<>();CheckBox all=new CheckBox(this);all.setText("전체 선택");TapTapUi.checkbox(all);controls.add(all);content.addView(all);
         MaterialButton save=button("",this::saveImport);
         Runnable counted=()->{int n=0;for(CheckBox c:includes)if(c.isChecked())n++;save.setText("선택한 곡을 앱 목록에 저장 ("+n+"곡)");all.setChecked(n>0&&n==includes.size());};
@@ -776,7 +800,7 @@ public final class HubActivity extends AppCompatActivity {
                 nextLibraryImport();return;
             }
             case "conversion":case "import":
-                if(route.equals("conversion")&&previewEntries(value).length()==0){put("screen","create");put("timelineExpanded","true");render();message(value.optString("notice","영상 설명과 댓글에서 시간표를 찾지 못했어요. 직접 시간표를 입력할 수 있어요."));return;}
+                if(route.equals("conversion")&&previewEntries(value).length()==0){put("screen","create");put("timelineExpanded","true");render();message(value.optString("notice","해당 영상은 변환할 수 없음"));return;}
                 boolean fresh=!value.optString("id").equals(value("importId"));
                 if(fresh){requests.data.remove("saveId");requests.data.remove("transferId");requests.data.remove("transferKey");}
                 put("imported",value);put("importId",value.optString("id"));if(!value.optString("localPlaylistId").isEmpty()){put("saveId",value.optString("localPlaylistId"));setResult(RESULT_OK,new Intent().putExtra("playlistId",value.optString("localPlaylistId")));}if(value("listTitle").trim().isEmpty()&&!value.optString("title").isEmpty())put("listTitle",value.optString("title"));
