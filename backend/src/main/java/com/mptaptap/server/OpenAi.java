@@ -161,7 +161,8 @@ public class OpenAi {
                     JsonNode payload=json.readTree(content.path("text").asString());
                     if(!(payload instanceof ObjectNode object)||!object.path("languageSpecified").isBoolean())throw new IllegalStateException("AI_LANGUAGE_UNCONFIRMED");
                     JsonNode candidates=object.remove("candidates");
-                    Recommender.Conditions conditions=conditions(object,prompt,history,previousConditions,requests);
+                    // 보충 요청은 조건을 쓰지 않으므로 원본 조건 로그를 남기지 않는다.
+                    Recommender.Conditions conditions=conditions(object,prompt,history,previousConditions,requests,priorProposals.isEmpty());
                     return new Plan(conditions,includeCandidates?suggestions(candidates):List.of());
                 }
             }
@@ -169,7 +170,7 @@ public class OpenAi {
         throw new IllegalStateException("AI_EMPTY");
     }
 
-    private Recommender.Conditions conditions(ObjectNode object,String prompt,List<String> history,Recommender.Conditions previousConditions,List<String> requests) {
+    private Recommender.Conditions conditions(ObjectNode object,String prompt,List<String> history,Recommender.Conditions previousConditions,List<String> requests,boolean logRaw) {
         // inferredTags 가 없는 응답은 추론 값이 없는 것으로 본다.
         if(!object.has("inferredTags"))object.putArray("inferredTags");
         if(object.size()!=6||!object.path("inferredTags").isArray()||!object.path("tags").isArray()||!object.path("excludedTags").isArray()||!object.path("language").isString()
@@ -182,6 +183,9 @@ public class OpenAi {
                 throw new IllegalStateException("AI_CONDITIONS_INVALID");
         boolean languageSpecified=object.remove("languageSpecified").asBoolean();
         Recommender.Conditions raw=json.treeToValue(object,Recommender.Conditions.class);
+        // validate 가 겹치는 태그를 조용히 지우므로 원본을 먼저 복사해 둔다.
+        List<String> rawTags=List.copyOf(raw.tags),rawExcluded=List.copyOf(raw.excludedTags),rawInferred=List.copyOf(raw.inferredTags);
+        String rawLanguage=raw.language;int rawArtists=raw.excludedArtists==null?0:raw.excludedArtists.size();
         // 연대는 사전이 decades 로 읽는다. AI가 연대를 장르로 만든 값(genre:korean_1990s)은 버린다.
         raw.tags.removeIf(OpenAi::decadeGenre);raw.inferredTags.removeIf(OpenAi::decadeGenre);
         // 추론 값도 조건에 들어가되 validate 에서 선호로만 분류된다.
@@ -191,6 +195,7 @@ public class OpenAi {
         boolean genreComplement=positiveUnknown&&raw.excludedTags!=null&&Recommender.GENRES.stream()
                 .filter(tag->!tag.equals("unsupported_genre")).allMatch(raw.excludedTags::contains);
         Recommender.Conditions interpreted=Recommender.validate(raw);
+        if(logRaw)org.slf4j.LoggerFactory.getLogger(OpenAi.class).info(rawConditionsLog(rawTags,rawExcluded,rawInferred,rawLanguage,languageSpecified,rawArtists));
         if(genreComplement) {
             // Normalize only a complete supported-genre complement, preserving direct/history and snapshot exclusions.
             interpreted.excludedTags=Conversation.parse(previousConditions,history,prompt).excludedTags;
@@ -242,6 +247,13 @@ public class OpenAi {
         // 연대도 직접 말한 표현만 조건이 된다. AI 응답에는 연대 칸이 없다.
         result.decades=new ArrayList<>(direct.decades);
         return result;
+    }
+
+    /** AI 원본 조건 한 줄. 가수 이름은 사용자가 쓴 값이라 개수만 남기고, 검증 어휘가 아닌 태그는 가린다. */
+    static String rawConditionsLog(List<String> tags,List<String> excludedTags,List<String> inferredTags,String language,boolean languageSpecified,int excludedArtists) {
+        java.util.function.Function<List<String>,String> safe=values->values.stream().map(tag->Recommender.validTag(tag)?tag:"<invalid>").toList().toString();
+        return "AI conditions: tags="+safe.apply(tags)+", excludedTags="+safe.apply(excludedTags)+", inferredTags="+safe.apply(inferredTags)
+            +", language="+(Recommender.validLanguage(language)?language:"<invalid>")+", languageSpecified="+languageSpecified+", excludedArtists="+excludedArtists;
     }
 
     private static boolean decadeGenre(String tag){return tag!=null&&tag.matches("genre:(?:.*[_-])?[0-9]{2,4}s(?:[_-].*)?");}
