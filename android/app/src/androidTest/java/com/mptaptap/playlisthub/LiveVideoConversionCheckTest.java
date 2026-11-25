@@ -36,23 +36,13 @@ public class LiveVideoConversionCheckTest {
                 app.onActivity(activity->{JSONObject imported=data(activity).optJSONObject("imported");assertNotNull(imported);assertTrue(imported.optJSONArray("entries").length()>1);assertEquals("official_comment",imported.optString("metadataMode"));importId.set(imported.optString("id"));});
                 onView(withText("개별 YouTube 영상 찾기")).perform(scrollTo(),click());ready(app);
                 app.recreate();ready(app);
-                app.onActivity(activity->{
-                    JSONObject review=data(activity).optJSONObject("review");assertNotNull(review);
-                    JSONArray rows=review.optJSONArray("items");boolean included=false;
-                    for(int i=0;i<rows.length();i++){
-                        JSONObject row=rows.optJSONObject(i),candidate=null;JSONArray choices=row.optJSONArray("candidates");
-                        if(!included&&choices!=null&&choices.length()>0){candidate=choices.optJSONObject(0).optJSONObject("track");included=true;}
-                        invoke(activity,"select",new Class[]{int.class,JSONObject.class,boolean.class},row.optInt("sourceIndex"),candidate,candidate==null);
-                    }
-                    assertTrue(included);invoke(activity,"render",new Class[]{});
-                });
-                onView(withText("선택한 개별 영상을 내 목록에 저장")).perform(scrollTo(),click());ready(app);
+                onView(withText(org.hamcrest.Matchers.startsWith("개별 영상 "))).perform(scrollTo(),click());ready(app);
                 onView(withText("내 목록에 저장했어요")).inRoot(isDialog()).check(matches(isDisplayed()));
                 app.onActivity(activity->playlistId.set(data(activity).optString("matchedSaveId")));
                 assertFalse(playlistId.get().isEmpty());onView(withText("계속 보기")).inRoot(isDialog()).perform(click());
             }
             JSONObject playlist=api.object("GET","/playlists/"+playlistId.get(),null),track=playlist.getJSONArray("items").getJSONObject(0).getJSONObject("track");
-            assertEquals(1,playlist.getJSONArray("items").length());assertFalse(track.getString("sourceUrl").contains("&t="));
+            assertTrue(playlist.getJSONArray("items").length()>0);assertFalse(track.getString("sourceUrl").contains("&t="));
             assertNotEquals(url.substring(url.lastIndexOf('=')+1),track.getString("externalId"));
             try(ActivityScenario<MainActivity> app=ActivityScenario.launch(MainActivity.class)){
                 waitForMain(app,false);
@@ -81,6 +71,8 @@ public class LiveVideoConversionCheckTest {
         assertTrue(credentials.edit().remove(base).commit());
         ApiClient api=new ApiClient(context,base);
         var created=new java.util.ArrayList<String>();
+        var individualPlaylists=new java.util.ArrayList<String>();
+        boolean checkIndividual=InstrumentationRegistry.getArguments().getString("liveIndividual","false").equals("true");
         try {
             api.connect();
             for(int index=0;index<videos.length;index++){
@@ -107,6 +99,32 @@ public class LiveVideoConversionCheckTest {
                     onView(withText("선택한 곡을 앱 목록에 저장 ("+count+"곡)")).perform(scrollTo(),click());ready(app);
                     onView(withText("내 목록에 저장했어요")).inRoot(isDialog()).check(matches(isDisplayed()));
                     app.onActivity(a->savedId.set(data(a).optString("saveId")));
+                    if(index==0&&checkIndividual){
+                        onView(withText("계속 보기")).inRoot(isDialog()).perform(click());
+                        onView(withText("개별 YouTube 영상 찾기")).perform(scrollTo(),click());ready(app);
+                        var expectedVideos=new java.util.ArrayList<String>();
+                        app.onActivity(a->{
+                            JSONObject review=data(a).optJSONObject("review");
+                            assertNotNull("The automatic search must reach the result list",review);
+                            assertEquals(-1,review.optInt("nextOffset"));
+                            JSONArray rows=review.optJSONArray("items");
+                            assertEquals(count,rows.length());
+                            for(int j=0;j<rows.length();j++){
+                                JSONArray candidates=rows.optJSONObject(j).optJSONArray("candidates");
+                                if(candidates.length()>0)expectedVideos.add(candidates.optJSONObject(0).optJSONObject("track").optString("externalId"));
+                            }
+                        });
+                        assertFalse(expectedVideos.isEmpty());
+                        onView(withText("개별 영상 "+expectedVideos.size()+"곡 내 목록에 저장")).perform(scrollTo(),click());ready(app);
+                        app.onActivity(a->individualPlaylists.add(data(a).optString("matchedSaveId")));
+                        String matchedId=individualPlaylists.get(0);
+                        assertFalse(matchedId.isEmpty());
+                        JSONArray individual=api.object("GET","/playlists/"+matchedId,null).getJSONArray("items");
+                        assertEquals(expectedVideos.size(),individual.length());
+                        for(int j=0;j<individual.length();j++)
+                            assertEquals(expectedVideos.get(j),individual.getJSONObject(j).getJSONObject("track").getString("externalId"));
+                        android.util.Log.i("TapTapTimelineCheck","First-ranked individual videos saved: "+individual.length()+"/"+count);
+                    }
                     onView(withText("내 목록으로")).inRoot(isDialog()).perform(click());
                 }
                 assertFalse(savedId.get().isEmpty());
@@ -125,6 +143,7 @@ public class LiveVideoConversionCheckTest {
             }
         } finally {
             try{
+                for(String id:individualPlaylists)if(!id.isEmpty())api.request("DELETE","/playlists/"+id,null);
                 for(String id:created){
                     try{api.request("DELETE","/playlists/"+id,null);}catch(ApiClient.ApiError e){if(e.statusCode!=404)throw e;}
                     api.request("DELETE","/imports/playlists/"+id,null);

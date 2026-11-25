@@ -146,6 +146,8 @@ public final class HubActivity extends AppCompatActivity {
         }
         else if(screen.equals("history"))send("history","GET","/imports/playlists?summary=true",null);
         else if(screen.equals("export")&&!value("importId").isEmpty()){put("exportStopped","true");send("exportReview","GET","/matches/"+Uri.encode(value("importId"))+"?targetProvider="+Uri.encode(value("targetProvider")),null);}
+        else if(screen.equals("individual")&&!value("importId").isEmpty())
+            send("individualRestore","GET","/matches/"+Uri.encode(value("importId"))+"?targetProvider=youtube",null);
         else if(screen.equals("transfer")&&!value("transferId").isEmpty())send("transfer","GET","/transfers/"+Uri.encode(value("transferId")),null);
         else if((screen.equals("preview")||screen.equals("review")||screen.equals("sync"))&&!value("importId").isEmpty()) {
             if(screen.equals("review"))send("review","GET","/matches/"+Uri.encode(value("importId"))+"?targetProvider="+Uri.encode(value("targetProvider")),null);
@@ -173,6 +175,7 @@ public final class HubActivity extends AppCompatActivity {
             case "history":history();break;
             case "preview":preview();break;
             case "review":review();break;
+            case "individual":individualVideos();break;
             case "transfer":transfer();break;
             case "sync":sync();break;
             default:create();
@@ -309,7 +312,6 @@ public final class HubActivity extends AppCompatActivity {
         put("importRequestId",UUID.randomUUID().toString());put("screen","export");render();scrollToTop();
         send("exportImport","POST","/imports/playlists",json("id",value("importRequestId"),"provider",value("libraryProvider"),"url",value("exportSourceUrl"),"title",value("listTitle").trim()));
     }
-    /** "대상 플랫폼의 곡 후보 찾기" continues in the export screen; "개별 YouTube 영상 찾기" keeps the review screen and its save-videos option. */
     private boolean exportMatching(){
         if(!value("matchFlow").equals("export"))return false;
         put("matchFlow","");put("exportSourceUrl","");put("exportStopped","false");put("exportExpanded","false");put("screen","export");render();scrollToTop();nextExportMatch(0);return true;
@@ -593,7 +595,7 @@ public final class HubActivity extends AppCompatActivity {
             if(key.equals(value("importExpanded")))show.run();
         }
         counted.run();
-        if(timeline)addPrimaryButton(content,"개별 YouTube 영상 찾기",()->{put("matchFlow","review");put("targetProvider","youtube");if(value("listTitle").trim().isEmpty())put("listTitle",imported.optString("title","영상 속 음악").substring(0,Math.min(65,imported.optString("title","영상 속 음악").length()))+" · 개별 영상");saveImport(true);});
+        if(timeline)addPrimaryButton(content,"개별 YouTube 영상 찾기",()->{put("matchFlow","individual");put("targetProvider","youtube");if(value("listTitle").trim().isEmpty())put("listTitle",imported.optString("title","영상 속 음악").substring(0,Math.min(65,imported.optString("title","영상 속 음악").length()))+" · 개별 영상");saveImport(true);});
         content.addView(save,new LinearLayout.LayoutParams(-1,-2));
         heading("다른 플랫폼으로 옮기기");providerPicker(content,"targetProvider");
         paragraph("수정하고 선택한 곡을 앱 목록에 저장한 뒤 대상 서비스에서 같은 곡을 찾아요.");
@@ -625,6 +627,49 @@ public final class HubActivity extends AppCompatActivity {
     private int timelineSeconds(JSONObject imported,JSONObject edit) {
         int seconds;try{seconds=Integer.parseInt(edit.optString("seconds"));}catch(NumberFormatException error){throw new IllegalArgumentException("시작 시간을 초 단위로 입력하거나 곡을 제외해 주세요.");}
         int duration=imported.optInt("durationSeconds",-1);if(seconds<0||(duration>0?seconds>=duration:seconds>21600))throw new IllegalArgumentException("시작 시간이 영상 범위를 벗어났어요. 시간을 수정하거나 곡을 제외해 주세요.");return seconds;
+    }
+
+    private void findIndividualVideos(int offset) {
+        send("individualMatch","POST","/matches",json("importId",value("importId"),"targetProvider","youtube","offset",offset));
+    }
+
+    private void individualVideos() {
+        heading("개별 YouTube 영상");
+        JSONObject review=requests.data.optJSONObject("review");
+        JSONArray items=review==null?null:review.optJSONArray("items");
+        int next=review==null?0:review.optInt("nextOffset",-1);
+        if(next>=0||items==null){
+            paragraph(items==null?"곡마다 YouTube 영상을 찾고 있어요.":items.length()+"곡 중 "+next+"곡 확인");
+            addButton(content,"영상 찾기 이어서",()->findIndividualVideos(Math.max(0,next)));
+            return;
+        }
+        int found=0;
+        put("selections",new JSONArray());
+        for(int i=0;i<items.length();i++){
+            JSONObject item=items.optJSONObject(i);
+            JSONArray candidates=item.optJSONArray("candidates");
+            JSONObject first=candidates==null?null:candidates.optJSONObject(0);
+            JSONObject track=first==null?null:first.optJSONObject("track");
+            boolean missing=track==null||track.optString("externalId").isEmpty();
+            select(item.optInt("sourceIndex",i),track,missing);
+            if(!missing)found++;
+        }
+        paragraph("영상 "+found+"곡 · 찾지 못한 곡 "+(items.length()-found)+"곡");
+        if(found>0){
+            field(content,"새 목록 이름","listTitle",80,false);
+            addPrimaryButton(content,"개별 영상 "+found+"곡 내 목록에 저장",()->approveTransfer(true));
+        }
+        for(int i=0;i<items.length();i++){
+            JSONObject item=items.optJSONObject(i);
+            JSONObject selection=find(array("selections"),"sourceIndex",item.optInt("sourceIndex",i));
+            LinearLayout box=card(content);
+            box.addView(text((i+1)+". "+song(item.optJSONObject("source")),16,true));
+            if(selection.optBoolean("excluded"))box.addView(text("찾지 못함",13,false));
+            else {
+                box.addView(text(selection.optString("label"),13,false));
+                addButton(box,"YouTube 영상 열기",()->open("https://www.youtube.com/watch?v="+Uri.encode(selection.optString("targetId"))));
+            }
+        }
     }
 
     private void review() {
@@ -813,8 +858,18 @@ public final class HubActivity extends AppCompatActivity {
                 }
                 put("screen","preview");break;
             case "review":put("review",value);restoreApprovals(value);put("screen","review");break;
+            case "individualMatch":
+                put("review",value);
+                int nextVideoOffset=value.optInt("nextOffset",-1);
+                if(nextVideoOffset>=0){render();findIndividualVideos(nextVideoOffset);return;}
+                render();scrollToTop();return;
+            case "individualRestore":put("review",value);break;
             case "reviewedForMatch":
-                put("selections",new JSONArray());if(exportMatching())return;send("review","POST","/matches",json("importId",value("importId"),"targetProvider",provider("targetProvider")));return;
+                put("selections",new JSONArray());if(exportMatching())return;
+                if(value("matchFlow").equals("individual")){
+                    requests.data.remove("review");put("screen","individual");render();scrollToTop();findIndividualVideos(0);return;
+                }
+                send("review","POST","/matches",json("importId",value("importId"),"targetProvider",provider("targetProvider")));return;
             case "reviewSavedLocally":put("review",value);send("matchedSaved","POST","/matches/"+Uri.encode(value("importId"))+"/save",json("title",value("listTitle").trim()));return;
             case "savedForMatch":
                 put("saveId",value.optString("id"));setResult(RESULT_OK,new Intent().putExtra("playlistId",value.optString("id")));put("selections",new JSONArray());if(exportMatching())return;send("review","POST","/matches",json("importId",value("importId"),"targetProvider",provider("targetProvider")));return;
@@ -858,6 +913,7 @@ public final class HubActivity extends AppCompatActivity {
         if(route.equals("batchImport")){JSONObject row=find(array("batchImports"),"requestId",value("batchActiveId"));if(row!=null){set(row,"status","FAILED");set(row,"notice",message);}put("screen","batch");render();message("가져오기를 멈췄어요. 저장한 목록은 유지되며 남은 목록만 다시 가져올 수 있어요.");return;}
         if(error instanceof ApiClient.ApiError&&((ApiClient.ApiError)error).statusCode==409&&message.contains("다시 연결")){message(message);showRecovery("음악 서비스 다시 연결",()->{mode="account";put("screen","account");render();reload();});return;}
         if(route.equals("library")){put("screen","library");render();message(message);return;}
+        if(route.equals("individualMatch")||route.equals("individualRestore")){render();message(message);return;}
         if(route.equals("exportMatch")||route.equals("exportReview")){put("exportStopped","true");put("screen","export");render();message(message);return;}
         if(route.equals("exportImport")||route.equals("exportAccount")){put("screen","library");render();message(message);return;}
         if(route.equals("auth")){
