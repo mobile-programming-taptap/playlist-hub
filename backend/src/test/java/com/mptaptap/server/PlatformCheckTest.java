@@ -473,6 +473,12 @@ class PlatformCheckTest {
             result=f.api.conversion(f.auth,new PlatformApi.Conversion(null,url,null,null));
             assertEquals("해당 영상은 변환할 수 없음",result.get("notice"));
             f.commentsDisabled=false;
+            // One clearly named song in the description is still a timeline; a lone stray time is not.
+            f.videoDescription="0:00 Artist - Only song";f.comments=List.of(comment("0:30 I love this"));
+            result=f.api.conversion(f.auth,new PlatformApi.Conversion(null,url,null,null));
+            assertEquals(1,rows(result,"entries").size());assertEquals("Only song",rows(result,"entries").get(0).get("title"));assertEquals("official_metadata",result.get("metadataMode"));
+            f.videoDescription="광고 제거 2:59";
+            result=f.api.conversion(f.auth,new PlatformApi.Conversion(null,url,null,null));assertTrue(rows(result,"entries").isEmpty());
             f.comments="invalid response";result=f.api.conversion(f.auth,new PlatformApi.Conversion(null,url,null,null));assertTrue(((String)result.get("notice")).contains("댓글을 확인하지 못했어요"));
         }
     }

@@ -101,7 +101,9 @@ public class PlatformApi {
         boolean automatic=body.timeline()==null;
         VideoTimeline.Result parsed=automatic?VideoTimeline.parseAutomatic(description,video,duration):VideoTimeline.parse(description,video,duration);
         if(automatic&&parsed.entries.size()<2) {
-            parsed=new VideoTimeline.Result();
+            // A single song with both artist and title still counts; a lone stray time does not.
+            VideoTimeline.Result described=parsed;
+            parsed=described.entries.size()==1&&!described.entries.get(0).artist.isEmpty()?described:new VideoTimeline.Result();
             try {
                 String cursor="";
                 // shortcut: scan up to 200 top-level comments; use an async job if deeper searches are needed.
@@ -114,7 +116,7 @@ public class PlatformApi {
                         }
                     }
                     cursor=comments.nextCursor();
-                    if(!parsed.entries.isEmpty()||cursor.isEmpty())break;
+                    if(mode.equals("official_comment")||cursor.isEmpty())break;
                 }
             }catch(PlatformClient.Failure error){commentLookupFailed=!error.commentsDisabled;}
             catch(ResponseStatusException error){commentLookupFailed=true;}
