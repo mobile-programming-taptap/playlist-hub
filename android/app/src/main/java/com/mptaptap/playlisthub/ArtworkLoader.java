@@ -90,6 +90,8 @@ public final class ArtworkLoader implements AutoCloseable {
 
     static String trackKey(JSONObject track){
         if(track==null)return null;
+        // A song from a long video shows its own album art rather than the long video.
+        String art=key("",track.optString("artworkUrl"));if(art!=null)return art;
         String image=key(videoId(track),track.optString("artworkUrl"));
         if(image!=null)return image;
         String provider=track.optString("platform",track.optString("sourceProvider"));

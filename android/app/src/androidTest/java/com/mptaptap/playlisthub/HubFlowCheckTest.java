@@ -507,7 +507,7 @@ public class HubFlowCheckTest {
         });
     }
 
-    @Test public void individualVideosFetchAllPagesAndSaveTheFirstRankedCandidates() throws Exception {
+    @Test public void savingATimelineFindsEachSongsVideoAndKeepsTheRestAtTheirMoment() throws Exception {
         AtomicReference<String> importId=new AtomicReference<>();
         AtomicReference<JSONArray> selected=new AtomicReference<>();
         java.util.List<Integer> offsets=new java.util.ArrayList<>();
@@ -540,20 +540,57 @@ public class HubFlowCheckTest {
                 selected.set(body.getJSONArray("selections"));
                 return new JSONObject();
             }
-            if(path.equals("/matches/"+id+"/save"))return new JSONObject().put("id",id);
+            if(path.equals("/matches/"+id+"/save"))return new JSONObject().put("id",id).put("originalMoments",1);
             return null;
         },app->{
             onView(withHint("YouTube 영상 주소")).perform(scrollTo(),replaceText(url),closeSoftKeyboard());
             onView(withText("영상에서 곡 목록 가져오기")).perform(scrollTo(),click());ready(app);
-            onView(withText("개별 YouTube 영상 찾기")).perform(scrollTo(),click());ready(app);
-            onView(withText("영상 2곡 · 찾지 못한 곡 1곡")).check(matches(isDisplayed()));
-            onView(withText("후보 선택 또는 제외")).check(doesNotExist());
-            onView(withText("개별 영상 2곡 내 목록에 저장")).perform(scrollTo(),click());ready(app);
+            onView(withText("개별 YouTube 영상 찾기")).check(doesNotExist());
+            onView(withText("선택한 곡을 곡별 영상으로 저장 (3곡)")).perform(scrollTo(),click());ready(app);
+            onView(withText("영상 2곡 · 원본 영상 시점 1곡")).check(matches(isDisplayed()));
+            onView(withText("3곡 내 목록에 저장")).perform(scrollTo(),click());ready(app);
             onView(withText("내 목록에 저장했어요")).inRoot(isDialog()).check(matches(isDisplayed()));
+            onView(withText(org.hamcrest.Matchers.containsString("1곡은 개별 영상을 찾지 못해 원본 영상 시점으로 저장했어요."))).inRoot(isDialog()).check(matches(isDisplayed()));
             assertEquals(java.util.List.of(0,2),offsets);
             assertEquals("bbbbbbbbbb0",selected.get().optJSONObject(0).optString("targetId"));
-            assertTrue(selected.get().optJSONObject(1).optBoolean("excluded"));
+            assertFalse("A song with no video is kept, not dropped",selected.get().optJSONObject(1).optBoolean("excluded"));
+            assertEquals("",selected.get().optJSONObject(1).optString("targetId"));
             assertEquals("bbbbbbbbbb2",selected.get().optJSONObject(2).optString("targetId"));
+        });
+    }
+
+    @Test public void aSearchLimitSavesTheSongsFoundAndKeepsTheRestAtTheirMoment() throws Exception {
+        AtomicReference<String> importId=new AtomicReference<>();AtomicReference<JSONArray> selected=new AtomicReference<>();
+        String url="https://www.youtube.com/watch?v=aaaaaaaaaa1";
+        hubFixture((method,path,body,status)->{
+            if(path.equals("/conversions/youtube")){
+                importId.set(body.getString("id"));JSONArray entries=new JSONArray();
+                for(int i=0;i<3;i++)entries.put(new JSONObject().put("sourceIndex",i).put("seconds",i*60).put("title","원본 "+i).put("artist","검사 가수"));
+                return new JSONObject().put("id",importId.get()).put("title","영상 검사").put("entries",entries);
+            }
+            String id=importId.get();
+            if(path.equals("/imports/playlists/"+id+"/review"))return new JSONObject().put("id",id);
+            if(path.equals("/matches")){status[0]=429;return new JSONObject().put("message","플랫폼 요청 한도에 도달했어요. 잠시 후 다시 시도해 주세요.");}
+            if(path.startsWith("/matches/"+id+"?")){
+                // The server keeps the song searched before the limit.
+                JSONObject video=new JSONObject().put("platform","youtube").put("externalId","bbbbbbbbbb0").put("title","원본 0");JSONArray rows=new JSONArray();
+                rows.put(new JSONObject().put("sourceIndex",0).put("candidates",new JSONArray().put(new JSONObject().put("track",video))).put("status","MATCHED").put("selected",video).put("source",new JSONObject().put("title","원본 0")));
+                for(int i=1;i<3;i++)rows.put(new JSONObject().put("sourceIndex",i).put("candidates",new JSONArray()).put("status","NOT_SEARCHED").put("source",new JSONObject().put("title","원본 "+i)));
+                return new JSONObject().put("importId",id).put("items",rows).put("nextOffset",1);
+            }
+            if(path.equals("/matches/"+id)&&method.equals("PUT")){selected.set(body.getJSONArray("selections"));return new JSONObject();}
+            if(path.equals("/matches/"+id+"/save"))return new JSONObject().put("id",id).put("originalMoments",2);
+            return null;
+        },app->{
+            onView(withHint("YouTube 영상 주소")).perform(scrollTo(),replaceText(url),closeSoftKeyboard());
+            onView(withText("영상에서 곡 목록 가져오기")).perform(scrollTo(),click());ready(app);
+            onView(withText("선택한 곡을 곡별 영상으로 저장 (3곡)")).perform(scrollTo(),click());ready(app);SystemClock.sleep(500);ready(app);
+            onView(withText("영상 1곡 · 원본 영상 시점 2곡")).perform(scrollTo()).check(matches(isDisplayed()));
+            onView(withText("영상 찾기 이어서")).perform(scrollTo()).check(matches(isDisplayed()));
+            onView(withText("3곡 내 목록에 저장")).perform(scrollTo(),click());ready(app);
+            onView(withText("내 목록에 저장했어요")).inRoot(isDialog()).check(matches(isDisplayed()));
+            assertEquals("bbbbbbbbbb0",selected.get().optJSONObject(0).optString("targetId"));
+            for(int i=1;i<3;i++){assertEquals("",selected.get().optJSONObject(i).optString("targetId"));assertFalse(selected.get().optJSONObject(i).optBoolean("excluded"));}
         });
     }
 
@@ -577,7 +614,7 @@ public class HubFlowCheckTest {
         },app->{
             onView(withHint("YouTube 영상 주소")).perform(scrollTo(),replaceText(url),closeSoftKeyboard());
             onView(withText("영상에서 곡 목록 가져오기")).perform(scrollTo(),click());ready(app);
-            onView(withText("개별 YouTube 영상 찾기")).perform(scrollTo(),click());
+            onView(withText("선택한 곡을 곡별 영상으로 저장 (3곡)")).perform(scrollTo(),click());
             waitUntil(()->matchCalls.get()>=1);
             // Each page spends YouTube search quota, so the user must be able to stop mid-way.
             onView(withText("중단")).perform(scrollTo(),click());
@@ -604,17 +641,18 @@ public class HubFlowCheckTest {
                 return new JSONObject().put("id",importId.get()).put("videoId","aaaaaaaaaa1")
                     .put("title","검사 목록").put("durationSeconds",800).put("entries",entries);
             }
-            if(path.equals("/imports/playlists/"+importId.get()+"/save")){
+            if(path.equals("/imports/playlists/"+importId.get()+"/review")){
                 savedRows.set(body.getJSONArray("entries"));
-                return new JSONObject().put("id",importId.get()).put("title",body.getString("title")).put("size",2).put("items",new JSONArray());
+                return new JSONObject().put("id",importId.get()).put("title",body.getString("title"));
             }
+            if(path.equals("/matches"))return new JSONObject().put("importId",importId.get()).put("items",new JSONArray()).put("nextOffset",-1);
             return null;
         },app->{
             onView(withHint("YouTube 영상 주소")).perform(scrollTo(),replaceText(url),closeSoftKeyboard());
             onView(withText("영상에서 곡 목록 가져오기")).perform(scrollTo(),click());ready(app);
             onView(withText("곡명과 아티스트 순서 바꾸기")).perform(scrollTo(),click());
             onView(withText("Payphone")).perform(scrollTo()).check(matches(isDisplayed()));
-            onView(saveButton()).perform(scrollTo(),click());ready(app);
+            onView(withText("선택한 곡을 곡별 영상으로 저장 (2곡)")).perform(scrollTo(),click());ready(app);
             assertNotNull(savedRows.get());
             assertEquals("Payphone",savedRows.get().optJSONObject(0).optString("title"));
             assertEquals("Maroon 5",savedRows.get().optJSONObject(0).optString("artist"));
@@ -651,8 +689,7 @@ public class HubFlowCheckTest {
             if(path.equals("/conversions/youtube")){id.set(body.getString("id"));JSONArray entries=new JSONArray();
                 for(int i=0;i<12;i++)entries.put(new JSONObject().put("sourceIndex",i).put("timestamp","0"+i+":00").put("seconds",i*60).put("startSeconds",i*60).put("title","제목만 있는 곡 "+i).put("artist","").put("sourceRow","0"+i+":00 제목만 있는 곡 "+i).put("sourceUrl",url+"&t="+(i*60)+"s").put("needsReview",true));
                 return new JSONObject().put("id",id.get()).put("provider","youtube").put("videoId","0Y41XMkfROU").put("title","재즈 모음").put("durationSeconds",3600).put("sourceUrl",url).put("entries",entries).put("items",new JSONArray()).put("metadataMode","official_metadata").put("saved",false).put("notice","");}
-            if(path.equals("/imports/playlists/"+id.get()+"/save")){saves.incrementAndGet();savedEntries.set(body.getJSONArray("entries"));return new JSONObject().put("id",id.get()).put("title",body.getString("title")).put("size",12).put("items",new JSONArray());}
-            if(path.equals("/imports/playlists/"+id.get()+"/review"))return new JSONObject().put("id",id.get()).put("title",body.getString("title"));
+            if(path.equals("/imports/playlists/"+id.get()+"/review")){saves.incrementAndGet();savedEntries.set(body.getJSONArray("entries"));return new JSONObject().put("id",id.get()).put("title",body.getString("title"));}
             if(path.equals("/matches")){matches.incrementAndGet();assertEquals("spotify",body.getString("targetProvider"));JSONArray rows=new JSONArray();
                 for(int i=0;i<12;i++)rows.put(new JSONObject().put("sourceIndex",i).put("source",new JSONObject().put("title","제목만 있는 곡 "+i).put("artist","")).put("candidates",new JSONArray()).put("status","UNKNOWN").put("selected",JSONObject.NULL).put("approved",false));
                 return new JSONObject().put("importId",id.get()).put("targetProvider","spotify").put("items",rows).put("nextOffset",-1);}
@@ -661,14 +698,12 @@ public class HubFlowCheckTest {
             onView(withHint("YouTube 영상 주소")).perform(scrollTo(),replaceText(url),closeSoftKeyboard());
             onView(withText("영상에서 곡 목록 가져오기")).perform(scrollTo(),click());ready(app);
             openRow(1);onView(rowEditor(1,"곡명")).perform(scrollTo(),replaceText(""),closeSoftKeyboard());
-            onView(saveButton()).perform(scrollTo(),click());ready(app);
+            onView(withText("선택한 곡을 곡별 영상으로 저장 (12곡)")).perform(scrollTo(),click());ready(app);
             onView(withText("포함할 곡의 곡명을 입력하거나 곡을 제외해 주세요.")).check(matches(isDisplayed()));assertEquals(0,saves.get());
             onView(rowEditor(1,"곡명")).perform(scrollTo(),replaceText("제목만 있는 곡 0"),closeSoftKeyboard());
-            onView(saveButton()).perform(scrollTo(),click());ready(app);
-            assertEquals("Rows with a title but no artist must still save",1,saves.get());try{assertEquals("",savedEntries.get().getJSONObject(0).getString("artist"));}catch(Exception e){throw new AssertionError(e);}
-            onView(withText("계속 보기")).inRoot(isDialog()).perform(click());
             onView(providerOption("Spotify")).perform(scrollTo(),click());
             onView(withText("대상 플랫폼의 곡 후보 찾기")).perform(scrollTo(),click());ready(app);
+            assertEquals("Rows with a title but no artist must still be reviewed",1,saves.get());try{assertEquals("",savedEntries.get().getJSONObject(0).getString("artist"));}catch(Exception e){throw new AssertionError(e);}
             assertEquals(1,matches.get());
             onView(withText("Spotify로 보내기")).check(matches(isDisplayed()));
             onView(withText("찾지 못한 곡 (12) · 제외됨")).perform(scrollTo()).check(matches(isDisplayed()));
