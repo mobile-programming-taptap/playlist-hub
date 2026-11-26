@@ -97,22 +97,33 @@ public class PlatformApi {
         if(store.exists(u,id,"import")){Map<String,Object> existing=store.document(u,id,"import");if(!fingerprint.equals(existing.get("requestFingerprint")))throw new ResponseStatusException(HttpStatus.CONFLICT,"같은 작업 ID로 원래 변환을 다시 시도해 주세요.");return existing;}String title="사용자 타임라인",description=body.timeline(),mode="provided_timeline";int duration=body.durationSeconds()==null?-1:body.durationSeconds();
         String access=null;boolean commentLookupFailed=false;
         if(description==null){if(remote.setting("YOUTUBE_API_KEY").isBlank())access=token(u,"youtube").accessToken();PlatformClient.Video metadata=remote.video(video,access);title=metadata.title();description=metadata.description();duration=metadata.durationSeconds();mode="official_metadata";}
-        if(duration<-1||duration>21600)throw new IllegalArgumentException("영상 길이는 최대 6시간까지 지원해요.");VideoTimeline.Result parsed=VideoTimeline.parse(description,video,duration);
-        if(mode.equals("official_metadata")&&parsed.entries.isEmpty()) {
+        if(duration<-1||duration>21600)throw new IllegalArgumentException("영상 길이는 최대 6시간까지 지원해요.");
+        boolean automatic=body.timeline()==null;
+        VideoTimeline.Result parsed=automatic?VideoTimeline.parseAutomatic(description,video,duration):VideoTimeline.parse(description,video,duration);
+        if(automatic&&parsed.entries.size()<2) {
+            // A single song with both artist and title still counts; a lone stray time does not.
+            VideoTimeline.Result described=parsed;
+            parsed=described.entries.size()==1&&!described.entries.get(0).artist.isEmpty()?described:new VideoTimeline.Result();
             try {
-                int best=1;
-                for(String comment:remote.videoComments(video,access)) {
-                    try {
-                        VideoTimeline.Result candidate=VideoTimeline.parse(comment,video,duration);
-                        int valid=0;for(VideoTimeline.Entry row:candidate.entries)if(row.seconds>=0&&!row.title.isBlank()&&(duration<=0||row.seconds<duration))valid++;
-                        if(valid>best){parsed=candidate;best=valid;mode="official_comment";}
-                    }catch(IllegalArgumentException ignored){}
+                String cursor="";
+                // shortcut: scan up to 200 top-level comments; use an async job if deeper searches are needed.
+                for(int page=0;page<2;page++){
+                    PlatformClient.VideoComments comments=remote.videoComments(video,access,cursor);
+                    for(String comment:comments.texts()) {
+                        VideoTimeline.Result candidate=VideoTimeline.parseAutomatic(comment,video,duration);
+                        if(candidate.entries.size()>=2&&candidate.entries.size()>parsed.entries.size()){
+                            parsed=candidate;mode="official_comment";
+                        }
+                    }
+                    cursor=comments.nextCursor();
+                    if(mode.equals("official_comment")||cursor.isEmpty())break;
                 }
-            }catch(PlatformClient.Failure|ResponseStatusException error){commentLookupFailed=true;}
+            }catch(PlatformClient.Failure error){commentLookupFailed=!error.commentsDisabled;}
+            catch(ResponseStatusException error){commentLookupFailed=true;}
         }
         List<Map<String,Object>> entries=new ArrayList<>(),items=new ArrayList<>();
         for(int i=0;i<parsed.entries.size();i++){VideoTimeline.Entry entry=parsed.entries.get(i);Map<String,Object> row=map(entry);row.put("sourceIndex",i);entries.add(row);PlatformTrack track=new PlatformTrack();track.platform="youtube";track.externalId=video;track.title=entry.title;track.artist=entry.artist;track.sourceUrl=entry.sourceUrl;track.durationMs=0;Map<String,Object> item=new LinkedHashMap<>();item.put("sourceIndex",i);item.put("track",map(track));item.put("sourceRow",entry.sourceRow);item.put("timestamp",entry.seconds);item.put("sourceType","timeline");item.put("videoDurationSeconds",Math.max(0,duration));item.put("segmentDurationMs",entry.endSeconds>entry.startSeconds&&entry.startSeconds>=0?(entry.endSeconds-entry.startSeconds)*1000L:0);item.put("recommendationTrackId",null);items.add(item);}
-        Map<String,Object> result=new LinkedHashMap<>();result.putAll(Map.of("id",id,"provider","youtube","videoId",video,"externalPlaylistId","","title",title,"durationSeconds",duration,"sourceUrl",body.url(),"entries",entries,"truncated",parsed.truncated,"metadataMode",mode));result.put("items",items);result.put("notice",entries.isEmpty()?(commentLookupFailed?"영상 댓글을 확인하지 못했어요. 다시 시도하거나 시간표를 직접 입력해 주세요.":"영상 설명과 댓글에서 시간표를 찾지 못했어요. 직접 입력할 수 있어요."):(mode.equals("official_comment")?"댓글에서 시간표를 찾았어요. 곡명·아티스트·시간을 확인해 저장해 주세요.":"곡명·아티스트·시간을 확인해 저장해 주세요. 음원 분리나 곡 추측은 하지 않아요."));result.put("saved",false);result.put("requestFingerprint",fingerprint);store.create(u,id,"import","youtube",result);return result;
+        Map<String,Object> result=new LinkedHashMap<>();result.putAll(Map.of("id",id,"provider","youtube","videoId",video,"externalPlaylistId","","title",title,"durationSeconds",duration,"sourceUrl",body.url(),"entries",entries,"truncated",parsed.truncated,"metadataMode",mode));result.put("items",items);result.put("notice",entries.isEmpty()?(commentLookupFailed?"영상 댓글을 확인하지 못했어요. 다시 시도하거나 시간표를 직접 입력해 주세요.":"해당 영상은 변환할 수 없음"):(mode.equals("official_comment")?"댓글에서 시간표를 찾았어요. 곡명·아티스트·시간을 확인해 저장해 주세요.":"곡명·아티스트·시간을 확인해 저장해 주세요. 음원 분리나 곡 추측은 하지 않아요."));result.put("saved",false);result.put("requestFingerprint",fingerprint);if(!entries.isEmpty())store.create(u,id,"import","youtube",result);return result;
     });}
     public record ImportBody(String id,String provider,String url,String title){}
     @PostMapping("/imports/playlists") public Map<String,Object> importPlaylist(@RequestHeader(value="Authorization",required=false)String auth,@RequestBody ImportBody body){return withOwner(auth,u->{
@@ -224,7 +235,9 @@ public class PlatformApi {
         String id=PlatformStore.uuid(body.id()),p=provider(body.targetProvider());confirmed(body.confirmed());String name=title(body.title());
         if(store.exists(u,id,"transfer")){Map<String,Object> existing=store.document(u,id,"transfer");if(!body.importId().equals(existing.get("importId"))||!p.equals(existing.get("provider"))||!name.equals(existing.get("title")))throw new ResponseStatusException(HttpStatus.CONFLICT,"같은 작업 ID로 원래 이전을 다시 시도해 주세요.");if(!"COMPLETED".equals(existing.get("status")))launch(u,id);return counted(existing);}
         Map<String,Object> source=store.document(u,body.importId(),"import");provider((String)source.get("provider"));if(!p.equals(source.get("targetProvider")))throw new IllegalArgumentException("대상 플랫폼의 곡 후보를 먼저 검토해 주세요.");List<Map<String,Object>> selected=new ArrayList<>();List<Integer> excluded=new ArrayList<>();
-        for(Map<String,Object> row:items(source,"reviews")){if(!Boolean.TRUE.equals(row.get("approved")))throw new IllegalArgumentException("모든 곡을 선택하거나 제외한 뒤 이전해 주세요.");if("USER_EXCLUDED".equals(row.get("status"))){excluded.add(((Number)row.get("sourceIndex")).intValue());continue;}Map<String,Object> track=cast(row.get("selected"));Map<String,Object> item=new LinkedHashMap<>(Map.of("sourceIndex",row.get("sourceIndex"),"targetId",track.get("externalId"),"status","PENDING","message",""));selected.add(item);}
+        for(Map<String,Object> row:items(source,"reviews")){if(!Boolean.TRUE.equals(row.get("approved")))throw new IllegalArgumentException("모든 곡을 선택하거나 제외한 뒤 이전해 주세요.");if("USER_EXCLUDED".equals(row.get("status"))){excluded.add(((Number)row.get("sourceIndex")).intValue());continue;}Map<String,Object> track=cast(row.get("selected"));Map<String,Object> item=new LinkedHashMap<>(Map.of("sourceIndex",row.get("sourceIndex"),"targetId",track.get("externalId"),"status","PENDING","message",""));
+            if(track.get("artworkUrl") instanceof String image&&ImportMatch.spotifyArtwork(image))item.put("artworkUrl",image);
+            selected.add(item);}
         if(selected.isEmpty())throw new IllegalArgumentException("이전할 곡을 하나 이상 선택해 주세요.");token(u,p);Map<String,Object> job=new LinkedHashMap<>(Map.of("id",id,"importId",body.importId(),"provider",p,"title",name,"status","PENDING","externalPlaylistId","","items",selected,"createStarted",false,"playlistUrl","","notice","사용자가 확인한 곡만 비공개 목록으로 이전합니다."));job.put("excludedSourceIndices",excluded);store.create(u,id,"transfer",p,counted(job));launch(u,id);return job;
     });}
     @GetMapping("/transfers") public List<Map<String,Object>> transferHistory(@RequestHeader(value="Authorization",required=false)String auth,@RequestParam(defaultValue="false")boolean summary){String u=user(auth);List<Map<String,Object>> jobs=(summary?store.summaries(u,"transfer"):store.documents(u,"transfer")).stream().filter(row->PlatformClient.PROVIDERS.contains(row.get("provider"))).toList();for(Map<String,Object> job:jobs){if(!summary)counted(job);job.put("playlistUrl",PlatformClient.playlistUrl((String)job.get("provider"),(String)job.getOrDefault("externalPlaylistId","")));if(activeTransfers.contains(u+":"+job.get("id")))job.put("status","RUNNING");}return jobs;}
@@ -318,7 +331,13 @@ public class PlatformApi {
             item.put("track",track);item.put("sourceIndex",snapshot.get("sourceIndex"));if(snapshot.containsKey("timestamp"))item.put("timestamp",snapshot.get("timestamp"));result.add(item);
         }return result;
     }
-    private static Map<String,Object> trackMetadata(Map<String,Object> snapshot){Map<String,Object> result=new LinkedHashMap<>();for(String field:List.of("platform","externalId","isrc","title","artist","version","album","durationMs","sourceUrl"))if(snapshot.containsKey(field)){Object value=snapshot.get(field);result.put(field,value instanceof Number n?n.longValue():value);}return result;}
+    private static Map<String,Object> trackMetadata(Map<String,Object> snapshot){
+        Map<String,Object> result=new LinkedHashMap<>();
+        for(String field:List.of("platform","externalId","isrc","title","artist","version","album","durationMs","sourceUrl"))
+            if(snapshot.containsKey(field)){Object value=snapshot.get(field);result.put(field,value instanceof Number n?n.longValue():value);}
+        if(snapshot.get("artworkUrl") instanceof String image&&ImportMatch.spotifyArtwork(image))result.put("artworkUrl",image);
+        return result;
+    }
     private static Map<String,Integer> difference(List<Map<String,Object>> before,List<Map<String,Object>> after){
         Map<String,java.util.ArrayDeque<Map.Entry<Integer,Map<String,Object>>>> occurrences=new LinkedHashMap<>();
         for(int i=0;i<before.size();i++){Map<String,Object> track=cast(before.get(i).get("track"));String key=track.get("platform")+"|"+track.get("externalId");occurrences.computeIfAbsent(key,k->new java.util.ArrayDeque<>()).add(Map.entry(i,before.get(i)));}

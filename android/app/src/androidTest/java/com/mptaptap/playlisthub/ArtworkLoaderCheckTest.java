@@ -67,10 +67,42 @@ public class ArtworkLoaderCheckTest {
         }finally{releaseOld.countDown();releaseClose.countDown();loader.close();}
     }
 
+    @Test public void importedTracksReuseTheirVideoIdAndOnlyLoadKnownArtworkHosts() throws Exception {
+        String video="8EMrjq188nQ",cover="https://i.scdn.co/image/ab67616d0000b273525f0944b22d8415ed40824a";
+        assertEquals(video,ArtworkLoader.videoId(new org.json.JSONObject().put("platform","youtube").put("externalId",video)));
+        assertEquals(video,ArtworkLoader.videoId(new org.json.JSONObject().put("sourceUrl","https://www.youtube.com/watch?v="+video+"&t=133s")));
+        assertEquals(video,ArtworkLoader.videoId(new org.json.JSONObject().put("sourceProvider","youtube_music").put("sourceId",video)));
+        assertEquals("",ArtworkLoader.youtubeIdFromUrl("https://www.youtube.com@other.example/watch?v="+video));
+        assertEquals("",ArtworkLoader.videoId(new org.json.JSONObject().put("platform","spotify").put("externalId",video)));
+        assertEquals(cover,ArtworkLoader.key("",cover));
+        String regionalCover=cover.replace("i.scdn.co","image-cdn-fa.spotifycdn.com");
+        assertEquals(regionalCover,ArtworkLoader.key("",regionalCover));
+        assertNull(ArtworkLoader.key("",regionalCover.replace(".com",".com.other.example")));
+        String spotifyId="4uLU6hMCjMI75M1A2tKUQC";
+        assertEquals("spotify:"+spotifyId,ArtworkLoader.trackKey(new org.json.JSONObject().put("platform","spotify").put("externalId",spotifyId)));
+        assertEquals(cover,ArtworkLoader.trackKey(new org.json.JSONObject().put("platform","spotify").put("externalId",spotifyId).put("artworkUrl",cover)));
+        assertNull(ArtworkLoader.key("",cover.replace("i.scdn.co","i.scdn.co.other.example")));
+    }
+
+    @Test public void legacySpotifyTrackLoadsACoverFromItsSavedId() throws Exception {
+        org.junit.Assume.assumeTrue("true".equals(InstrumentationRegistry.getArguments().getString("liveArtwork")));
+        String id="4uLU6hMCjMI75M1A2tKUQC";
+        var track=new org.json.JSONObject().put("platform","spotify").put("externalId",id);
+        ImageView[] view=new ImageView[1];
+        try(ArtworkLoader loader=new ArtworkLoader()){
+            main(()->{
+                view[0]=new ImageView(InstrumentationRegistry.getInstrumentation().getTargetContext());
+                loader.loadTrack(view[0],track);
+            });
+            awaitTag(view[0],"spotify:"+id);
+            main(()->assertTrue(view[0].getDrawable() instanceof BitmapDrawable));
+        }
+    }
+
     private static String id(){return UUID.randomUUID().toString().replace("-","").substring(0,11);}
     private static void main(Runnable action){InstrumentationRegistry.getInstrumentation().runOnMainSync(action);}
     private static void awaitTag(ImageView view,String expected) throws InterruptedException {
-        long deadline=System.nanoTime()+3_000_000_000L;boolean[] ready=new boolean[1];
+        long deadline=System.nanoTime()+10_000_000_000L;boolean[] ready=new boolean[1];
         while(System.nanoTime()<deadline){main(()->ready[0]=java.util.Objects.equals(expected,view.getTag()));if(ready[0])return;Thread.sleep(20);}
         throw new AssertionError("Artwork did not finish loading");
     }

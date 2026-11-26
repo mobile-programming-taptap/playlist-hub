@@ -31,6 +31,7 @@ import static org.junit.jupiter.api.Assertions.*;
 /** Real JDBC and HTTP; all provider requests stay on the fixture's loopback server. */
 class PlatformCheckTest {
     private static final String SOURCE="S".repeat(22), SONG="T".repeat(22), TARGET="R".repeat(22), VIDEO="dQw4w9WgXcQ";
+    private static final String ARTWORK="https://i.scdn.co/image/"+"a".repeat(40);
     private final ObjectMapper json=new ObjectMapper();
 
     @Test void unavailableOAuthIdentifiesOnlyRequiredSettingsAndCanRecover() throws Exception {
@@ -310,7 +311,7 @@ class PlatformCheckTest {
             agedTrack.put("checkedAt",fetchedAt.minus(Duration.ofDays(2)).toString());
             f.db.update("UPDATE playlist_items SET track_json=? WHERE id=?",json.writeValueAsString(agedTrack),agedItem.get("id"));
             f.db.update("UPDATE platform_documents SET metadata_expires_at=? WHERE id=?",Instant.now().minusSeconds(1).toString(),id);f.store.purgeExpired();f.users.purgeExpiredExternal();
-            assertEquals(true,f.api.imported(f.auth,id).get("needsRefresh"));for(Map<String,Object> expired:List.of(map(rows(f.users.playlist(f.owner,id),"items").get(0).get("track")))){assertEquals(true,expired.get("needsRefresh"));for(String field:List.of("title","artist","album","isrc","durationMs"))assertFalse(expired.containsKey(field));}
+            assertEquals(true,f.api.imported(f.auth,id).get("needsRefresh"));for(Map<String,Object> expired:List.of(map(rows(f.users.playlist(f.owner,id),"items").get(0).get("track")))){assertEquals(true,expired.get("needsRefresh"));for(String field:List.of("title","artist","album","isrc","durationMs","artworkUrl"))assertFalse(expired.containsKey(field));}
             assertNotNull(preview.get("previewId"));
             f.api.deleteTransfer(f.auth,jobId);assertEquals(404,assertThrows(ResponseStatusException.class,()->f.api.transferStatus(f.auth,jobId)).getStatusCode().value());assertEquals(List.of(SONG,SONG),f.remoteItems);
             f.api.deleteImport(f.auth,id);assertTrue(f.store.documents(f.owner,"sync").isEmpty());assertEquals(1,rows(f.users.playlist(f.owner,id),"items").size(),"Deleting a source record keeps the app playlist and remote playlist.");
@@ -323,6 +324,8 @@ class PlatformCheckTest {
             String id=UUID.randomUUID().toString(),jobId=UUID.randomUUID().toString();
             Map<String,Object> imported=f.api.importPlaylist(f.auth,new PlatformApi.ImportBody(id,"spotify","https://open.spotify.com/playlist/"+SOURCE,null));
             assertEquals(List.of(0,2,4),rows(imported,"items").stream().map(row->row.get("sourceIndex")).toList(),"Readable recordings retain their original source positions.");
+            assertEquals(ARTWORK,map(rows(imported,"items").get(0).get("track")).get("artworkUrl"));
+            assertEquals(ARTWORK,map(rows(f.users.playlist(f.owner,id),"items").get(0).get("track")).get("artworkUrl"));
             assertEquals(3,imported.get("skippedCount"));assertEquals(List.of(1,3,5),rows(imported,"skippedItems").stream().map(row->row.get("sourceIndex")).toList());
             String notice=(String)imported.get("notice");for(String reason:List.of("3개 항목","로컬 파일","음악 곡이 아닌","곡 정보를 제공하지"))assertTrue(notice.contains(reason));
             assertEquals(3,rows(f.users.playlist(f.owner,id),"items").size());
@@ -333,6 +336,7 @@ class PlatformCheckTest {
             f.api.retry(f.auth,jobId,new PlatformApi.Confirm(true));Map<String,Object> result=f.awaitJob(jobId,"COMPLETED");
             assertEquals(List.of(4),result.get("excludedSourceIndices"));assertEquals(1,map(result.get("counts")).get("excluded"));assertEquals(2,map(result.get("counts")).get("added"));
             assertEquals(List.of(0,2),rows(result,"items").stream().map(row->row.get("sourceIndex")).toList());assertEquals(List.of(SONG,SONG),f.remoteItems);
+            assertEquals(ARTWORK,rows(result,"items").get(0).get("artworkUrl"));
             assertEquals(List.of(4),f.api.transferStatus(f.auth,jobId).get("excludedSourceIndices"));assertEquals(1,map(f.api.transferHistory(f.auth,true).get(0).get("counts")).get("excluded"));
             f.api.retry(f.auth,jobId,new PlatformApi.Confirm(true));assertEquals(1,f.creates.get());assertEquals(2,f.adds.get());assertEquals(Map.of(),f.users.feedback(f.owner));
             f.sourceItems.set(0);var unreadableRequest=new PlatformApi.ImportBody(UUID.randomUUID().toString(),"spotify","https://open.spotify.com/playlist/"+SOURCE,null);
@@ -450,14 +454,30 @@ class PlatformCheckTest {
     @Test void commentsProvideTimelineOnlyWhenDescriptionHasNone() throws Exception {
         try(Fixture f=new Fixture()) {
             String url="https://www.youtube.com/watch?v="+VIDEO;
-            f.videoDescription="This is a playlist";
-            f.comments=List.of(comment("1:00 Nice moment"),comment("0:00 Artist - First\n1:00 Artist - Second\n2:00 Artist - Third"),comment("0:10 Other - One\n1:20 Other - Two"));
+            f.videoDescription="광고 제거 2:59 리플레이 버튼을 눌러주세요";
+            f.comments=List.of(comment("1:00 Nice moment"),comment("광고 제거 2:59\n00:00:00 ~ 00:00:55 Artist - First\n1:00 Artist - Second\n2:00 Artist - Third"),comment("0:10 Other - One\n1:20 Other - Two"));
             var result=f.api.conversion(f.auth,new PlatformApi.Conversion(null,url,null,null));
             assertEquals("official_comment",result.get("metadataMode"));assertEquals(3,rows(result,"entries").size());assertEquals("First",rows(result,"entries").get(0).get("title"));
+            assertEquals(55,((Number)rows(result,"entries").get(0).get("endSeconds")).intValue());
+            String id=(String)result.get("id");f.api.saveImport(f.auth,id,new PlatformApi.SaveImport("Comment playlist",null,null));
+            assertEquals(3,rows(f.users.playlist(f.owner,id),"items").size());
             assertEquals(1,f.commentReads.get());assertTrue(((String)result.get("notice")).contains("댓글"));
-            f.videoDescription="0:00 Artist - Description";
+            f.videoDescription="0:00 Artist - Description\n1:00 Title only";
             result=f.api.conversion(f.auth,new PlatformApi.Conversion(null,url,null,null));assertEquals("official_metadata",result.get("metadataMode"));assertEquals(1,f.commentReads.get());
             f.videoDescription="No timeline";f.comments=List.of(comment("0:30 I love this"));
+            result=f.api.conversion(f.auth,new PlatformApi.Conversion(null,url,null,null));assertTrue(rows(result,"entries").isEmpty());assertEquals("해당 영상은 변환할 수 없음",result.get("notice"));
+            f.laterComments=List.of(comment("0:00 Artist - Later one\n1:30 Artist - Later two"));
+            result=f.api.conversion(f.auth,new PlatformApi.Conversion(null,url,null,null));
+            assertEquals("Later one",rows(result,"entries").get(0).get("title"));
+            f.laterComments=List.of();f.commentsDisabled=true;
+            result=f.api.conversion(f.auth,new PlatformApi.Conversion(null,url,null,null));
+            assertEquals("해당 영상은 변환할 수 없음",result.get("notice"));
+            f.commentsDisabled=false;
+            // One clearly named song in the description is still a timeline; a lone stray time is not.
+            f.videoDescription="0:00 Artist - Only song";f.comments=List.of(comment("0:30 I love this"));
+            result=f.api.conversion(f.auth,new PlatformApi.Conversion(null,url,null,null));
+            assertEquals(1,rows(result,"entries").size());assertEquals("Only song",rows(result,"entries").get(0).get("title"));assertEquals("official_metadata",result.get("metadataMode"));
+            f.videoDescription="광고 제거 2:59";
             result=f.api.conversion(f.auth,new PlatformApi.Conversion(null,url,null,null));assertTrue(rows(result,"entries").isEmpty());
             f.comments="invalid response";result=f.api.conversion(f.auth,new PlatformApi.Conversion(null,url,null,null));assertTrue(((String)result.get("notice")).contains("댓글을 확인하지 못했어요"));
         }
@@ -613,7 +633,7 @@ class PlatformCheckTest {
         final java.util.concurrent.CountDownLatch videoStarted=new java.util.concurrent.CountDownLatch(1),releaseVideo=new java.util.concurrent.CountDownLatch(1),exchangeStarted=new java.util.concurrent.CountDownLatch(1),releaseExchange=new java.util.concurrent.CountDownLatch(1),createStarted=new java.util.concurrent.CountDownLatch(1),releaseCreate=new java.util.concurrent.CountDownLatch(1);
         final JdbcTemplate db;final Store users;final PlatformStore store;final PlatformClient remote;final PlatformApi api;
         final String owner,auth,otherAuth,testSchema;final JdbcTemplate schemaOwner;String challenge="";volatile String marker="";
-        volatile String videoDescription="0:00 Artist - Song one\n1:10 Artist - Song two";volatile Object comments=List.of();final AtomicInteger commentReads=new AtomicInteger();
+        volatile String videoDescription="0:00 Artist - Song one\n1:10 Artist - Song two";volatile Object comments=List.of();volatile List<Object> laterComments=List.of();volatile boolean commentsDisabled;final AtomicInteger commentReads=new AtomicInteger();
         Fixture() throws Exception {this(null);}
         Fixture(Runnable beforeCommit) throws Exception {
             String configured=System.getenv("TAPTAP_TEST_DATABASE_URL");boolean postgres=configured!=null&&!configured.isBlank();
@@ -635,7 +655,8 @@ class PlatformCheckTest {
             remote=new PlatformClient(json,config,endpoints);api=new PlatformApi(users,store,remote,json,manager);
             }catch(Exception|Error error){server.stop(0);worker.shutdownNow();if(schemaOwner!=null)try{schemaOwner.execute("DROP SCHEMA IF EXISTS "+testSchema+" CASCADE");}catch(RuntimeException cleanup){error.addSuppressed(cleanup);}throw error;}
         }
-        private Map<String,Object> spotifyTrack(String id){return Map.of("id",id,"type","track","name","Song","artists",List.of(Map.of("name","Artist")),"duration_ms",180000,"external_ids",Map.of("isrc","USABC1234567"),"album",Map.of("name","Album"));}
+        private Map<String,Object> spotifyTrack(String id){return Map.of("id",id,"type","track","name","Song","artists",List.of(Map.of("name","Artist")),"duration_ms",180000,"external_ids",Map.of("isrc","USABC1234567"),"album",Map.of("name","Album","images",List.of(Map.of("url","https://untrusted.invalid/image","width",1024),
+                Map.of("url","https://i.scdn.co/image/"+"b".repeat(40),"width",64),Map.of("url",ARTWORK,"width",640))));}
         private Map<String,Object> youtubeRow(int position,String id,String title,String artist){return Map.of("contentDetails",Map.of("videoId",id),"snippet",Map.of("position",position,"title",title,"videoOwnerChannelTitle",artist));}
         private void serve(HttpExchange exchange) {
             try {
@@ -674,7 +695,17 @@ class PlatformCheckTest {
                 else if(path.equals("/youtube/playlists")){String query=exchange.getRequestURI().getRawQuery();if(query.contains("id=PLTEST")||browsePlaylists.get()&&query.contains("id=PLSECOND"))response=Map.of("items",List.of(Map.of("id",query.contains("id=PLSECOND")?"PLSECOND":"PLTEST","snippet",Map.of("title","YouTube own","channelId","channel-owner"))));else if(marker.isEmpty())response=Map.of("items",List.of());else if(query.contains("pageToken=")){markerPages.incrementAndGet();response=Map.of("items",List.of(Map.of("id","PLTARGET","snippet",Map.of("description",marker))));}else response=Map.of("items",List.of(),"nextPageToken","page-two");}
                 else if(path.equals("/youtube/playlistItems")&&method.equals("POST")){assertEquals("PLTARGET",value.path("snippet").path("playlistId").asString());assertEquals(VIDEO,value.path("snippet").path("resourceId").path("videoId").asString());remoteItems.add(VIDEO);if(adds.incrementAndGet()==1){lost(exchange);return;}response=Map.of("id","added");}
                 else if(path.equals("/youtube/playlistItems")){boolean source=exchange.getRequestURI().getRawQuery().contains("playlistId=PLTEST")||browsePlaylists.get()&&exchange.getRequestURI().getRawQuery().contains("playlistId=PLSECOND");List<Object> overridden=source?youtubeSourceRows.get():youtubeTargetRows.get();int count=source?2:remoteItems.size();List<Object> items=new ArrayList<>();for(int i=0;i<count;i++)items.add(youtubeRow(i,VIDEO,"Song","Artist"));response=Map.of("items",overridden==null?items:overridden);}
-                else if(path.equals("/youtube/commentThreads")){commentReads.incrementAndGet();assertTrue(exchange.getRequestURI().getRawQuery().contains("textFormat=plainText"));response=Map.of("items",comments);}
+                else if(path.equals("/youtube/commentThreads")){
+                    commentReads.incrementAndGet();assertTrue(exchange.getRequestURI().getRawQuery().contains("textFormat=plainText"));
+                    if(commentsDisabled){
+                        byte[] error=json.writeValueAsBytes(Map.of("error",Map.of("errors",List.of(Map.of("reason","commentsDisabled")))));
+                        exchange.sendResponseHeaders(403,error.length);exchange.getResponseBody().write(error);return;
+                    }
+                    String cursor=query(exchange.getRequestURI(),"pageToken");
+                    if(!cursor.isEmpty()){
+                        assertEquals("c".repeat(1084)+"&results=bad",cursor);response=Map.of("items",laterComments);
+                    }else response=laterComments.isEmpty()?Map.of("items",comments):Map.of("items",comments,"nextPageToken","c".repeat(1084)+"&results=bad");
+                }
                 else if(path.equals("/youtube/videos")){videos.incrementAndGet();if(stallVideo.get()){exchange.sendResponseHeaders(200,64);exchange.getResponseBody().write('{');exchange.getResponseBody().flush();videoStarted.countDown();releaseVideo.await(25,java.util.concurrent.TimeUnit.SECONDS);return;}response=Map.of("items",List.of(Map.of("id",VIDEO,"snippet",Map.of("title","Official video","description",videoDescription),"contentDetails",Map.of("duration","PT3M"))));}
                 else throw new AssertionError("Unexpected mocked provider request: "+method+" "+path);
                 byte[] result=json.writeValueAsBytes(response);exchange.getResponseHeaders().set("Content-Type","application/json");exchange.sendResponseHeaders(200,result.length);exchange.getResponseBody().write(result);

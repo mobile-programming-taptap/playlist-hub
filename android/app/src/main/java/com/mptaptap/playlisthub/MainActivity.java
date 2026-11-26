@@ -846,11 +846,16 @@ public class MainActivity extends AppCompatActivity {
                 JSONObject row = items.optJSONObject(i);
                 if(row.has("trackId") && row.isNull("trackId") && row.optJSONObject("track")!=null){
                     JSONObject external=row.optJSONObject("track");String item=row.optString("id");int index=i;
-                    songRows.add(new Object[]{trackRow(box,i,external.optString("title","다시 확인 필요"),external.optString("artist")+" · 가져온 곡",external.optString("youtubeVideoId"),external.optString("artworkUrl"),v->externalItemActions(id,item,external,index,items.length())),item,external.optString("title","다시 확인 필요")});continue;
+                    String title=external.optString("title","다시 확인 필요");
+                    View song=trackRow(box,i,title,external.optString("artist")+" · 가져온 곡",externalPlayback(external),v->externalItemActions(id,item,external,index,items.length()));
+                    artwork.loadTrack(song.findViewById(R.id.row_artwork),external);
+                    songRows.add(new Object[]{song,item,title});continue;
                 }
                 try {
                     Track track = TrackJson.read(row.getJSONObject("track")); String item = row.getString("id"); int index=i;
-                    songRows.add(new Object[]{trackRow(box,i,track.title,track.artist,track.youtubeVideoId,track.artworkUrl,v -> itemActions(id, item, track, index, items.length())),item,track.title});
+                    View song=trackRow(box,i,track.title,track.artist,()->listen(track),v -> itemActions(id,item,track,index,items.length()));
+                    artwork.load(song.findViewById(R.id.row_artwork),track.youtubeVideoId,track.artworkUrl,null);
+                    songRows.add(new Object[]{song,item,track.title});
                 } catch (Exception e) { box.addView(text("곡 정보를 불러오지 못했어요.", 14, false)); }
             }
             // A row that could not be read has no id, and the server needs every song in the new order.
@@ -979,12 +984,22 @@ public class MainActivity extends AppCompatActivity {
         row.setContentDescription(title+", "+subtitle);row.setOnClickListener(v->{if(!busy)action.onClick(v);});parent.addView(row);return row;
     }
 
-    private View trackRow(LinearLayout parent,int position,String title,String subtitle,String videoId,String artworkUrl,View.OnClickListener action) {
+    private View trackRow(LinearLayout parent,int position,String title,String subtitle,Runnable playback,View.OnClickListener action) {
         View row=mediaRow(parent,title,subtitle,action);
         TextView index=row.findViewById(R.id.row_index);index.setText(String.valueOf(position+1));index.setVisibility(View.VISIBLE);
-        ((ImageView)row.findViewById(R.id.row_trailing)).setImageResource(R.drawable.ic_more);
+        ImageView menu=row.findViewById(R.id.row_trailing);
+        menu.setImageResource(R.drawable.ic_more);
+        menu.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_YES);
+        menu.setContentDescription("곡 메뉴 · "+title);
+        menu.setFocusable(true);
+        menu.setOnClickListener(v->{if(!busy)action.onClick(v);});
+        if(playback!=null){
+            View play=row.findViewById(R.id.row_play);
+            play.setVisibility(View.VISIBLE);
+            play.setContentDescription("여기서 들어보기 · "+title);
+            play.setOnClickListener(v->{if(!busy)playback.run();});
+        }
         row.setContentDescription((position+1)+". "+title+", "+subtitle);
-        artwork.load(row.findViewById(R.id.row_artwork),videoId,artworkUrl,null);
         return row;
     }
 
@@ -1033,23 +1048,42 @@ public class MainActivity extends AppCompatActivity {
         }).setNegativeButton("닫기", null).show();
     }
 
+    private Runnable externalPlayback(JSONObject track) {
+        String video=ArtworkLoader.videoId(track);
+        if(video.isEmpty())return null;
+        String sourceUrl=track.optString("sourceUrl");
+        int seconds=track.optInt("timestamp",0);
+        if(video.equals(ArtworkLoader.youtubeIdFromUrl(sourceUrl))){
+            String time=Uri.parse(sourceUrl).getQueryParameter("t");
+            try{if(time!=null)seconds=Integer.parseInt(time.replaceFirst("s$",""));}catch(NumberFormatException ignored){}
+        }
+        int start=Math.max(0,Math.min(86400,seconds));
+        String url="https://www.youtube.com/watch?v="+video+(start==0?"":"&t="+start+"s");
+        return ()->listenVideo(track.optString("title","다시 확인 필요"),video,start,()->openUrl(url));
+    }
+
     private void externalItemActions(String id,String item,JSONObject track,int index,int count) {
         String url=track.optString("sourceUrl"),title=track.optString("title","다시 확인 필요");
         List<String> actions=new ArrayList<>(java.util.Arrays.asList("원본에서 열기","곡 정보·출처","곡 정보 수정"));
         if(index>0)actions.add("위로 이동");if(index<count-1)actions.add("아래로 이동");actions.add("이 목록에서 제거");
-        Uri origin=Uri.parse(url);String video=origin.isHierarchical()?origin.getQueryParameter("v"):null;
-        boolean youtube="https".equals(origin.getScheme())&&"www.youtube.com".equals(origin.getHost())&&video!=null&&video.matches("[A-Za-z0-9_-]{11}");
+        Runnable playback=externalPlayback(track);
+        boolean youtube=playback!=null;
         if(youtube)actions.add(0,"여기서 들어보기");
         dialogBuilder().setTitle(title).setItems(actions.toArray(new String[0]),(d,w)->{
             String action=actions.get(w);
-            if(action.equals("여기서 들어보기")){int seconds=track.optInt("timestamp",0);String t=origin.getQueryParameter("t");
-                try{if(t!=null)seconds=Integer.parseInt(t.replaceFirst("s$",""));}catch(Exception ignored){}
-                listenVideo(title,video,Math.max(0,Math.min(86400,seconds)),()->openUrl(url));}
+            if(action.equals("여기서 들어보기"))playback.run();
             else if(action.equals("원본에서 열기"))openUrl(url);
-            else if(action.equals("곡 정보·출처"))dialogBuilder().setTitle("가져온 곡 정보")
-                .setMessage(title+"\n"+track.optString("artist")+"\n\n"+track.optString("sourceProvider",track.optString("platform","외부 목록"))
-                    +"\n원본: "+track.optString("sourceRow")+"\n\n추천 학습과 개인화에는 사용하지 않아요.")
-                .setPositiveButton("원본 열기",(a,b)->openUrl(url)).setNegativeButton("닫기",null).show();
+            else if(action.equals("곡 정보·출처")){
+                LinearLayout info=column();
+                ImageView image=new ImageView(this);
+                image.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                info.addView(image,new LinearLayout.LayoutParams(dp(96),dp(96)));
+                artwork.loadTrack(image,track);
+                info.addView(text(title+"\n"+track.optString("artist")+"\n\n"+track.optString("sourceProvider",track.optString("platform","외부 목록"))
+                    +"\n원본: "+track.optString("sourceRow")+"\n\n추천 학습과 개인화에는 사용하지 않아요.",14,false));
+                dialogBuilder().setTitle("가져온 곡 정보").setView(scroll(info))
+                    .setPositiveButton("원본 열기",(a,b)->openUrl(url)).setNegativeButton("닫기",null).show();
+            }
             else if(action.equals("곡 정보 수정")){
                 LinearLayout box=column();EditText name=new AppCompatEditText(this),artist=new AppCompatEditText(this),time=new AppCompatEditText(this);
                 name.setHint("곡명");name.setText(title);name.setFilters(new InputFilter[]{new InputFilter.LengthFilter(300)});box.addView(text("곡명",12,true));box.addView(name);

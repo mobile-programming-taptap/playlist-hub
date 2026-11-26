@@ -12,5 +12,8 @@
         <TextView android:id="@+id/row_subtitle" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="4dp" android:maxLines="1" android:ellipsize="end" android:textColor="@color/muted" android:textSize="13sp" android:fontFamily="@font/pretendard" app:fontFamily="@font/pretendard" />
     </LinearLayout>
     <CheckBox android:id="@+id/row_check" android:layout_width="48dp" android:layout_height="48dp" android:visibility="gone" />
-    <ImageView android:id="@+id/row_trailing" android:layout_width="40dp" android:layout_height="40dp" android:padding="10dp" android:src="@drawable/ic_chevron_right" android:importantForAccessibility="no" />
+    <ImageButton android:id="@+id/row_play" android:layout_width="48dp" android:layout_height="48dp"
+        android:padding="12dp" android:src="@drawable/ic_play" android:scaleType="centerInside"
+        android:background="?attr/selectableItemBackgroundBorderless" android:visibility="gone" />
+    <ImageView android:id="@+id/row_trailing" android:layout_width="48dp" android:layout_height="48dp" android:padding="10dp" android:src="@drawable/ic_chevron_right" android:importantForAccessibility="no" />
 </LinearLayout>
