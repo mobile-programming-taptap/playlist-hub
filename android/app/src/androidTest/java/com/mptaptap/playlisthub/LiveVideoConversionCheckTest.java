@@ -34,9 +34,9 @@ public class LiveVideoConversionCheckTest {
                 ready(app);onView(withHint("YouTube 영상 주소")).perform(scrollTo(),replaceText(url),closeSoftKeyboard());
                 onView(withText("영상에서 곡 목록 가져오기")).perform(scrollTo(),click());ready(app);
                 app.onActivity(activity->{JSONObject imported=data(activity).optJSONObject("imported");assertNotNull(imported);assertTrue(imported.optJSONArray("entries").length()>1);assertEquals("official_comment",imported.optString("metadataMode"));importId.set(imported.optString("id"));});
-                onView(withText("개별 YouTube 영상 찾기")).perform(scrollTo(),click());ready(app);
+                onView(withText(org.hamcrest.Matchers.startsWith("선택한 곡을 곡별 영상으로 저장 ("))).perform(scrollTo(),click());ready(app);
                 app.recreate();ready(app);
-                onView(withText(org.hamcrest.Matchers.startsWith("개별 영상 "))).perform(scrollTo(),click());ready(app);
+                onView(withText(org.hamcrest.Matchers.endsWith("곡 내 목록에 저장"))).perform(scrollTo(),click());ready(app);
                 onView(withText("내 목록에 저장했어요")).inRoot(isDialog()).check(matches(isDisplayed()));
                 app.onActivity(activity->playlistId.set(data(activity).optString("matchedSaveId")));
                 assertFalse(playlistId.get().isEmpty());onView(withText("계속 보기")).inRoot(isDialog()).perform(click());
@@ -72,7 +72,6 @@ public class LiveVideoConversionCheckTest {
         ApiClient api=new ApiClient(context,base);
         var created=new java.util.ArrayList<String>();
         var individualPlaylists=new java.util.ArrayList<String>();
-        boolean checkIndividual=InstrumentationRegistry.getArguments().getString("liveIndividual","false").equals("true");
         boolean checkArtwork=InstrumentationRegistry.getArguments().getString("liveArtwork","false").equals("true");
         try {
             api.connect();
@@ -82,6 +81,7 @@ public class LiveVideoConversionCheckTest {
                 String url="https://www.youtube.com/watch?v="+video;
                 var savedId=new AtomicReference<String>();
                 var timestamps=new AtomicReference<JSONArray>();
+                var expected=new java.util.ArrayList<String>();
                 try(ActivityScenario<HubActivity> app=ActivityScenario.launch(new Intent(context,HubActivity.class).putExtra("mode","create"))){
                     ready(app);
                     onView(withHint("YouTube 영상 주소")).perform(scrollTo(),replaceText(url),closeSoftKeyboard());
@@ -98,39 +98,21 @@ public class LiveVideoConversionCheckTest {
                     if(index==2)onView(withText("곡명과 아티스트 순서 바꾸기")).perform(scrollTo(),click());
                     onView(withText(firstTitle)).perform(scrollTo()).check(matches(isDisplayed()));
                     if(checkArtwork)awaitArtwork(firstTitle,video);
-                    onView(withText("선택한 곡을 앱 목록에 저장 ("+count+"곡)")).perform(scrollTo(),click());ready(app);
+                    // Saving finds each song's own video: one YouTube search per song.
+                    onView(withText("선택한 곡을 곡별 영상으로 저장 ("+count+"곡)")).perform(scrollTo(),click());ready(app);
+                    app.onActivity(a->{
+                        JSONObject review=data(a).optJSONObject("review");
+                        assertNotNull("The automatic search must reach the result list",review);
+                        assertEquals(-1,review.optInt("nextOffset"));
+                        JSONArray rows=review.optJSONArray("items");assertEquals(count,rows.length());
+                        for(int j=0;j<rows.length();j++){JSONArray candidates=rows.optJSONObject(j).optJSONArray("candidates");expected.add(candidates==null||candidates.length()==0?"":candidates.optJSONObject(0).optJSONObject("track").optString("externalId"));}
+                    });
+                    onView(withText(count+"곡 내 목록에 저장")).perform(scrollTo(),click());ready(app);
                     onView(withText("내 목록에 저장했어요")).inRoot(isDialog()).check(matches(isDisplayed()));
-                    app.onActivity(a->savedId.set(data(a).optString("saveId")));
-                    if(index==0&&checkIndividual){
-                        onView(withText("계속 보기")).inRoot(isDialog()).perform(click());
-                        onView(withText("개별 YouTube 영상 찾기")).perform(scrollTo(),click());ready(app);
-                        var expectedVideos=new java.util.ArrayList<String>();
-                        app.onActivity(a->{
-                            JSONObject review=data(a).optJSONObject("review");
-                            assertNotNull("The automatic search must reach the result list",review);
-                            assertEquals(-1,review.optInt("nextOffset"));
-                            JSONArray rows=review.optJSONArray("items");
-                            assertEquals(count,rows.length());
-                            for(int j=0;j<rows.length();j++){
-                                JSONArray candidates=rows.optJSONObject(j).optJSONArray("candidates");
-                                if(candidates.length()>0)expectedVideos.add(candidates.optJSONObject(0).optJSONObject("track").optString("externalId"));
-                            }
-                        });
-                        assertFalse(expectedVideos.isEmpty());
-                        if(checkArtwork)awaitArtwork("1. 집 앞 · 태리 (Terry)",expectedVideos.get(0));
-                        onView(withText("개별 영상 "+expectedVideos.size()+"곡 내 목록에 저장")).perform(scrollTo(),click());ready(app);
-                        app.onActivity(a->individualPlaylists.add(data(a).optString("matchedSaveId")));
-                        String matchedId=individualPlaylists.get(0);
-                        assertFalse(matchedId.isEmpty());
-                        JSONArray individual=api.object("GET","/playlists/"+matchedId,null).getJSONArray("items");
-                        assertEquals(expectedVideos.size(),individual.length());
-                        for(int j=0;j<individual.length();j++)
-                            assertEquals(expectedVideos.get(j),individual.getJSONObject(j).getJSONObject("track").getString("externalId"));
-                        android.util.Log.i("TapTapTimelineCheck","First-ranked individual videos saved: "+individual.length()+"/"+count);
-                    }
+                    app.onActivity(a->savedId.set(data(a).optString("matchedSaveId")));
                     onView(withText("내 목록으로")).inRoot(isDialog()).perform(click());
                 }
-                assertFalse(savedId.get().isEmpty());
+                assertFalse(savedId.get().isEmpty());individualPlaylists.add(savedId.get());
                 JSONArray library=api.array("/playlists");
                 boolean found=false;
                 for(int j=0;j<library.length();j++)if(savedId.get().equals(library.getJSONObject(j).getString("id")))found=true;
@@ -139,8 +121,10 @@ public class LiveVideoConversionCheckTest {
                 assertEquals(count,tracks.length());
                 assertEquals(firstTitle,tracks.getJSONObject(0).getJSONObject("track").getString("title"));
                 for(int j=0;j<tracks.length();j++){
-                    int seconds=timestamps.get().getJSONObject(j).getInt("seconds");
-                    assertEquals(url+"&t="+seconds+"s",tracks.getJSONObject(j).getJSONObject("track").getString("sourceUrl"));
+                    JSONObject track=tracks.getJSONObject(j).getJSONObject("track");
+                    // A song with no video of its own is kept at its moment in the original.
+                    if(expected.get(j).isEmpty())assertEquals(url+"&t="+timestamps.get().getJSONObject(j).getInt("seconds")+"s",track.getString("sourceUrl"));
+                    else assertEquals(expected.get(j),track.getString("externalId"));
                 }
                 if(checkArtwork&&index==3){
                     try(ActivityScenario<MainActivity> app=ActivityScenario.launch(MainActivity.class)){
@@ -149,7 +133,7 @@ public class LiveVideoConversionCheckTest {
                         waitForMain(app,false);
                         String playlistTitle=api.object("GET","/playlists/"+savedId.get(),null).getString("title");
                         onView(withText(playlistTitle)).perform(scrollTo(),click());waitForMain(app,false);
-                        awaitArtwork(firstTitle,video);
+                        awaitArtwork(firstTitle,expected.get(0).isEmpty()?video:expected.get(0));
                         onView(withContentDescription("곡 메뉴 · Bloodshot")).perform(scrollTo(),click());
                         onView(withText("여기서 들어보기")).inRoot(isDialog()).check(matches(isDisplayed()));
                         onView(withText("닫기")).inRoot(isDialog()).perform(click());

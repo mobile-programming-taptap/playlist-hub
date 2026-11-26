@@ -226,7 +226,8 @@ public final class HubActivity extends AppCompatActivity {
         if(rows!=null&&rows.trim().isEmpty()){timeline.setError("시간표를 입력해 주세요.");return;}
         beginSource("youtube:"+address+":"+(rows==null?"automatic":"manual:"+rows),"conversionRequestId");
         JSONObject body=json("id",value("conversionRequestId"),"url",address);if(rows!=null)set(body,"timeline",rows);
-        put("edits",new JSONArray());put("selections",new JSONArray());send("conversion","POST","/conversions/youtube",body);
+        // The converted list takes its own title; a name left from an earlier import or link form must not name it.
+        put("listTitle","");put("edits",new JSONArray());put("selections",new JSONArray());send("conversion","POST","/conversions/youtube",body);
     }
 
     private void openLibrary(String provider) {
@@ -560,8 +561,9 @@ public final class HubActivity extends AppCompatActivity {
             });
         }
         List<CheckBox> includes=new ArrayList<>();CheckBox all=new CheckBox(this);all.setText("전체 선택");TapTapUi.checkbox(all);controls.add(all);content.addView(all);
-        MaterialButton save=button("",this::saveImport);
-        Runnable counted=()->{int n=0;for(CheckBox c:includes)if(c.isChecked())n++;save.setText("선택한 곡을 앱 목록에 저장 ("+n+"곡)");all.setChecked(n>0&&n==includes.size());};
+        // A timeline is saved as each song's own video; a playlist is saved as it is.
+        MaterialButton save=timeline?button("",()->saveTimeline(imported)):button("",this::saveImport);if(timeline)TapTapUi.primary(save);
+        Runnable counted=()->{int n=0;for(CheckBox c:includes)if(c.isChecked())n++;save.setText((timeline?"선택한 곡을 곡별 영상으로 저장 (":"선택한 곡을 앱 목록에 저장 (")+n+"곡)");all.setChecked(n>0&&n==includes.size());};
         all.setOnClickListener(v->{boolean on=all.isChecked();for(CheckBox c:includes)c.setChecked(on);counted.run();});
         View[] expanded={null};
         for(int i=0;i<entries.length();i++) {
@@ -598,7 +600,6 @@ public final class HubActivity extends AppCompatActivity {
             if(key.equals(value("importExpanded")))show.run();
         }
         counted.run();
-        if(timeline)addPrimaryButton(content,"개별 YouTube 영상 찾기",()->{put("matchFlow","individual");put("targetProvider","youtube");if(value("listTitle").trim().isEmpty())put("listTitle",imported.optString("title","영상 속 음악").substring(0,Math.min(65,imported.optString("title","영상 속 음악").length()))+" · 개별 영상");saveImport(true);});
         content.addView(save,new LinearLayout.LayoutParams(-1,-2));
         heading("다른 플랫폼으로 옮기기");providerPicker(content,"targetProvider");
         paragraph("수정하고 선택한 곡을 앱 목록에 저장한 뒤 대상 서비스에서 같은 곡을 찾아요.");
@@ -607,6 +608,11 @@ public final class HubActivity extends AppCompatActivity {
         if(!imported.has("entries")&&supportedProvider(imported.optString("provider")))addButton(content,"목록 변경 미리보기",()->send("sync","POST","/sync/"+Uri.encode(value("importId"))+"/preview",null));
     }
     private void saveImport(){saveImport(false);}
+    private void saveTimeline(JSONObject imported) {
+        put("matchFlow","individual");put("targetProvider","youtube");
+        String title=imported.optString("title","영상 속 음악");if(value("listTitle").trim().isEmpty())put("listTitle",title.substring(0,Math.min(80,title.length())));
+        saveImport(true);
+    }
     private void saveImport(boolean thenMatch) {
         if(thenMatch&&provider("targetProvider").isEmpty()){message("지원하는 음악 서비스를 선택해 주세요.");return;}
         String title=value("listTitle").trim();if(title.isEmpty()){message("새 목록 이름을 입력해 주세요.");return;}
@@ -637,45 +643,67 @@ public final class HubActivity extends AppCompatActivity {
     }
 
     private void individualVideos() {
-        heading("개별 YouTube 영상");
+        heading("곡별 YouTube 영상");
         JSONObject review=requests.data.optJSONObject("review");
         JSONArray items=review==null?null:review.optJSONArray("items");
         int next=review==null?0:review.optInt("nextOffset",-1);
-        if(next>=0||items==null){
+        boolean stopped=value("exportStopped").equals("true");
+        if(items==null||next>=0&&!stopped){
             paragraph(items==null?"곡마다 YouTube 영상을 찾고 있어요.":items.length()+"곡 중 "+next+"곡 확인");
             // Each page spends YouTube search quota, so the search can stop between pages.
-            if(value("exportStopped").equals("true"))addButton(content,"영상 찾기 이어서",()->{put("exportStopped","false");render();findIndividualVideos(Math.max(0,next));});
-            else{MaterialButton stop=button("중단",()->{});controls.remove(stop);stop.setOnClickListener(v->{put("exportStopped","true");render();});content.addView(stop,new LinearLayout.LayoutParams(-1,-2));}
+            MaterialButton stop=button("중단",()->{});controls.remove(stop);stop.setOnClickListener(v->{put("exportStopped","true");render();});content.addView(stop,new LinearLayout.LayoutParams(-1,-2));
             return;
         }
-        int found=0;
-        put("selections",new JSONArray());
+        if(next>=0)addButton(content,"영상 찾기 이어서",()->{put("exportStopped","false");render();findIndividualVideos(Math.max(0,next));});
+        JSONArray selections=array("selections");int found=0,moments=0;
         for(int i=0;i<items.length();i++){
-            JSONObject item=items.optJSONObject(i);
-            JSONArray candidates=item.optJSONArray("candidates");
-            JSONObject first=candidates==null?null:candidates.optJSONObject(0);
-            JSONObject track=first==null?null:first.optJSONObject("track");
-            boolean missing=track==null||track.optString("externalId").isEmpty();
-            select(item.optInt("sourceIndex",i),track,missing);
-            if(!missing)found++;
+            JSONObject item=items.optJSONObject(i);int index=item.optInt("sourceIndex",i);
+            JSONObject selection=find(selections,"sourceIndex",index);
+            // Untouched rows follow the search: the matched or first video, else the song's moment in the original.
+            if(selection==null||selection.optBoolean("auto")){
+                JSONArray candidates=item.optJSONArray("candidates");JSONObject first=candidates==null?null:candidates.optJSONObject(0);
+                JSONObject track=item.optString("status").equals("MATCHED")&&item.optJSONObject("selected")!=null?item.optJSONObject("selected"):first==null?null:first.optJSONObject("track");
+                if(track!=null&&!track.optString("externalId").isEmpty())select(index,track,false);else keepMoment(index);
+                set(find(selections,"sourceIndex",index),"auto",true);
+            }
+            JSONObject chosen=find(selections,"sourceIndex",index);
+            if(chosen.optBoolean("excluded"))continue;if(chosen.optString("targetId").isEmpty())moments++;else found++;
         }
-        paragraph("영상 "+found+"곡 · 찾지 못한 곡 "+(items.length()-found)+"곡");
-        if(found>0){
+        paragraph("영상 "+found+"곡 · 원본 영상 시점 "+moments+"곡");
+        if(found+moments>0){
             field(content,"새 목록 이름","listTitle",80,false);
-            addPrimaryButton(content,"개별 영상 "+found+"곡 내 목록에 저장",()->approveTransfer(true));
+            addPrimaryButton(content,(found+moments)+"곡 내 목록에 저장",()->approveTransfer(true));
         }
         for(int i=0;i<items.length();i++){
-            JSONObject item=items.optJSONObject(i);
-            JSONObject selection=find(array("selections"),"sourceIndex",item.optInt("sourceIndex",i));
+            JSONObject item=items.optJSONObject(i);int index=item.optInt("sourceIndex",i);
+            JSONObject selection=find(selections,"sourceIndex",index);
             LinearLayout box=card(content);
             JSONObject selected=selectedTrack(item,selection);
             box.addView(artworkLine(box,selected==null?item.optJSONObject("source"):selected,(i+1)+". "+song(item.optJSONObject("source"))));
-            if(selection.optBoolean("excluded"))box.addView(text("찾지 못함",13,false));
-            else {
-                box.addView(text(selection.optString("label"),13,false));
-                addButton(box,"YouTube 영상 열기",()->open("https://www.youtube.com/watch?v="+Uri.encode(selection.optString("targetId"))));
-            }
+            boolean moment=!selection.optBoolean("excluded")&&selection.optString("targetId").isEmpty();
+            String label=selection.optBoolean("excluded")?"저장에서 제외":moment?"원본 영상 시점으로 저장":selection.optString("label");
+            if(!moment&&!selection.optBoolean("excluded")&&selection.optBoolean("auto")&&!item.optString("status").equals("MATCHED"))label+=" · 확인 필요";
+            box.addView(text(label,13,false));
+            if(!moment&&!selection.optBoolean("excluded"))addButton(box,"YouTube 영상 열기",()->open("https://www.youtube.com/watch?v="+Uri.encode(selection.optString("targetId"))));
+            addButton(box,"다른 영상 선택",()->chooseVideo(item,index));
         }
+    }
+    private void keepMoment(int index) {
+        JSONArray selections=array("selections");JSONObject selection=find(selections,"sourceIndex",index);
+        if(selection==null){selection=new JSONObject();set(selection,"sourceIndex",index);selections.put(selection);}
+        set(selection,"targetId","");set(selection,"excluded",false);set(selection,"label","");set(selection,"auto",false);
+    }
+    private void chooseVideo(JSONObject item,int index) {
+        JSONArray candidates=item.optJSONArray("candidates");JSONArray choices=candidates==null?new JSONArray():candidates;
+        String[] labels=new String[choices.length()+2];
+        for(int i=0;i<choices.length();i++){JSONObject candidate=choices.optJSONObject(i);labels[i]=song(candidate==null?null:candidate.optJSONObject("track"));}
+        labels[choices.length()]="원본 영상 시점으로 저장";labels[choices.length()+1]="이 곡은 저장에서 제외";
+        dialog().setTitle("이 곡의 영상을 골라 주세요").setItems(labels,(d,which)->{
+            if(which==choices.length())keepMoment(index);
+            else if(which==choices.length()+1)select(index,null,true);
+            else{JSONObject candidate=choices.optJSONObject(which);select(index,candidate==null?null:candidate.optJSONObject("track"),false);}
+            render();
+        }).setNegativeButton("취소",null).show();
     }
 
     private void review() {
@@ -895,7 +923,7 @@ public final class HubActivity extends AppCompatActivity {
                 put("saveId",value.optString("id"));setResult(RESULT_OK,new Intent().putExtra("playlistId",value.optString("id")));put("selections",new JSONArray());if(exportMatching())return;send("review","POST","/matches",json("importId",value("importId"),"targetProvider",provider("targetProvider")));return;
             case "reviewSaved":
                 put("review",value);dialog().setTitle("확인한 곡을 전송할까요?").setMessage("선택한 곡으로 "+providerName(provider("targetProvider"))+"에 ‘"+value("listTitle").trim()+"’ 목록을 만들어요. 제외한 곡은 보내지 않아요."+(value("screen").equals("export")?"\n자동 선택 "+ExportReview.autoCount(array("selections"))+"곡 포함":""))
-                    .setPositiveButton("전송",(d,w)->{String key=transferKey();if(!key.equals(value("transferKey"))||value("transferId").isEmpty()){put("transferKey",key);put("transferId",UUID.randomUUID().toString());}transferPolls=0;put("screen","transfer");render();send("transfer","POST","/transfers",json("id",value("transferId"),"importId",value("importId"),"targetProvider",provider("targetProvider"),"title",value("listTitle").trim(),"confirmed",true));}).setNegativeButton("취소",null).show();return;
+                    .setPositiveButton("전송",(d,w)->{String key=transferKey();if(!key.equals(value("transferKey"))||value("transferId").isEmpty()){put("transferKey",key);put("transferId",UUID.randomUUID().toString());}transferPolls=0;put("transferFrom",value("screen"));put("screen","transfer");render();send("transfer","POST","/transfers",json("id",value("transferId"),"importId",value("importId"),"targetProvider",provider("targetProvider"),"title",value("listTitle").trim(),"confirmed",true));}).setNegativeButton("취소",null).show();return;
             case "transfer":put("transfer",value);put("screen","transfer");scheduleTransferRefresh();break;
             case "sync":put("sync",value);put("screen","sync");break;
             case "syncApplied":put("imported",value);put("screen","preview");put("edits",new JSONArray());break;
@@ -904,7 +932,8 @@ public final class HubActivity extends AppCompatActivity {
                 if(route.equals("saved"))put("saveId",value.optString("id"));
                 String savedPlaylist=value.optString("id"),savedBase=base,savedOwner=requests.fingerprint(this,base);
                 setResult(RESULT_OK,new Intent().putExtra("playlistId",savedPlaylist));
-                dialog().setTitle("내 목록에 저장했어요").setMessage("저장한 음악은 추천 화면의 내 목록에서 확인할 수 있어요.").setPositiveButton("내 목록으로",(d,w)->{
+                int moments=value.optInt("originalMoments",0);
+                dialog().setTitle("내 목록에 저장했어요").setMessage((moments>0?moments+"곡은 개별 영상을 찾지 못해 원본 영상 시점으로 저장했어요.\n":"")+"저장한 음악은 추천 화면의 내 목록에서 확인할 수 있어요.").setPositiveButton("내 목록으로",(d,w)->{
                     setResult(RESULT_OK,new Intent().putExtra("openPlaylist",true).putExtra("playlistId",savedPlaylist).putExtra("serverBase",savedBase).putExtra("owner",savedOwner));finish();
                 }).setNegativeButton("계속 보기",null).show();message("내 목록에 저장했어요.");return;
             }
@@ -931,9 +960,13 @@ public final class HubActivity extends AppCompatActivity {
         if(route.equals("historyDeleted")&&error instanceof ApiClient.ApiError&&((ApiClient.ApiError)error).statusCode==404){delivered(route,new JSONObject());return;}
         String message=error instanceof ApiClient.ApiError?error.getMessage():"서버와 연결하지 못했어요. 연결 상태를 확인하고 다시 시도해 주세요.";
         if(route.equals("batchImport")){JSONObject row=find(array("batchImports"),"requestId",value("batchActiveId"));if(row!=null){set(row,"status","FAILED");set(row,"notice",message);}put("screen","batch");render();message("가져오기를 멈췄어요. 저장한 목록은 유지되며 남은 목록만 다시 가져올 수 있어요.");return;}
+        // A rejected start leaves no job to check, so go back to the send button.
+        if(route.equals("transfer")&&requests.data.optJSONObject("transfer")==null&&!value("transferFrom").isEmpty()){put("screen",value("transferFrom"));render();}
         if(error instanceof ApiClient.ApiError&&((ApiClient.ApiError)error).statusCode==409&&message.contains("다시 연결")){message(message);showRecovery("음악 서비스 다시 연결",()->{mode="account";put("screen","account");render();reload();});return;}
         if(route.equals("library")){put("screen","library");render();message(message);return;}
-        if(route.equals("individualMatch")||route.equals("individualRestore")){put("exportStopped","true");render();message(message);return;}
+        // The server keeps songs searched before a limit; show them so the rest can be saved at their moment.
+        if(route.equals("individualMatch")){put("exportStopped","true");message(message);send("individualRestore","GET","/matches/"+Uri.encode(value("importId"))+"?targetProvider=youtube",null);return;}
+        if(route.equals("individualRestore")){put("exportStopped","true");render();message(message);return;}
         if(route.equals("exportMatch")||route.equals("exportReview")){put("exportStopped","true");put("screen","export");render();message(message);return;}
         if(route.equals("exportImport")||route.equals("exportAccount")){put("screen","library");render();message(message);return;}
         if(route.equals("auth")){

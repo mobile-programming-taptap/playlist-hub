@@ -166,6 +166,7 @@ class PlatformConcurrencyCheckTest {
         @Override PlaylistPage playlists(String provider,String cursor,Tokens token){return new PlaylistPage(provider,List.of(),"");}
         @Override String findCreated(String provider,String marker,Tokens token){return markers.getOrDefault(marker,"");}
         @Override String createPrivate(String provider,String title,String marker,Tokens token){creates.incrementAndGet();if(marker.equals(slowMarker)){createStarted.countDown();waitFor(releaseCreate);}String id=UUID.randomUUID().toString().replace("-","").substring(0,22);markers.put(marker,id);tracks.put(id,new CopyOnWriteArrayList<>());return id;}
+        @Override boolean ensurePrivate(String provider,String playlist,Tokens token){return true;}
         @Override List<String> existingIds(String provider,String playlist,Tokens token){return new ArrayList<>(tracks.get(playlist));}
         @Override void add(String provider,String playlist,String target,Tokens token){tracks.get(playlist).add(target);adds.incrementAndGet();if(loseFirstAdd&&playlist.equals(markers.get(slowMarker))){loseFirstAdd=false;throw new Failure(502);}}
         private static void waitFor(CountDownLatch signal){try{assertTrue(signal.await(5,TimeUnit.SECONDS),"Fixture latch timed out");}catch(InterruptedException interrupted){Thread.currentThread().interrupt();throw new IllegalStateException(interrupted);}}

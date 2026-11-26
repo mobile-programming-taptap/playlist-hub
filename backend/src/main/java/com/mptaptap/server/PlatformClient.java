@@ -318,13 +318,15 @@ public class PlatformClient {
     }
     List<PlatformTrack> search(String provider,PlatformTrack source,Tokens tokens) {
         provider(provider);
-        String query=(source.title+" "+source.artist).strip();if(query.length()>300)query=query.substring(0,300);
+        // A YouTube channel name like "Act - Topic" or "ActVEVO" is not part of the song's credits.
+        String artist="youtube".equals(source.platform)&&source.artist!=null?source.artist.replaceAll("(?i)\\s*(?:-\\s*topic|vevo|official)$",""):source.artist;
+        String query=(source.title+" "+artist).strip();if(query.length()>300)query=query.substring(0,300);
         List<PlatformTrack> result=new ArrayList<>();
         if(provider.equals("spotify")) {
             if(source.isrc!=null&&!source.isrc.isEmpty())query="isrc:"+source.isrc;
             for(JsonNode row:api(provider,"GET","/search?type=track&limit=10&q="+encode(query),tokens.accessToken(),null).path("tracks").path("items"))result.add(spotifyTrack(row));
         }else {
-            for(JsonNode row:youtubeLookup("/search?part=snippet&type=video&maxResults=5&q="+encode(query),tokens==null?null:tokens.accessToken()).path("items")) {
+            for(JsonNode row:youtubeLookup("/search?part=snippet&type=video&maxResults=25&q="+encode(query),tokens==null?null:tokens.accessToken()).path("items")) {
                 String id=row.path("id").path("videoId").asString("");if(id.matches("[A-Za-z0-9_-]{11}"))result.add(track(provider,id,org.springframework.web.util.HtmlUtils.htmlUnescape(row.path("snippet").path("title").asString("")),org.springframework.web.util.HtmlUtils.htmlUnescape(row.path("snippet").path("channelTitle").asString("")),0,"",""));
             }
         }
@@ -352,6 +354,29 @@ public class PlatformClient {
         else{path="/playlists?part=snippet,status";body=Map.of("snippet",Map.of("title",title,"description",marker),"status",Map.of("privacyStatus","private"));}
         JsonNode reply=api(provider,"POST",path,tokens.accessToken(),body);
         return required(reply,"id");
+    }
+    /**
+     * Spotify can create a playlist as public even when asked for a private one. Before songs go into a playlist this
+     * server created, read its privacy back, set it private once if needed, and report whether it is now private.
+     * YouTube playlists are created with an explicit private status.
+     */
+    boolean ensurePrivate(String provider,String id,Tokens tokens) {
+        provider(provider);if(!provider.equals("spotify"))return true;validPlaylistId(provider,id);
+        // Read privacy from the owner's playlist list: on a real account the single-playlist read answered 503 or left "public" out.
+        if(Boolean.FALSE.equals(spotifyPublic(id,tokens)))return true;
+        api(provider,"PUT","/playlists/"+id,tokens.accessToken(),Map.of("public",false));
+        Boolean after=spotifyPublic(id,tokens);boolean fixed=Boolean.FALSE.equals(after);
+        org.slf4j.LoggerFactory.getLogger(PlatformClient.class).warn("Spotify playlist was not private; after update public={}; granted scopes: {}",after,tokens.scopes());
+        return fixed;
+    }
+    /** The playlist's "public" flag as the owner's playlist list reports it, or null when it is not listed. */
+    private Boolean spotifyPublic(String id,Tokens tokens) {
+        for(int page=0;page<10;page++) {
+            JsonNode reply=api("spotify","GET","/me/playlists?limit=50&offset="+(page*50),tokens.accessToken(),null);
+            for(JsonNode row:reply.path("items"))if(id.equals(row.path("id").asString("")))return row.path("public").isBoolean()?row.path("public").asBoolean():null;
+            if(reply.path("next").asString("").isEmpty())break;
+        }
+        return null;
     }
     List<String> existingIds(String provider,String id,Tokens tokens) {
         validPlaylistId(provider,id);
@@ -383,6 +408,7 @@ public class PlatformClient {
                 byte[] bytes=input.readNBytes(2*1024*1024+1);
                 if(expired.get())throw new Failure(504);
                 if(response.statusCode()<200||response.statusCode()>=300) {
+                    logRejection(method,url,response.statusCode(),bytes);
                     boolean commentsDisabled=false;
                     if(response.statusCode()==403&&request.build().uri().getPath().endsWith("/commentThreads")
                             &&bytes.length>0&&bytes.length<=2*1024*1024) {
@@ -399,6 +425,18 @@ public class PlatformClient {
             }finally{timer.cancel(false);}
         }catch(InterruptedException error){Thread.currentThread().interrupt();throw new Failure(503);}
         catch(IOException|tools.jackson.core.JacksonException error){throw new Failure(502);}
+    }
+    /** Records why a provider refused a call: status and the provider's own reason, never the query string (it may hold the API key). */
+    private void logRejection(String method,String url,int status,byte[] bytes) {
+        String reason="";
+        try{JsonNode error=json.readTree(bytes).path("error");
+            reason=error.path("errors").path(0).path("reason").asString(error.path("status").isString()?error.path("status").asString(""):"");
+            String message=error.isString()?error.asString(""):error.path("message").asString("");
+            if(!message.isEmpty())reason=(reason.isEmpty()?"":reason+": ")+message;}
+        catch(RuntimeException unreadable){}
+        URI target=URI.create(url);
+        org.slf4j.LoggerFactory.getLogger(PlatformClient.class).warn("Platform API {} {}{} -> HTTP {} {}",method,target.getHost(),target.getPath(),status,
+            reason.length()>200?reason.substring(0,200):reason);
     }
     static String playlistUrl(String provider,String id){provider(provider);if(id==null||id.isEmpty())return "";validPlaylistId(provider,id);return provider.equals("spotify")?"https://open.spotify.com/playlist/"+id:"https://www.youtube.com/playlist?list="+id;}
     static String playlistId(String provider,String url) {

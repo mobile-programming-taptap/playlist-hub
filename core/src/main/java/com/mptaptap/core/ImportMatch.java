@@ -37,6 +37,12 @@ public final class ImportMatch {
     }
     private static final Pattern QUALIFIER=Pattern.compile("\\([^)]*\\)|\\[[^]]*\\]|\\s[-–—]\\s.+$");
     private static final Pattern VERSION=Pattern.compile("(?i)(?<![\\p{L}])(?:live|remix|cover|instrumental|acoustic|demo|radio edit|sped up|slowed|remaster(?:ed)?)(?![\\p{L}])|라이브|리믹스|커버|연주곡|반주|어쿠스틱|리마스터");
+    /** Featured-artist credits ("(feat. X)", "[ft. X]", " feat. X") name collaborators, not a different song. */
+    private static final Pattern FEATURE=Pattern.compile("(?i)^[(\\[]?\\s*(?:feat\\.?|ft\\.?|featuring)\\s");
+    private static final Pattern TRAILING_FEATURE=Pattern.compile("(?i)\\s(?:feat\\.?|ft\\.?|featuring)\\s.+$");
+    private static final Pattern VIDEO_LABEL=Pattern.compile("(?i)\\s*[(\\[][^)\\]]*(?:official|video|lyrics?|audio|visuali[sz]er|\\bm/?v\\b|가사|뮤직\\s*비디오)[^)\\]]*[)\\]]");
+    private static final Pattern ACT_PREFIX=Pattern.compile("^(.+?)\\s+[-–—]\\s+(.+)$"),CHANNEL_SUFFIX=Pattern.compile("(?i)\\s*(?:-\\s*topic|vevo|official)$");
+    private static final Pattern CREDIT_SPLIT=Pattern.compile("(?i)\\s*(?:,|&|/|;|\\bfeat\\.?|\\bft\\.?|\\bfeaturing\\b|\\bwith\\b|\\bx\\b)\\s*");
     private ImportMatch() {}
 
     public static ReviewItem match(PlatformTrack source,List<PlatformTrack> candidates) {
@@ -44,9 +50,8 @@ public final class ImportMatch {
         if(candidates==null||candidates.size()>MAX_CANDIDATES)throw new IllegalArgumentException("후보 곡은 100개까지 확인할 수 있어요.");
         ReviewItem result=new ReviewItem();result.source=source;
         for(PlatformTrack track:candidates){validate(track);result.candidates.add(score(source,track));}
-        result.candidates.sort(Comparator.comparingInt((Candidate c)->c.score).reversed()
-                .thenComparing(c->clean(c.track.platform)).thenComparing(c->clean(c.track.externalId))
-                .thenComparing(c->clean(c.track.title)).thenComparing(c->clean(c.track.artist)));
+        // Stable sort: equal scores keep the platform's search order, so the first suggestion is its most relevant result.
+        result.candidates.sort(Comparator.comparingInt((Candidate c)->c.score).reversed());
         if(result.candidates.isEmpty()||result.candidates.get(0).score<300)return result;
         Candidate best=result.candidates.get(0);
         boolean ambiguous=false;
@@ -61,13 +66,14 @@ public final class ImportMatch {
 
     private static Candidate score(PlatformTrack source,PlatformTrack track) {
         Candidate candidate=new Candidate();candidate.track=track;
+        PlatformTrack original=source;source=asSong(source,track.artist);track=asSong(track,original.artist);
         String sourceIsrc=isrc(source.isrc),targetIsrc=isrc(track.isrc);
         boolean external=!clean(source.platform).isEmpty()&&clean(source.platform).equals(clean(track.platform))
                 &&!value(source.externalId).isEmpty()&&value(source.externalId).equals(value(track.externalId));
         boolean recording=!sourceIsrc.isEmpty()&&sourceIsrc.equals(targetIsrc);
         String sourceVersion=version(source),targetVersion=version(track);
         boolean title=!baseTitle(source.title).isEmpty()&&baseTitle(source.title).equals(baseTitle(track.title));
-        boolean artist=!clean(source.artist).isEmpty()&&clean(source.artist).equals(clean(track.artist));
+        boolean artist=!clean(source.artist).isEmpty()&&(clean(source.artist).equals(clean(track.artist))||credits(track.artist).containsAll(credits(source.artist)));
         candidate.identity=external||recording;candidate.exact=title&&artist&&sourceVersion.equals(targetVersion);
         if(external){candidate.score=1000;candidate.reasons.add("플랫폼 ID 일치");}
         else if(recording){candidate.score=950;candidate.reasons.add("ISRC 일치");}
@@ -89,6 +95,22 @@ public final class ImportMatch {
         }
         return candidate;
     }
+    /** A YouTube video named "Act - Song (Official Video)" on channel "Act Official", read as the song "Song" by "Act". */
+    private static PlatformTrack asSong(PlatformTrack track,String otherAct) {
+        if(!clean(track.platform).equals("youtube"))return track;
+        String artist=CHANNEL_SUFFIX.matcher(value(track.artist)).replaceAll(""),title=VIDEO_LABEL.matcher(value(track.title)).replaceAll("").trim();
+        // Channels often drop spaces: "TheWeekndVEVO" is "The Weeknd".
+        if(!clean(otherAct).isEmpty()&&clean(artist).replace(" ","").equals(clean(otherAct).replace(" ","")))artist=otherAct;
+        Matcher named=ACT_PREFIX.matcher(title);
+        if(named.matches()) {
+            java.util.Set<String> act=credits(named.group(1));
+            if(!credits(artist).isEmpty()&&act.containsAll(credits(artist))||!credits(otherAct).isEmpty()&&act.containsAll(credits(otherAct)))title=named.group(2);
+        }
+        PlatformTrack song=new PlatformTrack();
+        song.platform=track.platform;song.externalId=track.externalId;song.isrc=track.isrc;song.title=title;song.artist=artist;
+        song.version=track.version;song.album=track.album;song.sourceUrl=track.sourceUrl;song.artworkUrl=track.artworkUrl;song.durationMs=track.durationMs;
+        return song;
+    }
     private static String version(PlatformTrack track) {
         StringBuilder key=new StringBuilder(clean(track.version));Matcher qualifier=QUALIFIER.matcher(value(track.title));
         while(qualifier.find())if(VERSION.matcher(qualifier.group()).find()) {
@@ -100,8 +122,18 @@ public final class ImportMatch {
     }
     private static String baseTitle(String title) {
         String text=value(title);Matcher qualifier=QUALIFIER.matcher(text);StringBuffer result=new StringBuffer();
-        while(qualifier.find())qualifier.appendReplacement(result,VERSION.matcher(qualifier.group()).find()?"":Matcher.quoteReplacement(qualifier.group()));
-        qualifier.appendTail(result);return clean(result.toString());
+        while(qualifier.find()) {
+            String part=qualifier.group();
+            boolean drop=VERSION.matcher(part).find()||FEATURE.matcher(part.trim()).find();
+            qualifier.appendReplacement(result,drop?"":Matcher.quoteReplacement(part));
+        }
+        qualifier.appendTail(result);return clean(TRAILING_FEATURE.matcher(result.toString()).replaceAll(""));
+    }
+    /** The individual acts in a credit such as "Daft Punk, Pharrell Williams" or "Mark Ronson feat. Bruno Mars". */
+    private static java.util.Set<String> credits(String artist) {
+        java.util.Set<String> names=new java.util.LinkedHashSet<>();
+        for(String name:CREDIT_SPLIT.split(value(artist)))if(!clean(name).isEmpty())names.add(clean(name));
+        return names;
     }
     private static double similarity(String a,String b) {
         if(a.isEmpty()||b.isEmpty())return 0;

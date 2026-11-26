@@ -99,6 +99,39 @@ public final class ImportMatchCheck {
         source=track("spotify","same","Song","Artist");live=track("spotify","same","Song (Live)","Artist");named=track("spotify","other","Song","Artist");
         review=ImportMatch.match(source,Arrays.asList(named,live));
         assert review.candidates.get(0).track==live&&review.status==ImportMatch.Status.NEEDS_REVIEW : "ID must stay ahead of a conflicting name match for review";
+        // Real Spotify results: a featured-artist credit is the same song, not an unknown one.
+        // YouTube video titles lead with the act ("Coldplay - Yellow (Official Video)"); a short song title must still match.
+        source=track("youtube","","Yellow","Coldplay");
+        ImportMatch.ReviewItem video=ImportMatch.match(source,List.of(track("youtube","yAAAAAAAAAA","Coldplay - Yellow (Official Video)","Coldplay"),
+            track("youtube","yBBBBBBBBBB","Coldplay - Yellow","Somber Sounds"),track("youtube","yCCCCCCCCCC","Coldplay - Yellow (Live in Madrid 2011)","Coldplay")));
+        assert video.status==ImportMatch.Status.MATCHED&&video.selected.externalId.equals("yAAAAAAAAAA"):video.status;
+        source=track("youtube","","Bohemian Rhapsody","Queen");
+        video=ImportMatch.match(source,List.of(track("youtube","yDDDDDDDDDD","Queen – Bohemian Rhapsody (Official Video)","Queen Official")));
+        assert video.status==ImportMatch.Status.MATCHED:video.status;
+        source=track("youtube","","Blinding Lights","The Weeknd");
+        video=ImportMatch.match(source,List.of(track("youtube","yFFFFFFFFFF","The Weeknd - Blinding Lights (Official Video)","TheWeekndVEVO")));
+        assert video.status==ImportMatch.Status.MATCHED:video.status;
+        // A song whose own title contains " - " is not cut when the part before it is not the act.
+        source=track("youtube","","Yellow","Coldplay");
+        video=ImportMatch.match(source,List.of(track("youtube","yEEEEEEEEEE","Mellow - Yellow (Official Video)","Coldplay")));
+        assert video.status!=ImportMatch.Status.MATCHED:video.status;
+        source=track("youtube","","Get Lucky","Daft Punk");
+        ImportMatch.PlatformTrack featured=track("spotify","gl","Get Lucky (feat. Pharrell Williams and Nile Rodgers)","Daft Punk, Pharrell Williams, Nile Rodgers");
+        ImportMatch.PlatformTrack radio=track("spotify","gr","Get Lucky (Radio Edit) [feat. Pharrell Williams and Nile Rodgers]","Daft Punk, Pharrell Williams, Nile Rodgers");
+        ImportMatch.PlatformTrack other=track("spotify","hb","HOTBOX","Lil Nas X");
+        review=ImportMatch.match(source,Arrays.asList(other,radio,featured));
+        assert review.status==ImportMatch.Status.MATCHED&&review.selected==featured : "feat. credits must not hide the original: "+review.status;
+        source=track("youtube","","Uptown Funk (ft. Bruno Mars)","Mark Ronson");
+        named=track("spotify","uf","Uptown Funk (feat. Bruno Mars)","Mark Ronson, Bruno Mars");
+        assert ImportMatch.match(source,Collections.singletonList(named)).status==ImportMatch.Status.MATCHED;
+        named=track("spotify","uc","Uptown Funk","Bruno Mars Tribute Band");
+        assert ImportMatch.match(source,Collections.singletonList(named)).status!=ImportMatch.Status.MATCHED : "A different act is not the original";
+        // Equal-scoring same-name recordings keep the platform's search order, so the first suggestion is its top result.
+        source=track("youtube","","Shape of You","Ed Sheeran");
+        ImportMatch.PlatformTrack original=track("spotify","zz-original","Shape of You","Ed Sheeran");original.album="÷";
+        ImportMatch.PlatformTrack compilation=track("spotify","aa-compilation","Shape of You","Ed Sheeran");compilation.album="Top Motivation";
+        review=ImportMatch.match(source,Arrays.asList(original,compilation));
+        assert review.status==ImportMatch.Status.NEEDS_REVIEW&&review.candidates.get(0).track==original : "Ties keep the platform's relevance order";
         List<ImportMatch.PlatformTrack> tooMany=new ArrayList<>(Collections.nCopies(101,named));
         ImportMatch.PlatformTrack finalSource=source;
         expectInvalid(()->ImportMatch.match(finalSource,tooMany));

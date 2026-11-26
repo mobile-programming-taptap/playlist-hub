@@ -81,6 +81,12 @@ public class ArtworkLoaderCheckTest {
         String spotifyId="4uLU6hMCjMI75M1A2tKUQC";
         assertEquals("spotify:"+spotifyId,ArtworkLoader.trackKey(new org.json.JSONObject().put("platform","spotify").put("externalId",spotifyId)));
         assertEquals(cover,ArtworkLoader.trackKey(new org.json.JSONObject().put("platform","spotify").put("externalId",spotifyId).put("artworkUrl",cover)));
+        // A song kept at its moment in a long video shows its album art, not the long video.
+        String caa="https://coverartarchive.org/release/12345678-1234-1234-1234-123456789abc/front-500";
+        assertEquals(caa,ArtworkLoader.trackKey(new org.json.JSONObject().put("platform","youtube").put("externalId","aaaaaaaaaa1").put("sourceType","timeline").put("artworkUrl",caa)));
+        assertEquals("aaaaaaaaaa1",ArtworkLoader.trackKey(new org.json.JSONObject().put("platform","youtube").put("externalId","aaaaaaaaaa1").put("sourceType","timeline")));
+        // A timeline row on the review screen also shows the song's album art first.
+        assertEquals(cover,ArtworkLoader.trackKey(new org.json.JSONObject().put("title","Song").put("sourceUrl","https://www.youtube.com/watch?v=aaaaaaaaaa1&t=60s").put("artworkUrl",cover)));
         assertNull(ArtworkLoader.key("",cover.replace("i.scdn.co","i.scdn.co.other.example")));
     }
 

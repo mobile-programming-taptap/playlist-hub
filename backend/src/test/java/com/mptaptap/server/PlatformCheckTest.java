@@ -152,6 +152,17 @@ class PlatformCheckTest {
         }
     }
 
+    @Test void youtubeTopicChannelIsNotPartOfTheSpotifySearch() throws Exception {
+        try(Fixture f=new Fixture()) {
+            f.store.connection(f.owner,"youtube",new PlatformClient.Tokens("google-access","google-refresh","channel-owner","youtube.force-ssl",Instant.now().plusSeconds(3600)));
+            f.store.connection(f.owner,"spotify",new PlatformClient.Tokens("test-access","test-refresh","owner","playlist-read-private",Instant.now().plusSeconds(3600)));
+            f.youtubeSourceRows.set(List.of(f.youtubeRow(0,VIDEO,"Just a Dance","Alfie Templeman - Topic"),f.youtubeRow(1,VIDEO,"Blinding Lights","TheWeekndVEVO")));
+            String id=UUID.randomUUID().toString();f.api.importPlaylist(f.auth,new PlatformApi.ImportBody(id,"youtube","https://www.youtube.com/playlist?list=PLTEST",null));
+            f.api.matches(f.auth,new PlatformApi.MatchBody(id,"spotify",0));
+            assertEquals(List.of("Just a Dance Alfie Templeman","Blinding Lights TheWeeknd"),f.spotifyQueries);
+        }
+    }
+
     @Test void youtubeUnavailableRowsKeepOriginalPositionsAndCannotBecomeAFilteredTransferPrefix() throws Exception {
         try(Fixture f=new Fixture()) {
             f.store.connection(f.owner,"youtube",new PlatformClient.Tokens("google-access","google-refresh","channel-owner","youtube.force-ssl",Instant.now().plusSeconds(3600)));
@@ -345,6 +356,21 @@ class PlatformCheckTest {
         }
     }
 
+    @Test void aSpotifyPlaylistCreatedPublicIsMadePrivateBeforeAnySongIsAdded() throws Exception {
+        try(Fixture f=new Fixture()){
+            var tokens=new PlatformClient.Tokens("test-access","refresh","owner","playlist-modify-private",java.time.Instant.now().plusSeconds(3600));
+            f.listTarget.set(true);f.targetPublic.set(false);
+            assertTrue(f.remote.ensurePrivate("spotify",TARGET,tokens));assertEquals(0,f.privacyUpdates.get(),"A private playlist is left as it is");
+            f.targetPublic.set(true);
+            assertTrue(f.remote.ensurePrivate("spotify",TARGET,tokens),"A public answer is corrected and checked again");
+            assertEquals(1,f.privacyUpdates.get());assertFalse(f.targetPublic.get());
+            f.targetPublic.set(true);f.stubbornPublic.set(true);
+            assertFalse(f.remote.ensurePrivate("spotify",TARGET,tokens),"Still public after the update means songs must not be added");
+            assertTrue(f.remote.ensurePrivate("youtube","PLTARGET",null),"YouTube creates with an explicit private status");
+            f.assertHealthy();
+        }
+    }
+
     @Test void pagedMatchingDistinguishesUnsearchedRowsFromEmptySearchesAndKeepsReview() throws Exception {
         try(Fixture f=new Fixture()) {
             f.sourceItems.set(21);
@@ -413,6 +439,30 @@ class PlatformCheckTest {
                 assertEquals(2,rows(f.users.playlist(f.owner,id),"items").size());
             }
             f.assertHealthy();
+        }
+    }
+
+    @Test void timelineSongsLeftWithoutTheirOwnVideoKeepTheirMomentAndGetAlbumArt() throws Exception {
+        try(Fixture f=new Fixture()){
+            f.store.connection(f.owner,"spotify",new PlatformClient.Tokens("test-access","test-refresh","owner","playlist-read-private",Instant.now().plusSeconds(3600)));
+            String id=UUID.randomUUID().toString();
+            Map<String,Object> converted=f.api.conversion(f.auth,new PlatformApi.Conversion(id,"https://www.youtube.com/watch?v=abcdefghijk","0:00 Artist - Song\n1:00 Artist - Song",180));
+            assertEquals(ARTWORK,rows(converted,"entries").get(0).get("artworkUrl"),"The review screen shows each song's album art before any video search.");
+            f.api.reviewImport(f.auth,id,new PlatformApi.SaveImport("Individual videos",null,List.of(new PlatformApi.TimelineEdit(0,"Song","Artist",false,0),new PlatformApi.TimelineEdit(1,"Song","Artist",false,60))));
+            f.youtubeSearchesLeft.set(1);
+            assertEquals(429,assertThrows(PlatformClient.Failure.class,()->f.api.matches(f.auth,new PlatformApi.MatchBody(id,"youtube",0))).status);
+            List<Map<String,Object>> kept=rows(f.api.storedReview(f.auth,id,"youtube"),"items");
+            assertEquals(VIDEO,map(map(rows(kept.get(0),"candidates").get(0)).get("track")).get("externalId"),"The search that succeeded before the limit is kept.");
+            assertEquals("NOT_SEARCHED",kept.get(1).get("status"));
+            f.api.review(f.auth,id,new PlatformApi.ReviewBody("youtube",List.of(new PlatformApi.Selection(0,VIDEO,false),new PlatformApi.Selection(1,"",false))));
+            Map<String,Object> saved=f.api.saveMatches(f.auth,id,new PlatformApi.SaveMatches("Individual videos"));
+            assertEquals(2,saved.get("size"));assertEquals(1,saved.get("originalMoments"));
+            List<Map<String,Object>> items=rows(f.users.playlist(f.owner,(String)saved.get("id")),"items");
+            Map<String,Object> own=map(items.get(0).get("track")),moment=map(items.get(1).get("track"));
+            assertEquals(VIDEO,own.get("externalId"));
+            assertEquals("abcdefghijk",moment.get("externalId"));assertEquals(60,moment.get("timestamp"));assertEquals("timeline",moment.get("sourceType"));
+            assertEquals("https://www.youtube.com/watch?v=abcdefghijk&t=60s",moment.get("sourceUrl"));
+            assertEquals(ARTWORK,moment.get("artworkUrl"),"A song kept at its moment shows its album art, not the long video.");
         }
     }
 
@@ -537,6 +587,19 @@ class PlatformCheckTest {
         }
     }
 
+    @Test void aYoutubePlaylistJustCreatedIsFilledWithoutReadingItBack() throws Exception {
+        try(Fixture f=new Fixture()){
+            Map<String,String> started=f.api.start(f.auth,"youtube");f.challenge=query(URI.create(started.get("authorizationUrl")),"code_challenge");
+            f.api.callback("youtube",started.get("state"),"google-test-code",null);
+            String imported=UUID.randomUUID().toString();f.api.importPlaylist(f.auth,new PlatformApi.ImportBody(imported,"youtube","https://www.youtube.com/playlist?list=PLTEST",null));
+            f.api.matches(f.auth,new PlatformApi.MatchBody(imported,"youtube",0));f.api.review(f.auth,imported,new PlatformApi.ReviewBody("youtube",List.of(new PlatformApi.Selection(0,VIDEO,false),new PlatformApi.Selection(1,VIDEO,false))));
+            // YouTube may answer 404 playlistNotFound for a playlist it created a moment ago; a new playlist is known to be empty.
+            f.answerCreate.set(true);f.freshTargetMissing.set(true);
+            String job=UUID.randomUUID().toString();f.api.transfer(f.auth,new PlatformApi.TransferBody(job,imported,"youtube","Private YouTube",true));f.awaitJob(job,"UNKNOWN");
+            assertEquals(1,f.creates.get());assertEquals(1,f.adds.get(),"The first song goes to the new playlist without reading it back.");
+        }
+    }
+
     @Test void youtubeOAuthRefreshPrivateTransferPaginationAndRevocationUseOfficialCalls() throws Exception {
         try(Fixture f=new Fixture()){
             Map<String,String> started=f.api.start(f.auth,"youtube");f.challenge=query(URI.create(started.get("authorizationUrl")),"code_challenge");
@@ -624,16 +687,23 @@ class PlatformCheckTest {
         final HttpServer server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
         final java.util.concurrent.ExecutorService worker=Executors.newCachedThreadPool();
         final AtomicReference<Throwable> failure=new AtomicReference<>();
+        final List<String> spotifyQueries=new java.util.concurrent.CopyOnWriteArrayList<>();
+        // YouTube searches answered before the daily search limit; negative means no limit.
+        final AtomicInteger youtubeSearchesLeft=new AtomicInteger(-1);
         final AtomicInteger creates=new AtomicInteger(),adds=new AtomicInteger(),videos=new AtomicInteger(),sourceItems=new AtomicInteger(2),refreshes=new AtomicInteger(),revokes=new AtomicInteger(),markerPages=new AtomicInteger(),searches=new AtomicInteger();
         final AtomicInteger tokenStatus=new AtomicInteger(200),tokenExchanges=new AtomicInteger();
         final AtomicReference<List<Object>> youtubeSourceRows=new AtomicReference<>(),youtubeTargetRows=new AtomicReference<>();
         final List<String> remoteItems=new CopyOnWriteArrayList<>(),playlistPages=new CopyOnWriteArrayList<>();
         final java.util.concurrent.atomic.AtomicBoolean stallVideo=new java.util.concurrent.atomic.AtomicBoolean(),holdExchange=new java.util.concurrent.atomic.AtomicBoolean(),holdCreate=new java.util.concurrent.atomic.AtomicBoolean(),unavailableSpotifyItems=new java.util.concurrent.atomic.AtomicBoolean(),emptySearch=new java.util.concurrent.atomic.AtomicBoolean(),browsePlaylists=new java.util.concurrent.atomic.AtomicBoolean();
         final java.util.concurrent.atomic.AtomicBoolean noYoutubeChannel=new java.util.concurrent.atomic.AtomicBoolean();
+        /** Spotify can answer a create with a public playlist; stubborn keeps it public even after an update. */
+        final java.util.concurrent.atomic.AtomicBoolean targetPublic=new java.util.concurrent.atomic.AtomicBoolean(),stubbornPublic=new java.util.concurrent.atomic.AtomicBoolean();
+        final AtomicInteger privacyUpdates=new AtomicInteger();
+        final java.util.concurrent.atomic.AtomicBoolean listTarget=new java.util.concurrent.atomic.AtomicBoolean();
         final java.util.concurrent.CountDownLatch videoStarted=new java.util.concurrent.CountDownLatch(1),releaseVideo=new java.util.concurrent.CountDownLatch(1),exchangeStarted=new java.util.concurrent.CountDownLatch(1),releaseExchange=new java.util.concurrent.CountDownLatch(1),createStarted=new java.util.concurrent.CountDownLatch(1),releaseCreate=new java.util.concurrent.CountDownLatch(1);
         final JdbcTemplate db;final Store users;final PlatformStore store;final PlatformClient remote;final PlatformApi api;
         final String owner,auth,otherAuth,testSchema;final JdbcTemplate schemaOwner;String challenge="";volatile String marker="";
-        volatile String videoDescription="0:00 Artist - Song one\n1:10 Artist - Song two";volatile Object comments=List.of();volatile List<Object> laterComments=List.of();volatile boolean commentsDisabled;final AtomicInteger commentReads=new AtomicInteger();
+        volatile String videoDescription="0:00 Artist - Song one\n1:10 Artist - Song two";volatile Object comments=List.of();volatile List<Object> laterComments=List.of();volatile boolean commentsDisabled;final java.util.concurrent.atomic.AtomicBoolean freshTargetMissing=new java.util.concurrent.atomic.AtomicBoolean(),answerCreate=new java.util.concurrent.atomic.AtomicBoolean();final AtomicInteger commentReads=new AtomicInteger();
         Fixture() throws Exception {this(null);}
         Fixture(Runnable beforeCommit) throws Exception {
             String configured=System.getenv("TAPTAP_TEST_DATABASE_URL");boolean postgres=configured!=null&&!configured.isBlank();
@@ -658,6 +728,7 @@ class PlatformCheckTest {
         private Map<String,Object> spotifyTrack(String id){return Map.of("id",id,"type","track","name","Song","artists",List.of(Map.of("name","Artist")),"duration_ms",180000,"external_ids",Map.of("isrc","USABC1234567"),"album",Map.of("name","Album","images",List.of(Map.of("url","https://untrusted.invalid/image","width",1024),
                 Map.of("url","https://i.scdn.co/image/"+"b".repeat(40),"width",64),Map.of("url",ARTWORK,"width",640))));}
         private Map<String,Object> youtubeRow(int position,String id,String title,String artist){return Map.of("contentDetails",Map.of("videoId",id),"snippet",Map.of("position",position,"title",title,"videoOwnerChannelTitle",artist));}
+        private boolean assertSearchWidth(HttpExchange exchange){assertTrue(exchange.getRequestURI().getRawQuery().contains("maxResults=25"),exchange.getRequestURI().getRawQuery());return true;}
         private void serve(HttpExchange exchange) {
             try {
                 String path=exchange.getRequestURI().getPath(),method=exchange.getRequestMethod();
@@ -673,19 +744,23 @@ class PlatformCheckTest {
                 else if(path.equals("/spotify/me"))response=Map.of("id","owner");
                 else if(path.equals("/spotify/playlists/"+SOURCE))response=Map.of("name","Repeated songs","owner",Map.of("id","owner"),"collaborative",false);
                 else if(path.equals("/spotify/playlists/"+SOURCE+"/items")){List<Object> items=new ArrayList<>();for(int i=0;i<Math.max(sourceItems.get(),unavailableSpotifyItems.get()?3:0);i++){if(i<sourceItems.get())items.add(Map.of("item",spotifyTrack(SONG)));if(unavailableSpotifyItems.get()&&i<3)items.add(i==0?Map.of("item",spotifyTrack(SONG),"is_local",true):i==1?Map.of("item",Map.of("id",SONG,"type","episode")):Map.of("item",Map.of()));}response=Map.of("items",items);}
-                else if(path.equals("/spotify/search")){searches.incrementAndGet();response=Map.of("tracks",Map.of("items",emptySearch.get()?List.of():List.of(spotifyTrack(SONG))));}
+                else if(path.equals("/spotify/search")){searches.incrementAndGet();spotifyQueries.add(java.net.URLDecoder.decode(exchange.getRequestURI().getRawQuery().replaceAll(".*[?&]?q=([^&]*).*","$1"),java.nio.charset.StandardCharsets.UTF_8));response=Map.of("tracks",Map.of("items",emptySearch.get()?List.of():List.of(spotifyTrack(SONG))));}
                 else if(browsePlaylists.get()&&path.equals("/spotify/me/playlists")&&method.equals("GET")){
                     assertEquals("Bearer test-access",exchange.getRequestHeaders().getFirst("Authorization"));assertEquals("50",query(exchange.getRequestURI(),"limit"));String offset=query(exchange.getRequestURI(),"offset");playlistPages.add("spotify:"+offset);
                     if(offset.equals("0"))response=Map.of("items",List.of(Map.of("id",SOURCE,"name","Spotify own","owner",Map.of("id","owner"),"items",Map.of("total",2),"tracks",Map.of("total",999),"public",true,"external_urls",Map.of("spotify","https://attacker.invalid/")),Map.of("id",TARGET,"name","Followed","owner",Map.of("id","another-owner"),"items",Map.of("total",1))),"next","https://attacker.invalid/?access_token=test-access");
                     else{assertEquals("50",offset);response=Map.of("items",List.of(Map.of("id",TARGET,"name","Another own","owner",Map.of("id","owner"),"tracks",Map.of("total",3))));}
                 }
-                else if(path.equals("/spotify/me/playlists")&&method.equals("GET"))response=Map.of("items",marker.isEmpty()?List.of():List.of(Map.of("id",TARGET,"description",marker)));
+                else if(path.equals("/spotify/me/playlists")&&method.equals("GET"))response=Map.of("items",marker.isEmpty()&&!listTarget.get()?List.of():List.of(Map.of("id",TARGET,"description",marker,"public",targetPublic.get())));
                 else if(path.equals("/spotify/me/playlists")&&method.equals("POST")){assertFalse(value.path("public").asBoolean(true));marker=value.path("description").asString();creates.incrementAndGet();if(holdCreate.get()){createStarted.countDown();assertTrue(releaseCreate.await(10,java.util.concurrent.TimeUnit.SECONDS));}lost(exchange);return;}
+                else if(path.equals("/spotify/playlists/"+TARGET)&&method.equals("GET"))throw new AssertionError("Privacy is read from the owner's playlist list");
+                else if(path.equals("/spotify/playlists/"+TARGET)&&method.equals("PUT")){assertFalse(value.path("public").asBoolean(true));assertEquals(1,value.size(),"Only the privacy changes");privacyUpdates.incrementAndGet();if(!stubbornPublic.get())targetPublic.set(false);response=Map.of();}
                 else if(path.equals("/spotify/playlists/"+TARGET+"/items")&&method.equals("GET"))response=Map.of("items",remoteItems.stream().map(id->Map.of("item",spotifyTrack(id))).toList());
                 else if(path.equals("/spotify/playlists/"+TARGET+"/items")&&method.equals("POST")){String uri=value.path("uris").get(0).asString();assertEquals("spotify:track:"+SONG,uri);remoteItems.add(SONG);if(adds.incrementAndGet()==1){lost(exchange);return;}response=Map.of("snapshot_id","snapshot");}
                 else if(path.equals("/youtube/channels"))response=Map.of("items",noYoutubeChannel.get()?List.of():List.of(Map.of("id","channel-owner")));
-                else if(path.equals("/youtube/search"))response=Map.of("items",List.of(Map.of("id",Map.of("videoId",VIDEO),"snippet",Map.of("title","Song","channelTitle","Artist"))));
-                else if(path.equals("/youtube/playlists")&&method.equals("POST")){assertEquals("private",value.path("status").path("privacyStatus").asString());marker=value.path("snippet").path("description").asString();creates.incrementAndGet();lost(exchange);return;}
+                // One search costs the same quota for 5 or 25 results; the wider list keeps the official video in reach.
+                else if(path.equals("/youtube/search")&&youtubeSearchesLeft.getAndDecrement()==0){byte[] limit=json.writeValueAsBytes(Map.of("error",Map.of("errors",List.of(Map.of("reason","rateLimitExceeded")))));exchange.sendResponseHeaders(429,limit.length);exchange.getResponseBody().write(limit);exchange.close();return;}
+                else if(path.equals("/youtube/search")&&assertSearchWidth(exchange))response=Map.of("items",List.of(Map.of("id",Map.of("videoId",VIDEO),"snippet",Map.of("title","Song","channelTitle","Artist"))));
+                else if(path.equals("/youtube/playlists")&&method.equals("POST")){assertEquals("private",value.path("status").path("privacyStatus").asString());marker=value.path("snippet").path("description").asString();creates.incrementAndGet();if(!answerCreate.get()){lost(exchange);return;}response=Map.of("id","PLTARGET");}
                 else if(browsePlaylists.get()&&path.equals("/youtube/playlists")&&method.equals("GET")&&query(exchange.getRequestURI(),"mine").equals("true")){
                     assertEquals("Bearer google-access",exchange.getRequestHeaders().getFirst("Authorization"));assertEquals("snippet,status,contentDetails",query(exchange.getRequestURI(),"part"));assertEquals("50",query(exchange.getRequestURI(),"maxResults"));assertEquals("",query(exchange.getRequestURI(),"id"));assertFalse(exchange.getRequestURI().getRawQuery().contains("&mine=false"));
                     String cursor=query(exchange.getRequestURI(),"pageToken");playlistPages.add("youtube:"+cursor);
@@ -694,6 +769,7 @@ class PlatformCheckTest {
                 }
                 else if(path.equals("/youtube/playlists")){String query=exchange.getRequestURI().getRawQuery();if(query.contains("id=PLTEST")||browsePlaylists.get()&&query.contains("id=PLSECOND"))response=Map.of("items",List.of(Map.of("id",query.contains("id=PLSECOND")?"PLSECOND":"PLTEST","snippet",Map.of("title","YouTube own","channelId","channel-owner"))));else if(marker.isEmpty())response=Map.of("items",List.of());else if(query.contains("pageToken=")){markerPages.incrementAndGet();response=Map.of("items",List.of(Map.of("id","PLTARGET","snippet",Map.of("description",marker))));}else response=Map.of("items",List.of(),"nextPageToken","page-two");}
                 else if(path.equals("/youtube/playlistItems")&&method.equals("POST")){assertEquals("PLTARGET",value.path("snippet").path("playlistId").asString());assertEquals(VIDEO,value.path("snippet").path("resourceId").path("videoId").asString());remoteItems.add(VIDEO);if(adds.incrementAndGet()==1){lost(exchange);return;}response=Map.of("id","added");}
+                else if(path.equals("/youtube/playlistItems")&&freshTargetMissing.get()&&exchange.getRequestURI().getRawQuery().contains("playlistId=PLTARGET")){byte[] missing=json.writeValueAsBytes(Map.of("error",Map.of("errors",List.of(Map.of("reason","playlistNotFound")))));exchange.sendResponseHeaders(404,missing.length);exchange.getResponseBody().write(missing);return;}
                 else if(path.equals("/youtube/playlistItems")){boolean source=exchange.getRequestURI().getRawQuery().contains("playlistId=PLTEST")||browsePlaylists.get()&&exchange.getRequestURI().getRawQuery().contains("playlistId=PLSECOND");List<Object> overridden=source?youtubeSourceRows.get():youtubeTargetRows.get();int count=source?2:remoteItems.size();List<Object> items=new ArrayList<>();for(int i=0;i<count;i++)items.add(youtubeRow(i,VIDEO,"Song","Artist"));response=Map.of("items",overridden==null?items:overridden);}
                 else if(path.equals("/youtube/commentThreads")){
                     commentReads.incrementAndGet();assertTrue(exchange.getRequestURI().getRawQuery().contains("textFormat=plainText"));

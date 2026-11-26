@@ -32,7 +32,8 @@
 
 ## 남은 검증
 
-- [ ] Spotify·YouTube 실계정으로 목적지에 비공개 목록을 만들고 선택한 곡이 추가되는지 확인
+- [x] Spotify·YouTube 실계정으로 목적지에 비공개 목록을 만들고 선택한 곡이 추가되는지 확인 (2026-11-26, Spotify 10/10·YouTube 10/10·YouTube Music→Spotify 5/5, 모두 비공개)
+- [ ] 실계정 부분 실패 후 재시도(`/transfers/{id}/retry`)는 Spotify만 확인. YouTube는 서버 재시작으로 작업 기록이 사라져 확인하지 못함
 - [ ] 실제 Android 휴대폰에서 추천·재생·변환·저장 흐름 확인
 
 ## 제외한 기능

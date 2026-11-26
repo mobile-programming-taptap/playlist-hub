@@ -288,6 +288,21 @@ final class RecommendationCatalogue {
         }finally{searchLock.unlock();}
     }
 
+    /** Cover art for one song by title and artist, from the first matching MusicBrainz recording with a release. */
+    java.util.Optional<String> coverArt(String title,String artist){
+        if(title==null||title.isBlank()||artist==null||artist.isBlank())return java.util.Optional.empty();
+        try{
+            JsonNode result=search("recording:"+literal(title)+" AND artist:"+literal(artist),System.nanoTime()+Duration.ofSeconds(4).toNanos());
+            for(JsonNode row:result.path("recordings")){
+                if(!normalized(row.path("title").asString()).equals(normalized(title)))continue;
+                StringBuilder credit=new StringBuilder();for(JsonNode name:row.path("artist-credit"))credit.append(name.path("name").asString()).append(name.path("joinphrase").asString());
+                if(!normalized(credit.toString()).equals(normalized(artist)))continue;
+                for(JsonNode release:row.path("releases")){String id=release.path("id").asString();if(id.matches(UUID_PATTERN))return java.util.Optional.of("https://coverartarchive.org/release/"+id+"/front-500");}
+            }
+        }catch(Exception unavailable){if(unavailable instanceof InterruptedException)Thread.currentThread().interrupt();}
+        return java.util.Optional.empty();
+    }
+
     private static String literal(String value){return "\""+value.replaceAll("([+\\-!(){}\\[\\]^\"~*?:\\\\/])","\\\\$1")+"\"";}
     private static String normalized(String value) {
         String base=Normalizer.normalize(value==null?"":value,Normalizer.Form.NFKD).toLowerCase(Locale.ROOT).replaceAll("[^\\p{L}\\p{N}]","");
