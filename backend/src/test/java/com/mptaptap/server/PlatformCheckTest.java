@@ -152,6 +152,17 @@ class PlatformCheckTest {
         }
     }
 
+    @Test void youtubeTopicChannelIsNotPartOfTheSpotifySearch() throws Exception {
+        try(Fixture f=new Fixture()) {
+            f.store.connection(f.owner,"youtube",new PlatformClient.Tokens("google-access","google-refresh","channel-owner","youtube.force-ssl",Instant.now().plusSeconds(3600)));
+            f.store.connection(f.owner,"spotify",new PlatformClient.Tokens("test-access","test-refresh","owner","playlist-read-private",Instant.now().plusSeconds(3600)));
+            f.youtubeSourceRows.set(List.of(f.youtubeRow(0,VIDEO,"Just a Dance","Alfie Templeman - Topic"),f.youtubeRow(1,VIDEO,"Blinding Lights","TheWeekndVEVO")));
+            String id=UUID.randomUUID().toString();f.api.importPlaylist(f.auth,new PlatformApi.ImportBody(id,"youtube","https://www.youtube.com/playlist?list=PLTEST",null));
+            f.api.matches(f.auth,new PlatformApi.MatchBody(id,"spotify",0));
+            assertEquals(List.of("Just a Dance Alfie Templeman","Blinding Lights TheWeeknd"),f.spotifyQueries);
+        }
+    }
+
     @Test void youtubeUnavailableRowsKeepOriginalPositionsAndCannotBecomeAFilteredTransferPrefix() throws Exception {
         try(Fixture f=new Fixture()) {
             f.store.connection(f.owner,"youtube",new PlatformClient.Tokens("google-access","google-refresh","channel-owner","youtube.force-ssl",Instant.now().plusSeconds(3600)));
@@ -652,6 +663,7 @@ class PlatformCheckTest {
         final HttpServer server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
         final java.util.concurrent.ExecutorService worker=Executors.newCachedThreadPool();
         final AtomicReference<Throwable> failure=new AtomicReference<>();
+        final List<String> spotifyQueries=new java.util.concurrent.CopyOnWriteArrayList<>();
         final AtomicInteger creates=new AtomicInteger(),adds=new AtomicInteger(),videos=new AtomicInteger(),sourceItems=new AtomicInteger(2),refreshes=new AtomicInteger(),revokes=new AtomicInteger(),markerPages=new AtomicInteger(),searches=new AtomicInteger();
         final AtomicInteger tokenStatus=new AtomicInteger(200),tokenExchanges=new AtomicInteger();
         final AtomicReference<List<Object>> youtubeSourceRows=new AtomicReference<>(),youtubeTargetRows=new AtomicReference<>();
@@ -706,7 +718,7 @@ class PlatformCheckTest {
                 else if(path.equals("/spotify/me"))response=Map.of("id","owner");
                 else if(path.equals("/spotify/playlists/"+SOURCE))response=Map.of("name","Repeated songs","owner",Map.of("id","owner"),"collaborative",false);
                 else if(path.equals("/spotify/playlists/"+SOURCE+"/items")){List<Object> items=new ArrayList<>();for(int i=0;i<Math.max(sourceItems.get(),unavailableSpotifyItems.get()?3:0);i++){if(i<sourceItems.get())items.add(Map.of("item",spotifyTrack(SONG)));if(unavailableSpotifyItems.get()&&i<3)items.add(i==0?Map.of("item",spotifyTrack(SONG),"is_local",true):i==1?Map.of("item",Map.of("id",SONG,"type","episode")):Map.of("item",Map.of()));}response=Map.of("items",items);}
-                else if(path.equals("/spotify/search")){searches.incrementAndGet();response=Map.of("tracks",Map.of("items",emptySearch.get()?List.of():List.of(spotifyTrack(SONG))));}
+                else if(path.equals("/spotify/search")){searches.incrementAndGet();spotifyQueries.add(java.net.URLDecoder.decode(exchange.getRequestURI().getRawQuery().replaceAll(".*[?&]?q=([^&]*).*","$1"),java.nio.charset.StandardCharsets.UTF_8));response=Map.of("tracks",Map.of("items",emptySearch.get()?List.of():List.of(spotifyTrack(SONG))));}
                 else if(browsePlaylists.get()&&path.equals("/spotify/me/playlists")&&method.equals("GET")){
                     assertEquals("Bearer test-access",exchange.getRequestHeaders().getFirst("Authorization"));assertEquals("50",query(exchange.getRequestURI(),"limit"));String offset=query(exchange.getRequestURI(),"offset");playlistPages.add("spotify:"+offset);
                     if(offset.equals("0"))response=Map.of("items",List.of(Map.of("id",SOURCE,"name","Spotify own","owner",Map.of("id","owner"),"items",Map.of("total",2),"tracks",Map.of("total",999),"public",true,"external_urls",Map.of("spotify","https://attacker.invalid/")),Map.of("id",TARGET,"name","Followed","owner",Map.of("id","another-owner"),"items",Map.of("total",1))),"next","https://attacker.invalid/?access_token=test-access");

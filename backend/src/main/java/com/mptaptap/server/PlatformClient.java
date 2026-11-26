@@ -318,7 +318,9 @@ public class PlatformClient {
     }
     List<PlatformTrack> search(String provider,PlatformTrack source,Tokens tokens) {
         provider(provider);
-        String query=(source.title+" "+source.artist).strip();if(query.length()>300)query=query.substring(0,300);
+        // A YouTube channel name like "Act - Topic" or "ActVEVO" is not part of the song's credits.
+        String artist="youtube".equals(source.platform)&&source.artist!=null?source.artist.replaceAll("(?i)\\s*(?:-\\s*topic|vevo|official)$",""):source.artist;
+        String query=(source.title+" "+artist).strip();if(query.length()>300)query=query.substring(0,300);
         List<PlatformTrack> result=new ArrayList<>();
         if(provider.equals("spotify")) {
             if(source.isrc!=null&&!source.isrc.isEmpty())query="isrc:"+source.isrc;
