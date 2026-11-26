@@ -146,8 +146,8 @@ public final class HubActivity extends AppCompatActivity {
         }
         else if(screen.equals("history"))send("history","GET","/imports/playlists?summary=true",null);
         else if(screen.equals("export")&&!value("importId").isEmpty()){put("exportStopped","true");send("exportReview","GET","/matches/"+Uri.encode(value("importId"))+"?targetProvider="+Uri.encode(value("targetProvider")),null);}
-        else if(screen.equals("individual")&&!value("importId").isEmpty())
-            send("individualRestore","GET","/matches/"+Uri.encode(value("importId"))+"?targetProvider=youtube",null);
+        else if(screen.equals("individual")&&!value("importId").isEmpty()){put("exportStopped","true");
+            send("individualRestore","GET","/matches/"+Uri.encode(value("importId"))+"?targetProvider=youtube",null);}
         else if(screen.equals("transfer")&&!value("transferId").isEmpty())send("transfer","GET","/transfers/"+Uri.encode(value("transferId")),null);
         else if((screen.equals("preview")||screen.equals("review")||screen.equals("sync"))&&!value("importId").isEmpty()) {
             if(screen.equals("review"))send("review","GET","/matches/"+Uri.encode(value("importId"))+"?targetProvider="+Uri.encode(value("targetProvider")),null);
@@ -643,7 +643,9 @@ public final class HubActivity extends AppCompatActivity {
         int next=review==null?0:review.optInt("nextOffset",-1);
         if(next>=0||items==null){
             paragraph(items==null?"곡마다 YouTube 영상을 찾고 있어요.":items.length()+"곡 중 "+next+"곡 확인");
-            addButton(content,"영상 찾기 이어서",()->findIndividualVideos(Math.max(0,next)));
+            // Each page spends YouTube search quota, so the search can stop between pages.
+            if(value("exportStopped").equals("true"))addButton(content,"영상 찾기 이어서",()->{put("exportStopped","false");render();findIndividualVideos(Math.max(0,next));});
+            else{MaterialButton stop=button("중단",()->{});controls.remove(stop);stop.setOnClickListener(v->{put("exportStopped","true");render();});content.addView(stop,new LinearLayout.LayoutParams(-1,-2));}
             return;
         }
         int found=0;
@@ -879,13 +881,13 @@ public final class HubActivity extends AppCompatActivity {
             case "individualMatch":
                 put("review",value);
                 int nextVideoOffset=value.optInt("nextOffset",-1);
-                if(nextVideoOffset>=0){render();findIndividualVideos(nextVideoOffset);return;}
+                if(nextVideoOffset>=0&&!value("exportStopped").equals("true")){render();findIndividualVideos(nextVideoOffset);return;}
                 render();scrollToTop();return;
             case "individualRestore":put("review",value);break;
             case "reviewedForMatch":
                 put("selections",new JSONArray());if(exportMatching())return;
                 if(value("matchFlow").equals("individual")){
-                    requests.data.remove("review");put("screen","individual");render();scrollToTop();findIndividualVideos(0);return;
+                    requests.data.remove("review");put("exportStopped","false");put("screen","individual");render();scrollToTop();findIndividualVideos(0);return;
                 }
                 send("review","POST","/matches",json("importId",value("importId"),"targetProvider",provider("targetProvider")));return;
             case "reviewSavedLocally":put("review",value);send("matchedSaved","POST","/matches/"+Uri.encode(value("importId"))+"/save",json("title",value("listTitle").trim()));return;
@@ -931,7 +933,7 @@ public final class HubActivity extends AppCompatActivity {
         if(route.equals("batchImport")){JSONObject row=find(array("batchImports"),"requestId",value("batchActiveId"));if(row!=null){set(row,"status","FAILED");set(row,"notice",message);}put("screen","batch");render();message("가져오기를 멈췄어요. 저장한 목록은 유지되며 남은 목록만 다시 가져올 수 있어요.");return;}
         if(error instanceof ApiClient.ApiError&&((ApiClient.ApiError)error).statusCode==409&&message.contains("다시 연결")){message(message);showRecovery("음악 서비스 다시 연결",()->{mode="account";put("screen","account");render();reload();});return;}
         if(route.equals("library")){put("screen","library");render();message(message);return;}
-        if(route.equals("individualMatch")||route.equals("individualRestore")){render();message(message);return;}
+        if(route.equals("individualMatch")||route.equals("individualRestore")){put("exportStopped","true");render();message(message);return;}
         if(route.equals("exportMatch")||route.equals("exportReview")){put("exportStopped","true");put("screen","export");render();message(message);return;}
         if(route.equals("exportImport")||route.equals("exportAccount")){put("screen","library");render();message(message);return;}
         if(route.equals("auth")){

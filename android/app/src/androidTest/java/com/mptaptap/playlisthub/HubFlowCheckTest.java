@@ -557,6 +557,37 @@ public class HubFlowCheckTest {
         });
     }
 
+    @Test public void individualVideoSearchCanStopBetweenPages() throws Exception {
+        AtomicReference<String> importId=new AtomicReference<>();AtomicInteger matchCalls=new AtomicInteger();
+        String url="https://www.youtube.com/watch?v=aaaaaaaaaa1";
+        hubFixture((method,path,body,status)->{
+            if(path.equals("/conversions/youtube")){
+                importId.set(body.getString("id"));JSONArray entries=new JSONArray();
+                for(int i=0;i<3;i++)entries.put(new JSONObject().put("sourceIndex",i).put("seconds",i*60).put("title","원본 "+i).put("artist","검사 가수"));
+                return new JSONObject().put("id",importId.get()).put("title","영상 검사").put("entries",entries);
+            }
+            String id=importId.get();
+            if(path.equals("/imports/playlists/"+id+"/review"))return new JSONObject().put("id",id);
+            if(path.equals("/matches")){
+                matchCalls.incrementAndGet();SystemClock.sleep(2500);JSONArray rows=new JSONArray();
+                for(int i=0;i<3;i++)rows.put(new JSONObject().put("sourceIndex",i).put("candidates",new JSONArray()).put("status","NOT_SEARCHED").put("source",new JSONObject().put("title","원본 "+i)));
+                return new JSONObject().put("importId",id).put("items",rows).put("nextOffset",body.getInt("offset")+1);
+            }
+            return null;
+        },app->{
+            onView(withHint("YouTube 영상 주소")).perform(scrollTo(),replaceText(url),closeSoftKeyboard());
+            onView(withText("영상에서 곡 목록 가져오기")).perform(scrollTo(),click());ready(app);
+            onView(withText("개별 YouTube 영상 찾기")).perform(scrollTo(),click());
+            waitUntil(()->matchCalls.get()>=1);
+            // Each page spends YouTube search quota, so the user must be able to stop mid-way.
+            onView(withText("중단")).perform(scrollTo(),click());
+            // Let the page already in flight arrive; stopping must still hold the next one.
+            SystemClock.sleep(3500);ready(app);SystemClock.sleep(500);ready(app);
+            assertEquals("Stopping must not search the next page",1,matchCalls.get());
+            onView(withText("영상 찾기 이어서")).perform(scrollTo()).check(matches(isDisplayed()));
+        });
+    }
+
     @Test public void timelineCanSwapSongAndArtistBeforeSaving() throws Exception {
         AtomicReference<String> importId=new AtomicReference<>();
         AtomicReference<JSONArray> savedRows=new AtomicReference<>();
