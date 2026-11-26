@@ -442,6 +442,30 @@ class PlatformCheckTest {
         }
     }
 
+    @Test void timelineSongsLeftWithoutTheirOwnVideoKeepTheirMomentAndGetAlbumArt() throws Exception {
+        try(Fixture f=new Fixture()){
+            f.store.connection(f.owner,"spotify",new PlatformClient.Tokens("test-access","test-refresh","owner","playlist-read-private",Instant.now().plusSeconds(3600)));
+            String id=UUID.randomUUID().toString();
+            Map<String,Object> converted=f.api.conversion(f.auth,new PlatformApi.Conversion(id,"https://www.youtube.com/watch?v=abcdefghijk","0:00 Artist - Song\n1:00 Artist - Song",180));
+            assertEquals(ARTWORK,rows(converted,"entries").get(0).get("artworkUrl"),"The review screen shows each song's album art before any video search.");
+            f.api.reviewImport(f.auth,id,new PlatformApi.SaveImport("Individual videos",null,List.of(new PlatformApi.TimelineEdit(0,"Song","Artist",false,0),new PlatformApi.TimelineEdit(1,"Song","Artist",false,60))));
+            f.youtubeSearchesLeft.set(1);
+            assertEquals(429,assertThrows(PlatformClient.Failure.class,()->f.api.matches(f.auth,new PlatformApi.MatchBody(id,"youtube",0))).status);
+            List<Map<String,Object>> kept=rows(f.api.storedReview(f.auth,id,"youtube"),"items");
+            assertEquals(VIDEO,map(map(rows(kept.get(0),"candidates").get(0)).get("track")).get("externalId"),"The search that succeeded before the limit is kept.");
+            assertEquals("NOT_SEARCHED",kept.get(1).get("status"));
+            f.api.review(f.auth,id,new PlatformApi.ReviewBody("youtube",List.of(new PlatformApi.Selection(0,VIDEO,false),new PlatformApi.Selection(1,"",false))));
+            Map<String,Object> saved=f.api.saveMatches(f.auth,id,new PlatformApi.SaveMatches("Individual videos"));
+            assertEquals(2,saved.get("size"));assertEquals(1,saved.get("originalMoments"));
+            List<Map<String,Object>> items=rows(f.users.playlist(f.owner,(String)saved.get("id")),"items");
+            Map<String,Object> own=map(items.get(0).get("track")),moment=map(items.get(1).get("track"));
+            assertEquals(VIDEO,own.get("externalId"));
+            assertEquals("abcdefghijk",moment.get("externalId"));assertEquals(60,moment.get("timestamp"));assertEquals("timeline",moment.get("sourceType"));
+            assertEquals("https://www.youtube.com/watch?v=abcdefghijk&t=60s",moment.get("sourceUrl"));
+            assertEquals(ARTWORK,moment.get("artworkUrl"),"A song kept at its moment shows its album art, not the long video.");
+        }
+    }
+
     @Test void publicConversionAndIndividualVideoSavingIgnoreExpiredOAuthAndKeepTheOriginalSeparate() throws Exception {
         try(Fixture f=new Fixture()){
             f.store.connection(f.owner,"youtube",new PlatformClient.Tokens("expired-access","google-refresh","owner","scope",Instant.EPOCH));
@@ -664,6 +688,8 @@ class PlatformCheckTest {
         final java.util.concurrent.ExecutorService worker=Executors.newCachedThreadPool();
         final AtomicReference<Throwable> failure=new AtomicReference<>();
         final List<String> spotifyQueries=new java.util.concurrent.CopyOnWriteArrayList<>();
+        // YouTube searches answered before the daily search limit; negative means no limit.
+        final AtomicInteger youtubeSearchesLeft=new AtomicInteger(-1);
         final AtomicInteger creates=new AtomicInteger(),adds=new AtomicInteger(),videos=new AtomicInteger(),sourceItems=new AtomicInteger(2),refreshes=new AtomicInteger(),revokes=new AtomicInteger(),markerPages=new AtomicInteger(),searches=new AtomicInteger();
         final AtomicInteger tokenStatus=new AtomicInteger(200),tokenExchanges=new AtomicInteger();
         final AtomicReference<List<Object>> youtubeSourceRows=new AtomicReference<>(),youtubeTargetRows=new AtomicReference<>();
@@ -732,6 +758,7 @@ class PlatformCheckTest {
                 else if(path.equals("/spotify/playlists/"+TARGET+"/items")&&method.equals("POST")){String uri=value.path("uris").get(0).asString();assertEquals("spotify:track:"+SONG,uri);remoteItems.add(SONG);if(adds.incrementAndGet()==1){lost(exchange);return;}response=Map.of("snapshot_id","snapshot");}
                 else if(path.equals("/youtube/channels"))response=Map.of("items",noYoutubeChannel.get()?List.of():List.of(Map.of("id","channel-owner")));
                 // One search costs the same quota for 5 or 25 results; the wider list keeps the official video in reach.
+                else if(path.equals("/youtube/search")&&youtubeSearchesLeft.getAndDecrement()==0){byte[] limit=json.writeValueAsBytes(Map.of("error",Map.of("errors",List.of(Map.of("reason","rateLimitExceeded")))));exchange.sendResponseHeaders(429,limit.length);exchange.getResponseBody().write(limit);exchange.close();return;}
                 else if(path.equals("/youtube/search")&&assertSearchWidth(exchange))response=Map.of("items",List.of(Map.of("id",Map.of("videoId",VIDEO),"snippet",Map.of("title","Song","channelTitle","Artist"))));
                 else if(path.equals("/youtube/playlists")&&method.equals("POST")){assertEquals("private",value.path("status").path("privacyStatus").asString());marker=value.path("snippet").path("description").asString();creates.incrementAndGet();if(!answerCreate.get()){lost(exchange);return;}response=Map.of("id","PLTARGET");}
                 else if(browsePlaylists.get()&&path.equals("/youtube/playlists")&&method.equals("GET")&&query(exchange.getRequestURI(),"mine").equals("true")){

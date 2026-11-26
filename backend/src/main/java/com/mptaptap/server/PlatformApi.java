@@ -32,6 +32,7 @@ public class PlatformApi {
     private final ExecutorService transfers=new java.util.concurrent.ThreadPoolExecutor(2,2,0L,java.util.concurrent.TimeUnit.MILLISECONDS,new java.util.concurrent.ArrayBlockingQueue<>(64));
     private final Map<String,java.util.ArrayDeque<String>> transferQueues=new LinkedHashMap<>();
     private final java.util.Set<String> activeTransfers=java.util.concurrent.ConcurrentHashMap.newKeySet();
+    @org.springframework.beans.factory.annotation.Autowired(required=false) RecommendationCatalogue catalogue;
     PlatformApi(Store users,PlatformStore store,PlatformClient remote,ObjectMapper json,PlatformTransactionManager manager){this.users=users;this.store=store;this.remote=remote;this.json=json;this.tx=new TransactionTemplate(manager);}
     @PreDestroy void close(){transfers.shutdownNow();synchronized(transferQueues){transferQueues.clear();activeTransfers.clear();}}
     private String user(String auth){return users.user(auth);}
@@ -123,6 +124,9 @@ public class PlatformApi {
         }
         List<Map<String,Object>> entries=new ArrayList<>(),items=new ArrayList<>();
         for(int i=0;i<parsed.entries.size();i++){VideoTimeline.Entry entry=parsed.entries.get(i);Map<String,Object> row=map(entry);row.put("sourceIndex",i);entries.add(row);PlatformTrack track=new PlatformTrack();track.platform="youtube";track.externalId=video;track.title=entry.title;track.artist=entry.artist;track.sourceUrl=entry.sourceUrl;track.durationMs=0;Map<String,Object> item=new LinkedHashMap<>();item.put("sourceIndex",i);item.put("track",map(track));item.put("sourceRow",entry.sourceRow);item.put("timestamp",entry.seconds);item.put("sourceType","timeline");item.put("videoDurationSeconds",Math.max(0,duration));item.put("segmentDurationMs",entry.endSeconds>entry.startSeconds&&entry.startSeconds>=0?(entry.endSeconds-entry.startSeconds)*1000L:0);item.put("recommendationTrackId",null);items.add(item);}
+        // Each song's album art for the review screen, from Spotify when connected; YouTube search is not used.
+        long artworkDeadline=System.nanoTime()+java.time.Duration.ofSeconds(12).toNanos();
+        for(int i=0;i<entries.size()&&System.nanoTime()<artworkDeadline;i++){Map<String,Object> track=cast(items.get(i).get("track"));spotifyArtwork(u,entries.get(i)).ifPresent(image->track.put("artworkUrl",image));if(track.containsKey("artworkUrl"))entries.get(i).put("artworkUrl",track.get("artworkUrl"));}
         Map<String,Object> result=new LinkedHashMap<>();result.putAll(Map.of("id",id,"provider","youtube","videoId",video,"externalPlaylistId","","title",title,"durationSeconds",duration,"sourceUrl",body.url(),"entries",entries,"truncated",parsed.truncated,"metadataMode",mode));result.put("items",items);result.put("notice",entries.isEmpty()?(commentLookupFailed?"영상 댓글을 확인하지 못했어요. 다시 시도하거나 시간표를 직접 입력해 주세요.":"해당 영상은 변환할 수 없음"):(mode.equals("official_comment")?"댓글에서 시간표를 찾았어요. 곡명·아티스트·시간을 확인해 저장해 주세요.":"곡명·아티스트·시간을 확인해 저장해 주세요. 음원 분리나 곡 추측은 하지 않아요."));result.put("saved",false);result.put("requestFingerprint",fingerprint);if(!entries.isEmpty())store.create(u,id,"import","youtube",result);return result;
     });}
     public record ImportBody(String id,String provider,String url,String title){}
@@ -190,12 +194,16 @@ public class PlatformApi {
         String p=provider(body.targetProvider());Map<String,Object> data=store.document(u,body.importId(),"import");provider((String)data.get("provider"));List<Map<String,Object>> source=items(data,data.containsKey("reviewedItems")?"reviewedItems":"items");List<Map<String,Object>> reviews=data.containsKey("reviews")&&p.equals(data.get("targetProvider"))?items(data,"reviews"):new ArrayList<>();
         if(reviews.isEmpty())for(Map<String,Object> item:source){Map<String,Object> r=new LinkedHashMap<>();r.put("sourceIndex",item.get("sourceIndex"));r.put("source",item.get("track"));r.put("candidates",List.of());r.put("status","NOT_SEARCHED");r.put("selected",null);r.put("approved",false);reviews.add(r);}
         int offset=body.offset()==null?0:body.offset();if(offset<0||offset>=Math.max(1,source.size()))throw new IllegalArgumentException("곡 검토 위치를 확인해 주세요.");PlatformClient.Tokens token=p.equals("youtube")&&!remote.setting("YOUTUBE_API_KEY").isBlank()?null:token(u,p);int end=Math.min(source.size(),offset+(p.equals("youtube")?5:20));
-        for(int i=offset;i<end;i++){PlatformTrack track=json.convertValue(source.get(i).get("track"),PlatformTrack.class),scoring=track;
+        int i=offset;
+        try{for(;i<end;i++){PlatformTrack track=json.convertValue(source.get(i).get("track"),PlatformTrack.class),scoring=track;
             // A timeline's ID identifies the whole video, not the recording named in this row.
             if("timeline".equals(source.get(i).get("sourceType"))){scoring=json.convertValue(map(track),PlatformTrack.class);scoring.externalId="";}
             List<PlatformTrack> candidates=remote.search(p,track,token);
             if("timeline".equals(source.get(i).get("sourceType")))candidates=candidates.stream().filter(candidate->!candidate.platform.equals(track.platform)||!candidate.externalId.equals(track.externalId)).toList();
             ImportMatch.ReviewItem review=ImportMatch.match(scoring,candidates);review.source=track;Map<String,Object> r=map(review);r.put("sourceIndex",source.get(i).get("sourceIndex"));r.put("approved",false);reviews.set(i,r);
+        }}catch(RuntimeException stopped){
+            // A search limit part way through a page keeps the songs already searched; their quota is spent.
+            data.put("reviews",reviews);data.put("targetProvider",p);data.put("nextOffset",i);store.update(u,body.importId(),"import",data);throw stopped;
         }
         data.put("reviews",reviews);data.put("targetProvider",p);data.put("nextOffset",end<source.size()?end:-1);store.update(u,body.importId(),"import",data);return Map.of("importId",body.importId(),"targetProvider",p,"items",reviews,"nextOffset",end<source.size()?end:-1);
     });}
@@ -204,38 +212,68 @@ public class PlatformApi {
     public record ReviewBody(String targetProvider,List<Selection> selections){}
     @PutMapping("/matches/{id}") public Map<String,Object> review(@RequestHeader(value="Authorization",required=false)String auth,@PathVariable String id,@RequestBody ReviewBody body){return withOwner(auth,u->{
         String p=provider(body.targetProvider());Map<String,Object> data=store.document(u,id,"import");provider((String)data.get("provider"));if(!p.equals(data.get("targetProvider")))throw new IllegalArgumentException("먼저 대상 플랫폼의 곡 후보를 조회해 주세요.");List<Map<String,Object>> rows=items(data,"reviews");if(body.selections()==null||body.selections().size()>500)throw new IllegalArgumentException("검토할 곡을 지정해 주세요.");HashSet<Integer> seen=new HashSet<>();
-        for(Selection choice:body.selections()){if(choice.sourceIndex()==null||!seen.add(choice.sourceIndex()))throw new IllegalArgumentException("행을 중복 없이 지정해 주세요.");Map<String,Object> row=rows.stream().filter(r->((Number)r.get("sourceIndex")).intValue()==choice.sourceIndex()).findFirst().orElseThrow(()->new IllegalArgumentException("원본 행을 찾을 수 없어요."));if(Boolean.TRUE.equals(choice.excluded())){row.put("status","USER_EXCLUDED");row.put("selected",null);}else{Map<String,Object> selected=items(row,"candidates").stream().map(c->cast(c.get("track"))).filter(t->choice.targetId()!=null&&choice.targetId().equals(t.get("externalId"))).findFirst().orElseThrow(()->new IllegalArgumentException("제시된 후보 곡 중 하나를 선택해 주세요."));row.put("selected",selected);row.put("status","MATCHED");}row.put("approved",true);}
+        for(Selection choice:body.selections()){if(choice.sourceIndex()==null||!seen.add(choice.sourceIndex()))throw new IllegalArgumentException("행을 중복 없이 지정해 주세요.");Map<String,Object> row=rows.stream().filter(r->((Number)r.get("sourceIndex")).intValue()==choice.sourceIndex()).findFirst().orElseThrow(()->new IllegalArgumentException("원본 행을 찾을 수 없어요."));if(Boolean.TRUE.equals(choice.excluded())){row.put("status","USER_EXCLUDED");row.put("selected",null);}
+            else if(p.equals("youtube")&&data.containsKey("videoId")&&(choice.targetId()==null||choice.targetId().isEmpty())){row.put("status",KEEP_MOMENT);row.put("selected",null);}else{Map<String,Object> selected=items(row,"candidates").stream().map(c->cast(c.get("track"))).filter(t->choice.targetId()!=null&&choice.targetId().equals(t.get("externalId"))).findFirst().orElseThrow(()->new IllegalArgumentException("제시된 후보 곡 중 하나를 선택해 주세요."));row.put("selected",selected);row.put("status","MATCHED");}row.put("approved",true);}
         store.update(u,id,"import",data);return Map.of("importId",id,"targetProvider",p,"items",rows);
     });}
     public record SaveMatches(String title){}
     @PostMapping("/matches/{id}/save") public Map<String,Object> saveMatches(@RequestHeader(value="Authorization",required=false)String auth,@PathVariable String id,@RequestBody SaveMatches body){return withOwner(auth,u->{
         Map<String,Object> data=store.document(u,id,"import");
         if(!"youtube".equals(data.get("targetProvider")))throw new IllegalArgumentException("YouTube 영상 후보를 먼저 확인해 주세요.");
-        List<Map<String,Object>> reviews=items(data,"reviews"),rows=new ArrayList<>();
-        if(reviews.size()!=items(data,data.containsKey("reviewedItems")?"reviewedItems":"items").size())throw new IllegalArgumentException("모든 곡의 후보를 확인해 주세요.");
+        List<Map<String,Object>> reviews=items(data,"reviews"),rows=new ArrayList<>(),reviewed=items(data,data.containsKey("reviewedItems")?"reviewedItems":"items");
+        if(reviews.size()!=reviewed.size())throw new IllegalArgumentException("모든 곡의 후보를 확인해 주세요.");
+        int moments=0;long artworkDeadline=System.nanoTime()+java.time.Duration.ofSeconds(15).toNanos();
         for(Map<String,Object> review:reviews){
             if(!Boolean.TRUE.equals(review.get("approved")))throw new IllegalArgumentException("모든 곡을 선택하거나 제외해 주세요.");
             if("USER_EXCLUDED".equals(review.get("status")))continue;
+            if(KEEP_MOMENT.equals(review.get("status"))){
+                Map<String,Object> item=reviewed.stream().filter(r->r.get("sourceIndex").equals(review.get("sourceIndex"))).findFirst().orElseThrow(()->new IllegalArgumentException("원본 행을 찾을 수 없어요."));
+                Map<String,Object> row=new LinkedHashMap<>(cast(item.get("track")));row.put("sourceIndex",item.get("sourceIndex"));row.put("timestamp",item.get("timestamp"));row.put("sourceType","timeline");
+                row.put("videoDurationSeconds",Math.max(0,((Number)item.getOrDefault("videoDurationSeconds",0)).intValue()));if(item.containsKey("sourceRow"))row.put("sourceRow",item.get("sourceRow"));
+                rows.add(row);moments++;continue;
+            }
             Map<String,Object> selected=cast(review.get("selected")),source=cast(review.get("source"));
             if(!"MATCHED".equals(review.get("status"))||!"youtube".equals(selected.get("platform")))throw new IllegalArgumentException("선택한 영상 후보를 확인해 주세요.");
             String video=(String)selected.get("externalId");PlatformClient.validId("youtube",video);
             Map<String,Object> row=new LinkedHashMap<>(selected);row.put("title",source.get("title"));row.put("artist",source.get("artist"));row.put("sourceIndex",review.get("sourceIndex"));row.put("sourceUrl",PlatformClient.trackUrl("youtube",video));rows.add(row);
         }
         if(rows.isEmpty())throw new IllegalArgumentException("저장할 영상을 하나 이상 선택해 주세요.");
+        // Album art for songs kept at their moment: Spotify for all first (fast), then MusicBrainz with the time left.
+        List<Map<String,Object>> kept=rows.stream().filter(r->"timeline".equals(r.get("sourceType"))).toList();
+        for(Map<String,Object> row:kept)if(!row.containsKey("artworkUrl")&&System.nanoTime()<artworkDeadline)spotifyArtwork(u,row).ifPresent(image->row.put("artworkUrl",image));
+        for(Map<String,Object> row:kept)if(!row.containsKey("artworkUrl")&&catalogue!=null&&System.nanoTime()<artworkDeadline)
+            try{catalogue.coverArt(String.valueOf(row.get("title")),String.valueOf(row.getOrDefault("artist",""))).ifPresent(image->row.put("artworkUrl",image));}catch(RuntimeException unavailable){/* Album art is optional. */}
+        int finalMoments=moments;
         String name=title(body.title()),playlist=UUID.nameUUIDFromBytes(("matched:"+id).getBytes(java.nio.charset.StandardCharsets.UTF_8)).toString();
         synchronized(users){synchronized(store){return tx.execute(status->{
             try{users.ownedPlaylist(u,playlist);}catch(ResponseStatusException missing){if(missing.getStatusCode().value()!=404)throw missing;users.createPlaylist(u,name,playlist);}
             List<Map<String,Object>> saved=users.refreshExternal(u,playlist,rows,"matched:"+id,store.metadataCheckedAt(u,id));users.rename(u,playlist,name);
-            return Map.of("id",playlist,"title",name,"items",saved,"size",saved.size());
+            return Map.of("id",playlist,"title",name,"items",saved,"size",saved.size(),"originalMoments",finalMoments);
         });}}
     });}
+    static final String KEEP_MOMENT="KEEP_MOMENT";
+    /** Spotify album art for a song with no video of its own; YouTube search is not used. */
+    private java.util.Optional<String> spotifyArtwork(String u,Map<String,Object> row){
+        PlatformTrack song=new PlatformTrack();song.title=String.valueOf(row.get("title"));song.artist=String.valueOf(row.getOrDefault("artist",""));
+        try{
+            if(store.connections(u).stream().noneMatch(c->"spotify".equals(c.get("provider"))))return java.util.Optional.empty();
+            List<PlatformTrack> candidates=remote.search("spotify",song,token(u,"spotify"));
+            ImportMatch.ReviewItem found=ImportMatch.match(song,candidates);
+            if(found.status==ImportMatch.Status.MATCHED&&found.selected!=null&&ImportMatch.spotifyArtwork(found.selected.artworkUrl))return java.util.Optional.of(found.selected.artworkUrl);
+            // Art only needs the same song: an exact title and artist is enough even when the version is unconfirmed.
+            for(PlatformTrack candidate:candidates)if(plain(candidate.title).equals(plain(song.title))&&plain(candidate.artist).contains(plain(song.artist))&&!plain(song.artist).isEmpty()&&ImportMatch.spotifyArtwork(candidate.artworkUrl))return java.util.Optional.of(candidate.artworkUrl);
+        }catch(RuntimeException unavailable){/* Album art is optional. */}
+        return java.util.Optional.empty();
+    }
+    private static String plain(String value){return value==null?"":value.toLowerCase(java.util.Locale.ROOT).replaceAll("\\s*\\((?:feat|ft|with)[^)]*\\)","").replaceAll("[^\\p{L}\\p{N}]","");}
     public record TransferBody(String id,String importId,String targetProvider,String title,Boolean confirmed){}
     public record Confirm(Boolean confirmed){}
     @PostMapping("/transfers") public Map<String,Object> transfer(@RequestHeader(value="Authorization",required=false)String auth,@RequestBody TransferBody body){return withOwner(auth,u->{
         String id=PlatformStore.uuid(body.id()),p=provider(body.targetProvider());confirmed(body.confirmed());String name=title(body.title());
         if(store.exists(u,id,"transfer")){Map<String,Object> existing=store.document(u,id,"transfer");if(!body.importId().equals(existing.get("importId"))||!p.equals(existing.get("provider"))||!name.equals(existing.get("title")))throw new ResponseStatusException(HttpStatus.CONFLICT,"같은 작업 ID로 원래 이전을 다시 시도해 주세요.");if(!"COMPLETED".equals(existing.get("status")))launch(u,id);return counted(existing);}
         Map<String,Object> source=store.document(u,body.importId(),"import");provider((String)source.get("provider"));if(!p.equals(source.get("targetProvider")))throw new IllegalArgumentException("대상 플랫폼의 곡 후보를 먼저 검토해 주세요.");List<Map<String,Object>> selected=new ArrayList<>();List<Integer> excluded=new ArrayList<>();
-        for(Map<String,Object> row:items(source,"reviews")){if(!Boolean.TRUE.equals(row.get("approved")))throw new IllegalArgumentException("모든 곡을 선택하거나 제외한 뒤 이전해 주세요.");if("USER_EXCLUDED".equals(row.get("status"))){excluded.add(((Number)row.get("sourceIndex")).intValue());continue;}Map<String,Object> track=cast(row.get("selected"));Map<String,Object> item=new LinkedHashMap<>(Map.of("sourceIndex",row.get("sourceIndex"),"targetId",track.get("externalId"),"status","PENDING","message",""));
+        for(Map<String,Object> row:items(source,"reviews")){if(!Boolean.TRUE.equals(row.get("approved")))throw new IllegalArgumentException("모든 곡을 선택하거나 제외한 뒤 이전해 주세요.");// A song kept at its moment in the original video has no target track to send.
+            if("USER_EXCLUDED".equals(row.get("status"))||KEEP_MOMENT.equals(row.get("status"))){excluded.add(((Number)row.get("sourceIndex")).intValue());continue;}Map<String,Object> track=cast(row.get("selected"));Map<String,Object> item=new LinkedHashMap<>(Map.of("sourceIndex",row.get("sourceIndex"),"targetId",track.get("externalId"),"status","PENDING","message",""));
             if(track.get("artworkUrl") instanceof String image&&ImportMatch.spotifyArtwork(image))item.put("artworkUrl",image);
             selected.add(item);}
         if(selected.isEmpty())throw new IllegalArgumentException("이전할 곡을 하나 이상 선택해 주세요.");token(u,p);Map<String,Object> job=new LinkedHashMap<>(Map.of("id",id,"importId",body.importId(),"provider",p,"title",name,"status","PENDING","externalPlaylistId","","items",selected,"createStarted",false,"playlistUrl","","notice","사용자가 확인한 곡만 비공개 목록으로 이전합니다."));job.put("excludedSourceIndices",excluded);store.create(u,id,"transfer",p,counted(job));launch(u,id);return job;

@@ -133,3 +133,11 @@ API24의 선택 회귀 검사 11개가 통과했다. 기본 주소 초기화·�
 - 증거: `output/checks/video-conversion-2026-11-06/`. 사용 흐름: `docs/video-conversion.md`.
 
 - 후속 실연동 확인: 기존 Google 계정·동일 YouTube 권한으로 재인증 완료. 새 토큰 만료 해제 및 `/connections/youtube/playlists` 실제 조회 성공. 외부 목록 쓰기 없음. 증거 `real-reauthentication.json`.
+
+## 2026-11-26 실계정 플랫폼 전송 · 시간표 곡별 저장
+
+- 실계정 전송: Spotify로 라이브 버전 포함 10곡 10/10, YouTube로 10곡 10/10, YouTube Music 목록 5곡 → Spotify 5/5. 만든 목록은 모두 비공개. 권한을 끊은 상태에서는 작업·목록이 생기지 않고 재연결 안내가 나오는 것을 Spotify에서 확인.
+- 실계정에서 찾아 고친 것: 영상 제목 앞 가수명(10곡 중 8곡 미발견 → 10/10), 채널 이름 `- Topic`이 Spotify 검색어에 섞임(5곡 중 4곡 미발견 → 5/5), 방금 만든 YouTube 목록을 다시 읽을 때 404, 시작 전에 거절된 전송이 보내기 버튼으로 돌아오지 않음.
+- 시간표 저장은 곡마다 YouTube 영상을 찾고, 검색 한도·후보 없음인 곡은 원본 영상 시점으로 저장. 한도에 막히기 전 찾은 곡은 서버가 보관. 앨범 아트는 변환할 때 Spotify(연결 시)에서, 없으면 저장할 때 Cover Art Archive에서 찾음. YouTube 검색은 쓰지 않음.
+- 테스트: 서버 93개 통과, Android 단위 9개 통과. 계측 HubFlow·썸네일 20개 중 19개 통과, 실패 1개는 이전부터 실패하던 `importedPlaylistReviewExclusionAndTransferRetryUseConfirmedRows`. 계측 전체는 12개 실패로, 이번 변경과 관계없는 체크박스 색·로그인 상태 첫 화면 등. 변경 전 코드로 다시 비교하지는 않음.
+- 미검증: 실제 곡별 영상 매칭 결과(검색 한도 초과로 확인 못 함), Cover Art Archive 앨범 아트, YouTube 부분 실패 후 재시도. YouTube 검색 사용량은 이날 약 4,000단위로 하루 한도에 도달.

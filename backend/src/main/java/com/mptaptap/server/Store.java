@@ -460,6 +460,9 @@ public class Store {
             snapshot.put("sourceUrl",url);
             if(provider.equals("spotify")&&row.get("artworkUrl") instanceof String image
                     &&com.mptaptap.core.ImportMatch.spotifyArtwork(image))snapshot.put("artworkUrl",image);
+            // A timeline song kept at its moment carries album art found for that song.
+            if("timeline".equals(row.get("sourceType"))&&row.get("artworkUrl") instanceof String image
+                    &&(com.mptaptap.core.ImportMatch.spotifyArtwork(image)||image.matches("https://coverartarchive\\.org/release/[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}/front-500")))snapshot.put("artworkUrl",image);
             Object index = row.containsKey("sourceIndex")?row.get("sourceIndex"):row.getOrDefault("position",i);
             snapshot.put("sourceIndex",integer(index,1_000_000));
             for (String field:List.of("durationMs","videoDurationSeconds","timestamp","sourceLine")) if (row.get(field)!=null) snapshot.put(field,integer(row.get(field),Integer.MAX_VALUE));
