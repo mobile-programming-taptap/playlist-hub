@@ -78,7 +78,7 @@ public class Api {
         try {
             for(Track track:known)if(feedback.getOrDefault(track.id,0)==1)
                 for(String tag:track.tags)likedTags.merge(tag,1,Integer::sum);
-            plan=ai.plan(body.prompt(),body.history(),body.previousConditions(),likedTags);
+            plan=firstPlan(body,likedTags,user,deadline);
         } catch(InterruptedException error) {
             Thread.currentThread().interrupt();throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"AI 요청이 중단됐어요. 같은 요청으로 다시 시도해 주세요.");
         } catch(Exception error) {
@@ -101,7 +101,9 @@ public class Api {
         for(Track track:verified)if(!videos.fresh(track.id,now).map(YoutubeLinks.Link::none).orElse(false))candidates.put(track.id,track);
         for(List<String> ids:List.of(body.keptTrackIds()==null?List.<String>of():body.keptTrackIds(),body.excludedTrackIds()==null?List.<String>of():body.excludedTrackIds()))
             for(String id:ids)candidates.putIfAbsent(id,catalogue.track(id));
-        Recommender.Result result=Conversation.recommend(new ArrayList<>(candidates.values()),plan.conditions(),feedback,"openai",body.keptTrackIds(),body.excludedTrackIds());
+        // 연대 집계는 마지막 추천 결과의 값만 남겨 1회차와 보충 회차가 같은 곡을 두 번 세지 않게 한다.
+        Recommender.Stats stats=new Recommender.Stats();
+        Recommender.Result result=Conversation.recommend(new ArrayList<>(candidates.values()),plan.conditions(),feedback,"openai",body.keptTrackIds(),body.excludedTrackIds(),stats);
         var verifiedIds=verified.stream().map(track->track.id).collect(java.util.stream.Collectors.toSet());
         int proposed=plan.candidates().size();
         // Reserve one recording lookup; its retries must fit the same overall deadline.
@@ -115,7 +117,9 @@ public class Api {
                 var fresh=extra.candidates().stream().filter(song->!previous.contains(song.title()+"|"+song.artist())).toList();
                 proposed+=fresh.size();
                 for(Track track:catalogue.resolve(fresh,java.time.Duration.ofNanos(Math.max(1,deadline-System.nanoTime())),plan.conditions())){verifiedIds.add(track.id);if(!videos.fresh(track.id,now).map(YoutubeLinks.Link::none).orElse(false))candidates.putIfAbsent(track.id,track);}
-                result=Conversation.recommend(new ArrayList<>(candidates.values()),plan.conditions(),feedback,"openai",body.keptTrackIds(),body.excludedTrackIds());
+                Recommender.Stats retried=new Recommender.Stats();
+                result=Conversation.recommend(new ArrayList<>(candidates.values()),plan.conditions(),feedback,"openai",body.keptTrackIds(),body.excludedTrackIds(),retried);
+                stats=retried;
             } catch(InterruptedException interrupted){Thread.currentThread().interrupt();throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"AI 요청이 중단됐어요. 같은 요청으로 다시 시도해 주세요.");}
             // The AI call and the recording lookup share this catch, so keep the message and stack trace to tell them apart.
             catch(Exception error){org.slf4j.LoggerFactory.getLogger(Api.class).warn("Supplementary recommendation failed: {}: {}",error.getClass().getSimpleName(),error.getMessage(),error);}
@@ -126,11 +130,47 @@ public class Api {
             if(plan.candidates().isEmpty())notice="AI가 확실한 곡 후보를 제안하지 못했어요. 같은 요청으로 다시 시도해 주세요.";
             else if(verifiedIds.size()<proposed)notice="AI 후보 "+proposed+"곡 중 실제 곡 정보를 확인한 곡은 "+verifiedIds.size()+"곡이고, 요청과 반응을 반영한 추천은 "+shown+"곡이에요. 같은 요청으로 다른 후보를 찾아볼 수 있어요.";
         }
-        org.slf4j.LoggerFactory.getLogger(Api.class).info("Recommendation counts: proposed={}, verified={}, shown={}",proposed,verifiedIds.size(),shown);
+        // 연대 때문에 0곡이 된 안내는 7곡 미만 안내로 덮어써도 남긴다.
+        List<Integer> decades=result.conditions.decades;
+        if(!decades.isEmpty()&&!notice.equals(result.notice)&&result.notice.contains(Recommender.decadeNotice(decades)))notice=notice+" "+Recommender.decadeNotice(decades);
+        org.slf4j.LoggerFactory.getLogger(Api.class).info("Recommendation counts: proposed={}, verified={}, shown={}, decades={}, undatedExcluded={}, outsideDecadeExcluded={}",
+            proposed,verifiedIds.size(),shown,decades.isEmpty()?"-":decades.stream().map(String::valueOf).collect(java.util.stream.Collectors.joining("|")),
+            stats.undatedExcluded,stats.outsideDecadeExcluded);
         // 이미 찾은 공식 영상은 응답 카드에만 실어 바로 재생하게 한다. 곡 레코드에는 저장하지 않는다.
         for(Recommender.Pick pick:result.tracks)if(pick.track.youtubeVideoId.isEmpty())pick.track.youtubeVideoId=videos.fresh(pick.track.id,now).filter(YoutubeLinks.Link::verified).map(YoutubeLinks.Link::videoId).orElse("");
-        return new Recommender.Result(result.tracks,result.conditions,"openai",notice);
+        // 7곡 미만 안내로 덮어써도 유지한 제외 안내와 지역 미반영 안내는 남긴다. 지역 안내가 맨 끝이다.
+        return new Recommender.Result(result.tracks,result.conditions,"openai",Recommender.withKeptExclusionNotice(notice,plan.keptExclusions(),result.conditions));
     }
+
+    private static final java.time.Duration FIRST_PLAN_TIMEOUT=java.time.Duration.ofSeconds(15),VERIFY_RESERVE=java.time.Duration.ofSeconds(6),MIN_RETRY=java.time.Duration.ofSeconds(5);
+
+    /**
+     * 첫 AI 요청이 시간 초과되면 한 번만 다시 묻는다. 첫 요청에는 유지할 결과가 없어 보충 요청처럼 넘어갈 수 없고,
+     * 제한 시간을 늘리면 곡 확인 시간이 줄어든다. 재요청은 같은 30초 안에서 곡 확인 시간을 남긴 만큼만 기다린다.
+     * 후보를 0곡 제안한 경우에도 한 번 더 묻는다. 어느 쪽이든 첫 단계의 재요청은 한 번뿐이다.
+     */
+    private OpenAi.Plan firstPlan(Prompt body,Map<String,Integer> likedTags,String user,long deadline) throws Exception {
+        var log=org.slf4j.LoggerFactory.getLogger(Api.class);
+        OpenAi.Plan plan;
+        try{plan=ai.plan(body.prompt(),body.history(),body.previousConditions(),likedTags,FIRST_PLAN_TIMEOUT);}
+        catch(java.io.IOException error){
+            // 헤더가 늦으면 HttpTimeoutException, 본문이 늦으면 BoundedHttp의 RESPONSE_TIMEOUT 이다.
+            if(!(error instanceof java.net.http.HttpTimeoutException)&&!"RESPONSE_TIMEOUT".equals(error.getMessage()))throw error;
+            long wait=retryWait(deadline);
+            if(wait<MIN_RETRY.toNanos()||!store.reserveAi(user))throw error;
+            log.warn("AI plan timed out ({}); retrying once within {} ms",error.getClass().getSimpleName(),wait/1_000_000);
+            return ai.plan(body.prompt(),body.history(),body.previousConditions(),likedTags,java.time.Duration.ofNanos(wait));
+        }
+        if(!plan.candidates().isEmpty())return plan;
+        long wait=retryWait(deadline);
+        if(wait<MIN_RETRY.toNanos()||!store.reserveAi(user))return plan;
+        log.info("AI proposed no songs; asking once more within {} ms",wait/1_000_000);
+        // 재요청이 실패하면 첫 결과의 조건과 "후보를 제안하지 못했어요" 안내를 그대로 쓴다.
+        try{return ai.plan(body.prompt(),body.history(),body.previousConditions(),likedTags,java.time.Duration.ofNanos(wait));}
+        catch(InterruptedException interrupted){throw interrupted;}
+        catch(Exception error){log.warn("Retry after no AI proposals failed: {}: {}",error.getClass().getSimpleName(),error.getMessage());return plan;}
+    }
+    private static long retryWait(long deadline){return Math.min(FIRST_PLAN_TIMEOUT.toNanos(),deadline-System.nanoTime()-VERIFY_RESERVE.toNanos());}
 
     @GetMapping("/me/feedback")
     public Map<String, Integer> feedback(@RequestHeader(value="Authorization", required=false) String auth) { return store.feedback(store.user(auth)); }

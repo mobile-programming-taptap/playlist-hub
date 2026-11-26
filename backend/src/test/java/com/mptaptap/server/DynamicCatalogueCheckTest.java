@@ -129,12 +129,13 @@ class DynamicCatalogueCheckTest {
             assertEquals("openai",empty.path("mode").asString());assertEquals(0,empty.path("tracks").size());
             assertTrue(empty.path("conditions").path("tags").toString().contains("jpop"));
             assertTrue(empty.path("notice").asString().contains("제안하지 못"));
+            assertEquals(6,aiRequests.size(),"No proposals are asked exactly once more");
             catalogueStatus.set(200);model.set(plan("jazz",List.of(song("unverified "+UUID.randomUUID(),"Unknown performer",List.of("jazz"),"en"))));
             JsonNode unverified=value("POST","/recommendations",token,Map.of("prompt","재즈 추천"),200);
             assertEquals(0,unverified.path("tracks").size(),"Cached catalogue songs cannot replace unverified AI suggestions");
             assertTrue(unverified.path("notice").asString().contains("실제 곡 정보를 확인한 곡은 0곡"));
             assertFalse(unverified.path("notice").asString().contains("조건을 줄이면"));
-            assertEquals(6,aiRequests.size());assertEquals(4,queries.size());
+            assertEquals(7,aiRequests.size());assertEquals(4,queries.size());
             JsonNode saved=value("GET",path,token,null,200);
             assertEquals(track,saved.path("items").get(0).path("track"));
             app.close();app=null;app=start(database,username,password,aiEndpoint,mbEndpoint);
@@ -142,7 +143,7 @@ class DynamicCatalogueCheckTest {
             assertEquals(1,value("GET","/me/feedback",token,null,200).path(firstId).asInt());
             assertEquals(List.of(firstId),ids(value("GET","/me/saved-tracks",token,null,200)));
             assertEquals(saved,value("GET",path,token,null,200));
-            assertEquals(6,aiRequests.size(),"Reading durable catalogue, feedback and saved snapshots makes no AI call.");
+            assertEquals(7,aiRequests.size(),"Reading durable catalogue, feedback and saved snapshots makes no AI call.");
         } finally {
             if(app!=null)app.close();ai.stop(0);mb.stop(0);
             JdbcTemplate cleanup=new JdbcTemplate(new DriverManagerDataSource(database,username,password));
@@ -446,6 +447,66 @@ class DynamicCatalogueCheckTest {
         }finally{if(app!=null)app.close();ai.stop(0);mb.stop(0);}
     }
 
+    @Test void lostInSearchCountsOnlySearchedSongsThatWereNotFound() {
+        // 가수 제외가 없을 때는 이전 식과 같은 값이다. 실측 2의 searched=12, resolved=0 회차도 12로 남는다.
+        assertEquals(12,RecommendationCatalogue.lostInSearch(12,0,0,0));
+        assertEquals(11,RecommendationCatalogue.lostInSearch(12,3,2,0));
+        assertEquals(1,RecommendationCatalogue.lostInSearch(4,4,1,0));
+        // 검색 뒤 가수 제외로 뺀 곡은 찾은 곡이라 잃은 곡에서 뺀다.
+        assertEquals(2,RecommendationCatalogue.lostInSearch(3,0,0,1));
+    }
+
+    @Test void artistExclusionsInTheFunnelAreCountedOncePerSong() throws Exception {
+        String release=UUID.randomUUID().toString();
+        // 제외한 가수가 앞에 적힌 공동 크레딧 행이 같은 곡으로 두 개 온다. 행마다 세면 2가 된다.
+        Map<String,Object> credits=Map.of("artist-credit",List.of(Map.of("name","Banned","artist",Map.of("name","Banned"),"joinphrase"," & "),
+            Map.of("name","Main","artist",Map.of("name","Main"),"joinphrase","")));
+        List<Map<String,Object>> rows=new ArrayList<>();
+        for(int i=0;i<2;i++){Map<String,Object> row=new LinkedHashMap<>(Map.of("id",UUID.randomUUID().toString(),"title","Shared song","video",false,"disambiguation","","releases",List.of(Map.of("id",release))));row.putAll(credits);rows.add(row);}
+        HttpServer mb=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
+        mb.createContext("/recording/",exchange->respond(exchange,200,Map.of("recordings",rows)));mb.start();
+        var logger=(ch.qos.logback.classic.Logger)org.slf4j.LoggerFactory.getLogger(RecommendationCatalogue.class);
+        var level=logger.getLevel();var logs=new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+        ConfigurableApplicationContext app=null;
+        try {
+            String endpoint="http://127.0.0.1:"+mb.getAddress().getPort();
+            app=start("jdbc:h2:mem:funnel-"+UUID.randomUUID()+";MODE=PostgreSQL;DB_CLOSE_DELAY=-1","sa","",endpoint+"/unused",endpoint+"/recording/");
+            // 다른 검사의 Spring 설정이 같은 JVM에서 로그 수준을 WARN으로 남길 수 있어 이 검사 동안만 INFO로 둔다.
+            logger.setLevel(ch.qos.logback.classic.Level.INFO);logs.start();logger.addAppender(logs);
+            var conditions=new Recommender.Conditions();conditions.excludedArtists=List.of(Recommender.normalizeArtist("Banned"));
+            var searchedSong=new OpenAi.Suggestion("Shared song","Main",List.of("genre:funnel_genre"),"en");
+            var skippedSong=new OpenAi.Suggestion("Other song","Banned",List.of("genre:funnel_genre"),"en");
+            assertTrue(app.getBean(RecommendationCatalogue.class).resolve(List.of(searchedSong,skippedSong),Duration.ofSeconds(10),conditions).isEmpty());
+            List<String> funnel=logs.list.stream().map(event->event.getFormattedMessage()).filter(line->line.startsWith("Catalogue funnel:")).toList();
+            assertEquals(List.of("Catalogue funnel: proposed=2, cached=0, searched=1, skippedByArtist=2, resolved=0, lostInSearch=0"),funnel,
+                "One song skipped before the search and one excluded after it; neither was lost in the search");
+        }finally{logger.detachAppender(logs);logger.setLevel(level);if(app!=null)app.close();mb.stop(0);}
+    }
+
+    @Test void noVocalsRequestDropsCachedSongWhoseStoredLanguageContradictsItButNotUnseenSongs() throws Exception {
+        String sung=UUID.randomUUID().toString(),unseen=UUID.randomUUID().toString();
+        HttpServer mb=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
+        mb.createContext("/recording/",exchange->respond(exchange,200,Map.of("recordings",List.of(
+            recording(sung,"Sung ballad","Ballad singer","",UUID.randomUUID().toString()),
+            recording(unseen,"Unseen dance song","Dance singer","",UUID.randomUUID().toString())))));
+        mb.start();ConfigurableApplicationContext app=null;
+        try {
+            String endpoint="http://127.0.0.1:"+mb.getAddress().getPort();
+            app=start("jdbc:h2:mem:novocals-"+UUID.randomUUID()+";MODE=PostgreSQL;DB_CLOSE_DELAY=-1","sa","",endpoint+"/unused",endpoint+"/recording/");
+            var catalogue=app.getBean(RecommendationCatalogue.class);
+            // 앞선 추천에서 가사 있는 곡(ko)으로 저장된다.
+            catalogue.resolve(List.of(new OpenAi.Suggestion("Sung ballad","Ballad singer",List.of("genre:ballad"),"ko")));
+            var noVocals=new Recommender.Conditions();noVocals.tags=new ArrayList<>(List.of("instrumental"));noVocals.language="none";
+            var result=catalogue.resolve(List.of(
+                new OpenAi.Suggestion("Sung ballad","Ballad singer",List.of("genre:ballad","instrumental"),"none"),
+                new OpenAi.Suggestion("Unseen dance song","Dance singer",List.of("genre:dance","instrumental"),"none")),Duration.ofSeconds(10),noVocals);
+            // 박효신 경우: 저장 값 ko -> 이번 분류 none 이면 뺀다.
+            assertFalse(result.stream().anyMatch(track->track.id.equals(sung)),"A cached song stored with sung vocals must not pass as no-vocals");
+            // 김완선 경우: 처음 보는 곡은 비교할 저장 값이 없어 잘못된 none 분류도 통과한다. 이 한계가 바뀌면 이 검사를 고친다.
+            assertEquals(List.of(unseen),result.stream().map(track->track.id).toList(),"Known limit: an unseen song's no-vocals classification is not checked");
+        }finally{if(app!=null)app.close();mb.stop(0);}
+    }
+
     @Test void catalogueOutageStillReturnsAlreadyVerifiedSongs() throws Exception {
         var status=new AtomicInteger(200);String id=UUID.randomUUID().toString(),releaseId=UUID.randomUUID().toString();
         HttpServer mb=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
@@ -490,10 +551,10 @@ class DynamicCatalogueCheckTest {
             Map<String,Object> legacy=new LinkedHashMap<>(plan("jazz",List.of()));legacy.remove("candidates");payload.set(legacy);
             assertTrue(api.plan("재즈만 추천해줘",List.of(),null,Map.of()).candidates().isEmpty());
             Map<String,Object> good=song("Take Five","The Dave Brubeck Quartet",List.of("jazz","instrumental"),"none");
-            for(Object invalid:List.of("not an array",Collections.nCopies(13,good))) {
-                Map<String,Object> changed=new LinkedHashMap<>(legacy);changed.put("candidates",invalid);payload.set(changed);
-                assertThrows(Exception.class,()->api.plan("재즈만 추천해줘",List.of(),null,Map.of()),"A malformed candidate list fails the plan.");
-            }
+            Map<String,Object> notArray=new LinkedHashMap<>(legacy);notArray.put("candidates","not an array");payload.set(notArray);
+            assertThrows(Exception.class,()->api.plan("재즈만 추천해줘",List.of(),null,Map.of()),"A candidate field that is not a list fails the plan.");
+            Map<String,Object> tooMany=new LinkedHashMap<>(legacy);tooMany.put("candidates",Collections.nCopies(13,good));payload.set(tooMany);
+            assertEquals(12,api.plan("재즈만 추천해줘",List.of(),null,Map.of()).candidates().size(),"Proposals past the twelfth are left out instead of failing the plan.");
             // One bad suggestion is left out; the rest of the plan still recommends.
             List<Object> badRows=List.of(song("","Artist",List.of(),""),song("a".repeat(161),"Artist",List.of(),""),song("Song","a".repeat(161),List.of(),""),
                 song("Song","Artist",List.of("invented"),""),song("Song","Artist",List.of(),"not_a_language"),
@@ -510,6 +571,58 @@ class DynamicCatalogueCheckTest {
             Map<String,Object> missingFlag=new LinkedHashMap<>(legacy);missingFlag.remove("languageSpecified");payload.set(missingFlag);
             assertThrows(Exception.class,()->api.plan("재즈만 추천해줘",List.of(),null,Map.of()));
         } finally {ai.stop(0);}
+    }
+
+    @Test void releaseYearsFilterDecadesAndBackfillCachedSongs() throws Exception {
+        String a=UUID.randomUUID().toString(),b=UUID.randomUUID().toString(),c=UUID.randomUUID().toString();
+        List<Map<String,Object>> songs=List.of(song("Decade Song A","Decade Artist A",List.of(),""),
+            song("Decade Song B","Decade Artist B",List.of(),""),song("Decade Song C","Decade Artist C",List.of(),""));
+        // AI가 연대를 장르로 만든 값은 조건에서 빠져야 한다(5-1의 korean_1990s).
+        Map<String,Object> payload=plan("genre:korean_1990s",songs);
+        AtomicReference<String> laterDate=new AtomicReference<>(null);List<String> queries=new CopyOnWriteArrayList<>();
+        HttpServer ai=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0),mb=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
+        ai.createContext("/responses",exchange->{exchange.getRequestBody().readAllBytes();respond(exchange,200,envelope(payload));});
+        mb.createContext("/recording/",exchange->{
+            queries.add(URLDecoder.decode(exchange.getRequestURI().getRawQuery(),StandardCharsets.UTF_8));
+            // A는 first-release-date, B는 발매본 날짜 중 가장 이른 연도, C는 처음엔 날짜가 없다.
+            respond(exchange,200,Map.of("recordings",List.of(dated(a,"Decade Song A","Decade Artist A","1995-03-01",List.of()),
+                dated(b,"Decade Song B","Decade Artist B",null,List.of("2004-05","2001")),
+                dated(c,"Decade Song C","Decade Artist C",laterDate.get(),List.of()))));
+        });
+        ai.start();mb.start();
+        try(var app=start("jdbc:h2:mem:decades"+UUID.randomUUID()+";MODE=PostgreSQL;DB_CLOSE_DELAY=-1","sa","",
+                "http://127.0.0.1:"+ai.getAddress().getPort()+"/responses","http://127.0.0.1:"+mb.getAddress().getPort()+"/recording/")) {
+            String token=value("POST","/sessions",null,null,201).path("token").asString();
+            JsonNode nineties=value("POST","/recommendations",token,Map.of("prompt","1990년대 노래"),200);
+            assertEquals(List.of(a),ids(nineties.path("tracks")));
+            assertEquals(1995,nineties.path("tracks").get(0).path("track").path("releaseYear").asInt());
+            assertEquals("[1990]",nineties.path("conditions").path("decades").toString());
+            assertFalse(nineties.path("conditions").path("tags").toString().contains("1990s"),nineties.path("conditions").toString());
+            assertEquals(1,queries.size());
+            // 연대 조건이 없으면 연도를 모르는 캐시 곡이 있어도 검색하지 않고, 연도로 거르지도 않는다.
+            JsonNode plain=value("POST","/recommendations",token,Map.of("prompt","노래 추천"),200);
+            assertEquals(new java.util.HashSet<>(List.of(a,b,c)),new java.util.HashSet<>(ids(plain.path("tracks"))));
+            assertEquals(1,queries.size());
+            // 연대 조건이 있으면 연도를 모르는 캐시 곡(C)만 같은 검색 한 번에 묶어 연도를 채운다.
+            laterDate.set("2008");
+            JsonNode noughties=value("POST","/recommendations",token,Map.of("prompt","2000년대 노래"),200);
+            assertEquals(new java.util.HashSet<>(List.of(b,c)),new java.util.HashSet<>(ids(noughties.path("tracks"))));
+            assertEquals(2,queries.size());
+            assertTrue(queries.get(1).contains("Decade Song C")&&!queries.get(1).contains("Decade Song A")&&!queries.get(1).contains("Decade Song B"),queries.get(1));
+            // 채운 연도는 저장되어 다음부터는 검색 없이 쓴다.
+            JsonNode again=value("POST","/recommendations",token,Map.of("prompt","2000년대 노래"),200);
+            assertEquals(new java.util.HashSet<>(List.of(b,c)),new java.util.HashSet<>(ids(again.path("tracks"))));
+            assertEquals(2,queries.size());
+        } finally {ai.stop(0);mb.stop(0);}
+    }
+    private static Map<String,Object> dated(String id,String title,String artist,String first,List<String> dates) {
+        Map<String,Object> row=new LinkedHashMap<>(recording(id,title,artist,"",UUID.randomUUID().toString()));
+        if(first!=null)row.put("first-release-date",first);
+        List<Map<String,Object>> releases=new ArrayList<>();
+        for(String date:dates)releases.add(Map.of("id",UUID.randomUUID().toString(),"date",date));
+        if(releases.isEmpty())releases.add(Map.of("id",UUID.randomUUID().toString()));
+        row.put("releases",releases);
+        return row;
     }
 
     private ConfigurableApplicationContext start(String database,String username,String password,String ai,String mb) {

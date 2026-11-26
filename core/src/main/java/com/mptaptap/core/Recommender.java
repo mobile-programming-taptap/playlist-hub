@@ -18,6 +18,8 @@ public final class Recommender {
     public static final Map<String, String> LABELS = new LinkedHashMap<>();
     private static final Map<String, String> WORDS = new LinkedHashMap<>();
     private static final Map<String,String> LANGUAGE_WORDS=new LinkedHashMap<>();
+    /** 언어로 잡히지 않는 국적 표현("한국 발라드", "국내", "일본 시티팝"). 곡을 거르지 않고 미반영 안내에만 쓴다. */
+    private static final Map<String,String> ORIGIN_WORDS=new LinkedHashMap<>();
     public static final List<String> GENRES = List.of("acoustic", "ballad", "kpop", "pop", "rock", "piano",
             "jazz", "classical", "hiphop", "rnb", "edm", "blues", "metal", "indie", "folk", "soul", "funk",
             "disco", "citypop", "lofi", "jpop", "synthpop", "dreampop", "ambient", "house", "techno", "trance",
@@ -35,7 +37,8 @@ public final class Recommender {
                 {"bright", "밝은", "밝은|밝게|기분 전환|행복|bright|happy"},
                 {"energetic", "신나는", "신나|신나는|신나는 곡|활기|에너지|energetic|upbeat"},
                 {"warm", "따뜻한", "따뜻|포근|위로|warm|comfort"},
-                {"sad", "감성적인", "슬픈|슬프|우울|이별|감성|sad"},
+                // "처지"만 쓰면 꼬리가 "지 않게"로 남아 부정으로 읽히지 않는다. 활용형 전체를 맞춘다.
+                {"sad", "감성적인", "슬픈|슬프|우울|이별|감성|처지지|처지는|처져|sad"},
                 {"acoustic", "어쿠스틱", "어쿠스틱|acoustic"},
                 {"ballad", "발라드", "발라드|ballad"},
                 {"kpop", "K-pop", "케이팝|k[ -]?pop|아이돌"},
@@ -75,7 +78,8 @@ public final class Recommender {
                 {"instrumental", "가사 없는", "가사\\s*없는|가사\\s*없이|가사\\s*ㄴㄴ|가사\\s*no|보컬\\s*없는|보컬\\s*ㄴㄴ|노래방\\s*ㄴㄴ|연주곡|instrumental|no vocals"},
                 {"study", "공부할 때", "공부|집중|작업|독서|study|focus"},
                 {"rain", "비 오는 날", "비\\s*오는|비\\s*올|빗소리|rain"},
-                {"night", "밤에", "밤|새벽|자기 전|잠들|night|sleep"},
+                // "밤편지"처럼 곡 이름 안의 "밤"은 시간대가 아니다. 조사·합성어로 이어질 때만 읽는다.
+                {"night", "밤에", "(?<![가-힣])한?밤(?=$|[^가-힣]|[에의엔은을이도만]|중|새|하늘|길|공기|산책)|새벽|자기 전|잠들|night|sleep"},
                 {"drive", "드라이브할 때", "드라이브|운전|여행|drive|driving"},
                 {"workout", "운동할 때", "운동|러닝|달리기|workout|running"}
         };
@@ -88,12 +92,18 @@ public final class Recommender {
         LANGUAGE_WORDS.put("ja","일본어|일본 노래|\\bjapanese\\b");LANGUAGE_WORDS.put("zh","중국어|\\b(?:chinese|mandarin)\\b");
         LANGUAGE_WORDS.put("es","스페인어|\\bspanish\\b");LANGUAGE_WORDS.put("fr","프랑스어|불어|\\bfrench\\b");
         LANGUAGE_WORDS.put("de","독일어|\\bgerman\\b");
+        ORIGIN_WORDS.put("KR","한국(?!어)|국내");ORIGIN_WORDS.put("JP","일본(?!어)");
     }
 
     public static final class Conditions {
         public List<String> tags = new ArrayList<>();
         public List<String> excludedTags = new ArrayList<>();
         public String language = "";
+        /**
+         * 요청했지만 반영하지 않은 출신 지역(ISO 3166 대문자). 곡을 거르지 않고 안내에만 쓴다.
+         * 곡의 국적은 검증할 수 없어 지역 조건을 지원하지 않는다. 빈 값은 언급 없음.
+         */
+        public String origin = "";
         /** 사전이 매핑하지 못한 표현. AI 해석이 덮을 수 있으므로 실패로 단정하지 않는다. */
         public List<String> unread = new ArrayList<>();
         /** 최종 결과에서 반드시 만족해야 하는 tags 부분집합. 비면 장르·instrumental에서 자동 도출한다. */
@@ -102,6 +112,16 @@ public final class Recommender {
         public List<String> softTags = new ArrayList<>();
         /** 직접 요청으로 제외한 가수. 표기가 달라도 대표 이름으로 비교한다. */
         public List<String> excludedArtists = new ArrayList<>();
+        /** "밤편지 같은 느낌"처럼 참고 곡·가수에서 추론한 tags 부분집합. 장르여도 필수로 만들지 않는다. */
+        public List<String> inferredTags = new ArrayList<>();
+        /** 직접 말한 연대(1990 = 1990년대). 곡 발매 연도가 이 중 하나에 속해야 한다. 참고 곡에서 추론하지 않는다. */
+        public List<Integer> decades = new ArrayList<>();
+    }
+
+    /** 응답에 섞이지 않는 필터 집계. 다른 조건을 모두 통과하고 연대 때문에만 빠진 곡을 곡 id 기준 한 번씩 센다. */
+    public static final class Stats {
+        public int undatedExcluded;
+        public int outsideDecadeExcluded;
     }
 
     public static final class Pick {
@@ -163,6 +183,50 @@ public final class Recommender {
         if(language==null||language.isEmpty())return "";if(language.equals("none"))return "연주곡";if(language.equals("unsupported"))return "언어 확인 필요";
         String name=Locale.forLanguageTag(language).getDisplayLanguage(Locale.KOREAN);return name.isEmpty()?language:name;
     }
+    public static String originLabel(String origin){
+        if(origin==null||origin.isEmpty())return "";if(origin.equals("KR"))return "한국";
+        String name;
+        try{name=new Locale.Builder().setRegion(origin).build().getDisplayCountry(Locale.KOREAN);}catch(java.util.IllformedLocaleException invalid){return origin;}
+        return name.isEmpty()||name.equals(origin)?origin:name;
+    }
+    /** 어느 지역 표현이 무시됐는지 알린다. 조사는 괄호 앞 "조건"에 맞춘다. */
+    public static String originNotice(String origin){return "지역 조건("+originLabel(origin)+")은 반영되지 않았어요.";}
+    /** 지역을 언급했으면 기존 안내 뒤에 미반영 안내를 붙인다. 이미 붙어 있으면 그대로 둔다. */
+    public static String withOriginNotice(String notice,Conditions c){
+        String base=notice==null?"":notice.trim();
+        if(c==null||c.origin==null||c.origin.isEmpty()||base.endsWith(originNotice(c.origin)))return base;
+        return (base+" "+originNotice(c.origin)).trim();
+    }
+    /** AI가 원한 태그를 앞선 제외 조건 때문에 빼고 제외를 지켰다고 알린다. */
+    public static String keptExclusionNotice(List<String> kept){
+        return kept.stream().map(Recommender::label).collect(java.util.stream.Collectors.joining(", "))+" 제외는 유지했어요.";
+    }
+    /**
+     * 유지한 제외가 있으면 기존 안내 뒤, 지역 미반영 안내 앞에 붙인다. 이미 붙어 있으면 그대로 둔다.
+     * 지역 안내가 이미 끝에 있으면 떼었다가 다시 붙여 지역 안내가 항상 맨 끝에 남는다.
+     */
+    public static String withKeptExclusionNotice(String notice,List<String> kept,Conditions c){
+        String base=notice==null?"":notice.trim();
+        String origin=c==null||c.origin==null||c.origin.isEmpty()?"":originNotice(c.origin);
+        if(!origin.isEmpty()&&base.endsWith(origin))base=base.substring(0,base.length()-origin.length()).trim();
+        if(kept!=null&&!kept.isEmpty()&&!base.endsWith(keptExclusionNotice(kept)))base=(base+" "+keptExclusionNotice(kept)).trim();
+        return withOriginNotice(base,c);
+    }
+    public static String droppedVideoNotice(int dropped){return "공식 영상을 찾지 못한 "+dropped+"곡은 뺐어요.";}
+    /**
+     * 앱이 공식 영상이 없어 뺀 곡 수를 서버 안내를 지우지 않고 덧붙인다: [기존 안내] [유지한 제외] [영상] [지역].
+     * 서버 안내의 곡 수는 빼기 전 값이라, 뺀 수를 바로 뒤에 알려 차이를 설명한다. 지역 안내는 맨 끝에 남긴다.
+     */
+    public static String withDroppedVideoNotice(String notice,int dropped,Conditions c){
+        String base=notice==null?"":notice.trim();
+        if(dropped<=0)return base;
+        String origin=c==null||c.origin==null||c.origin.isEmpty()?"":originNotice(c.origin);
+        boolean originLast=!origin.isEmpty()&&base.endsWith(origin);
+        if(originLast)base=base.substring(0,base.length()-origin.length()).trim();
+        base=(base+" "+droppedVideoNotice(dropped)).trim();
+        return originLast?base+" "+origin:base;
+    }
+    public static boolean validOrigin(String origin){return origin!=null&&origin.matches("|[A-Z]{2}");}
 
     /** ponytail: dictionary and fixed wording only; extend for verified requests, leave additional meaning to the interpreter. */
     public static boolean isKnownConditionRequest(String request) {
@@ -216,11 +280,64 @@ public final class Recommender {
         }
         c.tags.removeAll(c.excludedTags);
         for(LanguageMention mention:languages(input))if(!mention.negative)c.language=mention.code;
+        // "한국 노래"처럼 언어로 잡힌 표현은 지역 안내 대상이 아니다.
+        List<LanguageMention> spoken=languages(input);
+        for(LanguageMention mention:mentions(ORIGIN_WORDS,input))
+            if(!mention.negative&&spoken.stream().noneMatch(language->language.start<mention.end&&mention.start<language.end))c.origin=mention.code;
+        for(DecadeMention mention:decadeMentions(input))if(!mention.negative)
+            for(int year:mention.years)if(!c.decades.contains(year))c.decades.add(year);
+        Collections.sort(c.decades);
         c.unread = unread(input);
         // "가사 없는/가사ㄴㄴ"은 연주곡을 원하는 요청이므로 language none 이다.
         // 반대로 "연주곡 제외"는 연주곡을 빼달라는 요청이므로 language 를 비운 채로 둔다.
         if (c.tags.contains("instrumental")) c.language = "none";
         return c;
+    }
+
+    /**
+     * "90년대", "1990년대", "00년대", "90s", "1990s", 범위 "80~2000년대"·"90년대~2000년대".
+     * "초반·중반·후반"은 연대 전체로 읽는다. 두 자리는 50~90년대와 00·10·20년대만 읽는다.
+     */
+    private static final Pattern DECADE = Pattern.compile(
+            "(?<!\\d)(\\d{4}|\\d{2})(?!\\d)(?:\\s*(?:년대)?\\s*(?:~|-|–|부터)\\s*(\\d{4}|\\d{2})(?!\\d))?"
+            + "(?:\\s*년대(?:\\s*(?:초반|중반|후반))?|'?s(?![a-z]))");
+    private static final class DecadeMention {
+        final List<Integer> years=new ArrayList<>();boolean negative;
+    }
+    private static int decadeYear(String digits){
+        int value=Integer.parseInt(digits);
+        if(value%10!=0)return -1;
+        if(digits.length()==4)return value>=1900&&value<=2090?value:-1;
+        if(value>=50)return 1900+value;
+        return value<=20?2000+value:-1;
+    }
+    private static List<DecadeMention> decadeMentions(String input){
+        List<DecadeMention> mentions=new ArrayList<>();
+        java.util.regex.Matcher match=DECADE.matcher(input);
+        while(match.find()){
+            int from=decadeYear(match.group(1)),to=match.group(2)==null?from:decadeYear(match.group(2));
+            if(from<0||to<0||to<from||(to-from)/10>=8)continue;
+            DecadeMention mention=new DecadeMention();
+            for(int year=from;year<=to;year+=10)mention.years.add(year);
+            mention.negative=negative(input,match.start(),match.end());
+            mentions.add(mention);
+        }
+        return mentions;
+    }
+    /** "90년대 말고"처럼 연대를 부정하면 지금 연대 조건을 푼다. 연대 제외 조건은 따로 두지 않는다. */
+    public static boolean decadesExcluded(String request){
+        for(DecadeMention mention:decadeMentions(Normalizer.normalize(request,Normalizer.Form.NFKC).toLowerCase(Locale.ROOT)))
+            if(mention.negative)return true;
+        return false;
+    }
+    /** 연대 때문에 0곡일 때의 안내. 서버가 다른 안내로 덮어쓸 때도 이 문구를 찾아 남긴다. */
+    public static String decadeNotice(List<Integer> decades){
+        return "요청한 연대(" + decadeLabel(decades) + ") 조건에 맞는 곡을 확인하지 못해 이번 추천은 0곡이에요. 조건을 바꿔 보세요.";
+    }
+    public static String decadeLabel(List<Integer> decades){
+        StringBuilder label=new StringBuilder();
+        for(int year:decades){if(label.length()>0)label.append(", ");label.append(year).append("년대");}
+        return label.toString();
     }
 
     private static final Pattern SEPARATORS = Pattern.compile("[\\p{Z}\\s.,!?·/]+");
@@ -240,7 +357,7 @@ public final class Recommender {
             java.util.regex.Matcher matcher = Pattern.compile(pattern).matcher(body);
             while (matcher.find()) for (int i=matcher.start();i<matcher.end();i++) consumed[i]=true;
         }
-        for (String pattern : LANGUAGE_WORDS.values()) {
+        for (String pattern : List.of(String.join("|",LANGUAGE_WORDS.values()),String.join("|",ORIGIN_WORDS.values()),DECADE.pattern())) {
             java.util.regex.Matcher matcher = Pattern.compile(pattern).matcher(body);
             while (matcher.find()) for (int i=matcher.start();i<matcher.end();i++) consumed[i]=true;
         }
@@ -249,6 +366,8 @@ public final class Recommender {
         List<String> result = new ArrayList<>();
         for (String token : SEPARATORS.split(remaining)) {
             if (token.isEmpty()) continue;
+            // 조사 제거 전에 비교한다. "같은"·"싶은"·"정도"는 끝 글자가 조사로 잘려 목록과 어긋난다.
+            if (FILLER.matcher(token).matches()) continue;
             String stripped = token.replaceAll("(?:은|는|을|를|이|가|도|만|와|과|으로|로|에|의|께|서|까지|부터|할|하게|한|게|때|날|더)$", "");
             if (stripped.isEmpty() || FILLER.matcher(stripped).matches()) continue;
             result.add(token);
@@ -276,9 +395,11 @@ public final class Recommender {
         final String code;final int start,end;boolean negative;
         LanguageMention(String code,int start,int end){this.code=code;this.start=start;this.end=end;}
     }
-    private static List<LanguageMention> languages(String input){
+    private static List<LanguageMention> languages(String input){return mentions(LANGUAGE_WORDS,input);}
+    /** 언어·지역 표현의 위치와 부정 여부. "영어와 일본어 제외"처럼 나열된 표현은 함께 부정된다. */
+    private static List<LanguageMention> mentions(Map<String,String> words,String input){
         List<LanguageMention> mentions=new ArrayList<>();
-        for(var language:LANGUAGE_WORDS.entrySet()){var match=Pattern.compile(language.getValue()).matcher(input);while(match.find())mentions.add(new LanguageMention(language.getKey(),match.start(),match.end()));}
+        for(var language:words.entrySet()){var match=Pattern.compile(language.getValue()).matcher(input);while(match.find())mentions.add(new LanguageMention(language.getKey(),match.start(),match.end()));}
         mentions.sort(Comparator.comparingInt(mention->mention.start));
         for(int first=0;first<mentions.size();){int end=first+1;
             while(end<mentions.size()&&input.substring(mentions.get(end-1).end,mentions.get(end).start).matches("(?:[\\s,;/·]|and|or|및|와|과|랑|이랑|그리고|또는)*"))end++;
@@ -293,13 +414,23 @@ public final class Recommender {
             if(mention.negative&&(language.equals(mention.code)||language.startsWith(mention.code+"-")))return true;
         return false;
     }
+    public static boolean originExcluded(String request,String origin){
+        if(origin==null||origin.isEmpty())return false;
+        for(LanguageMention mention:mentions(ORIGIN_WORDS,Normalizer.normalize(request,Normalizer.Form.NFKC).toLowerCase(Locale.ROOT)))
+            if(mention.negative&&origin.equals(mention.code))return true;
+        return false;
+    }
     public static boolean ambiguousLanguage(String request){
         Set<String> choices=new LinkedHashSet<>();for(LanguageMention mention:languages(Normalizer.normalize(request,Normalizer.Form.NFKC).toLowerCase(Locale.ROOT)))choices.add(mention.code);
         return choices.size()>1;
     }
 
     public static Conditions validate(Conditions c) {
-        if (c == null || c.tags == null || c.excludedTags == null || c.language == null
+        if (c != null) c.origin = c.origin == null ? "" : c.origin.toUpperCase(Locale.ROOT);
+        if (c != null && c.decades == null) c.decades = new ArrayList<>();
+        if (c == null || c.tags == null || c.excludedTags == null || c.language == null || !validOrigin(c.origin)
+                || c.decades.stream().anyMatch(year -> year == null || year < 1900 || year > 2090 || year % 10 != 0)
+                || new java.util.TreeSet<>(c.decades).size() > 8
                 || c.tags.size()>64 || c.excludedTags.size()>64 || !c.tags.stream().allMatch(Recommender::validTag) || !c.excludedTags.stream().allMatch(Recommender::validTag)
                 || !validLanguage(c.language))
             throw new IllegalArgumentException("추천 조건을 해석하지 못했습니다.");
@@ -314,10 +445,15 @@ public final class Recommender {
         if (c.hardTags == null) c.hardTags = new ArrayList<>();
         if (c.softTags == null) c.softTags = new ArrayList<>();
         if (c.excludedArtists == null) c.excludedArtists = new ArrayList<>();
+        c.decades = new ArrayList<>(new java.util.TreeSet<>(c.decades));
         c.excludedArtists = c.excludedArtists.stream().map(Recommender::normalizeArtist)
                 .filter(name -> !name.isEmpty()).distinct().toList();
-        if (c.hardTags.isEmpty()) c.hardTags = c.tags.stream().filter(Recommender::isHardTag).toList();
-        if (c.softTags.isEmpty()) c.softTags = c.tags.stream().filter(Recommender::isSoftTag).toList();
+        // 명시한 제외와 겹치는 추론 값은 위에서 tags 에서 빠졌으므로 여기서도 사라진다.
+        c.inferredTags = c.inferredTags == null ? new ArrayList<>() : new ArrayList<>(new LinkedHashSet<>(c.inferredTags));
+        c.inferredTags.retainAll(c.tags);
+        List<String> inferred = c.inferredTags;
+        if (c.hardTags.isEmpty()) c.hardTags = c.tags.stream().filter(tag -> isHardTag(tag) && !inferred.contains(tag)).toList();
+        if (c.softTags.isEmpty()) c.softTags = c.tags.stream().filter(tag -> isSoftTag(tag) || inferred.contains(tag)).toList();
         return c;
     }
 
@@ -329,6 +465,10 @@ public final class Recommender {
     }
 
     public static Result recommend(List<Track> catalogue, Conditions c, Map<String, Integer> feedback, String mode, Set<String> excludedTrackIds) {
+        return recommend(catalogue, c, feedback, mode, excludedTrackIds, new Stats());
+    }
+
+    public static Result recommend(List<Track> catalogue, Conditions c, Map<String, Integer> feedback, String mode, Set<String> excludedTrackIds, Stats stats) {
         validate(c);
         if (excludedTrackIds == null) throw new IllegalArgumentException("이번 추천에서 제외할 곡 정보를 확인해 주세요.");
         Map<String, Integer> likedTags = new LinkedHashMap<>();
@@ -341,6 +481,8 @@ public final class Recommender {
         Set<String> seen = new LinkedHashSet<>();
         List<String> hardGenres = c.hardTags.stream().filter(Recommender::genre).toList();
         for (Track track : catalogue) {
+            // 언어 none(가사 없음)은 AI 분류 값이고 MusicBrainz로 검증되지 않는다. 연도와 달리 여기서는 분류를 믿는다.
+            // 캐시 곡의 어긋난 none은 RecommendationCatalogue 가 저장 값으로 거르지만, 처음 보는 곡은 걸러지지 않는다.
             if (!track.usable() || excludedTrackIds.contains(track.id) || !seen.add(track.id) || feedback.getOrDefault(track.id, 0) == -1
                     || !Collections.disjoint(track.tags, c.excludedTags)
                     || (!c.language.isEmpty() && (c.language.equals("unsupported")||!(c.language.equals(track.language)||track.language.startsWith(c.language+"-")))))
@@ -362,6 +504,12 @@ public final class Recommender {
                 if (!track.tags.contains(tag)) { hardSatisfied = false; break; }
             }
             if (!hardSatisfied) continue;
+            // 연대는 맨 마지막에 본다. 다른 조건으로 빠질 곡을 연대 때문에 빠진 곡으로 세지 않기 위해서다.
+            if (!c.decades.isEmpty()) {
+                ReleaseYear.Verdict verdict = ReleaseYear.judge(track.releaseYear, c.decades);
+                if (verdict == ReleaseYear.Verdict.UNDATED) { stats.undatedExcluded++; continue; }
+                if (verdict == ReleaseYear.Verdict.OUTSIDE) { stats.outsideDecadeExcluded++; continue; }
+            }
             int score = feedback.getOrDefault(track.id, 0) == 1 ? 1 : 0;
             // 선호 조건은 곡을 버리지 않고 순서만 바꾼다.
             for (String tag : c.softTags) {
@@ -397,12 +545,14 @@ public final class Recommender {
                     + ")에 맞는 곡을 확인하지 못해 이번 추천은 0곡이에요. 조건을 줄이거나 다른 장르로 시도해 보세요.";
         else if (picks.isEmpty() && !c.language.isEmpty() && !c.language.equals("none"))
             notice = "요청한 언어 조건에 맞는 곡을 확인하지 못해 이번 추천은 0곡이에요. 조건을 바꿔 보세요.";
+        else if (picks.isEmpty() && !c.decades.isEmpty())
+            notice = decadeNotice(c.decades);
         else if (picks.isEmpty())
             notice = "조건에 맞는 곡을 확인하지 못했어요. 조건을 줄이면 더 많은 곡을 찾을 수 있어요.";
         else if (picks.size() < 7)
             notice = "조건에 맞는 곡이 " + picks.size() + "곡이에요. 분위기 조건을 줄이면 더 많은 곡을 찾을 수 있어요.";
         else notice = "";
-        if (c.tags.isEmpty() && c.language.isEmpty()) notice = "구체적인 분위기나 장르를 더하면 요청에 맞춰 추천할 수 있어요.";
-        return new Result(picks, c, mode, notice);
+        if (c.tags.isEmpty() && c.language.isEmpty() && c.decades.isEmpty()) notice = "구체적인 분위기나 장르를 더하면 요청에 맞춰 추천할 수 있어요.";
+        return new Result(picks, c, mode, withOriginNotice(notice, c));
     }
 }

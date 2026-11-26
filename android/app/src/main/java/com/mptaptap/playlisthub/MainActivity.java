@@ -372,6 +372,8 @@ public class MainActivity extends AppCompatActivity {
         TextInputLayout field = findViewById(R.id.prompt_layout);
         try { Recommender.parse(request); field.setError(null); }
         catch (IllegalArgumentException e) { field.setError(e.getMessage()); return; }
+        // 새 요청에는 가리킬 이전 곡이 없다. 곡 이름으로 오해하지 않게 AI에게 보내지 않는다.
+        if(com.mptaptap.core.TrackReference.mentions(request)){field.setError(com.mptaptap.core.TrackReference.MAIN_NOTICE);return;}
         if(api==null){settings.edit().putString("prompt",request).apply();hideKeyboard();connectService();return;}
         replacementPosition=-1;hideKeyboard(); stopPlayer(); settings.edit().putString("prompt", request).apply();
         recommendation.start(request,api);
@@ -389,16 +391,32 @@ public class MainActivity extends AppCompatActivity {
         refinementPrompt=next;refinementChoices.clear();
         List<android.widget.CheckBox> choices=new ArrayList<>();
         List<Recommender.Pick> current=new ArrayList<>(picks);
+        // 영상 확인이 대화상자 뒤에서 카드를 지울 수 있으니 "첫 곡", "지금 듣는 곡"은 연 시점의 순서로 읽는다.
+        List<String> order=new ArrayList<>();for(Recommender.Pick pick:current)order.add(pick.track.id);
+        int watching=current.isEmpty()?-1:pager.getCurrentItem();
         for(Recommender.Pick pick:current){android.widget.CheckBox check=new androidx.appcompat.widget.AppCompatCheckBox(this);
             check.setText("유지 · "+pick.track.title);check.setMinHeight(dp(48));check.setChecked(restoredKeeps.contains(pick.track.id));
             refinementChoices.put(pick.track.id,check);choices.add(check);box.addView(check);}
         restoredKeeps.clear();
         AlertDialog dialog=dialogBuilder().setTitle("이어서 요청하기").setView(scroll(box)).setPositiveButton("추천 바꾸기",null).setNegativeButton("취소",null).create();
         dialog.setOnShowListener(d->dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{
-            String request=next.getText().toString().trim();try{com.mptaptap.core.Conversation.parse(resultConditions,conversation,request);next.setError(null);}catch(Exception e){next.setError(e.getMessage());return;}
-            List<String> kept=new ArrayList<>();for(int i=0;i<choices.size();i++)if(choices.get(i).isChecked())kept.add(current.get(i).track.id);
+            String request=next.getText().toString().trim();
+            Set<String> checked=new HashSet<>();for(int i=0;i<choices.size();i++)if(choices.get(i).isChecked())checked.add(current.get(i).track.id);
+            com.mptaptap.core.TrackReference.Result reference=com.mptaptap.core.TrackReference.parse(request,order,watching,feedback,checked);
+            if(reference.error!=null){next.setError(reference.error);return;}
+            // 곡을 가리키는 말은 떼어 내고 나머지만 보낸다. 남기기만 했다면 마지막 요청을 다시 보내고 기록에는 쌓지 않는다.
+            boolean record=!reference.referenced()||!reference.remaining.isEmpty();
+            String send=!reference.referenced()?request:record?reference.remaining:conversation.isEmpty()?prompt.getText().toString().trim():conversation.get(conversation.size()-1);
+            if(!record&&reference.kept.isEmpty()){
+                // 빼기만 했다면 새 곡을 받을 문장이 없다. 카드 메뉴의 "이번 추천에서 제외"와 같게 이번 결과에서만 숨긴다.
+                List<Track> hide=new ArrayList<>();for(Recommender.Pick pick:current)if(reference.excluded.contains(pick.track.id))hide.add(pick.track);
+                dialog.dismiss();hideKeyboard();hideTracks(hide);return;
+            }
+            try{com.mptaptap.core.Conversation.parse(resultConditions,conversation,send);next.setError(null);}catch(Exception e){next.setError(e.getMessage());return;}
+            List<String> kept=new ArrayList<>();for(String id:order)if(checked.contains(id)||reference.kept.contains(id))kept.add(id);
+            Set<String> excluded=new java.util.LinkedHashSet<>(hiddenTracks);excluded.addAll(reference.excluded);
             dialog.dismiss();hideKeyboard();stopPlayer();
-            replacementPosition=-1;recommendation.start(request,api,new ArrayList<>(conversation),kept,new ArrayList<>(hiddenTracks),resultConditions);
+            replacementPosition=-1;recommendation.start(send,api,new ArrayList<>(conversation),kept,new ArrayList<>(excluded),resultConditions,record);
         }));dialog.setOnDismissListener(d->{if(refinementPrompt==next){refinementPrompt=null;refinementChoices.clear();}});dialog.show();
     }
 
@@ -535,18 +553,21 @@ public class MainActivity extends AppCompatActivity {
         hasResults=true; findViewById(R.id.request_panel).setVisibility(View.GONE);
         findViewById(R.id.results).setVisibility(View.VISIBLE);
         findViewById(R.id.empty).setVisibility(picks.isEmpty() ? View.VISIBLE : View.GONE);
+        // 서버 안내(유지한 제외·지역 안내 포함)는 지우지 않고, 공식 영상이 없어 뺀 곡 수만 덧붙인다.
+        String notice=Recommender.withDroppedVideoNotice(resultNotice,droppedWithoutVideo,resultConditions);
         String emptyNotice=api==null?"AI 추천이 연결되지 않았어요.\nAI 추천을 연결하면 같은 요청으로 새 곡을 찾을 수 있어요."
-            :resultNotice.isEmpty()?"조건에 맞는 곡을 확인하지 못했어요. 같은 요청으로 다시 시도해 보세요.":resultNotice;
+            :notice.isEmpty()?"조건에 맞는 곡을 확인하지 못했어요. 같은 요청으로 다시 시도해 보세요.":notice;
         ((TextView)findViewById(R.id.empty)).setText(hiddenTracks.isEmpty()?emptyNotice:"이번 추천에서 모든 곡을 제외했어요.\n요청을 수정해 새로 추천받을 수 있어요.");
         ((TextView)findViewById(R.id.notice)).setText(resultMode.equals("openai")?"AI 추천":"이전 기본 추천 결과 · AI 연결 필요");
         TextView detail=findViewById(R.id.result_detail);
-        // After cards drop, the server's song count is out of date, so say what changed instead.
-        detail.setText((droppedWithoutVideo>0?"공식 영상을 찾지 못한 "+droppedWithoutVideo+"곡은 뺐어요.":resultNotice)+(hiddenTracks.isEmpty()?"":"\n이번 결과만 수정했어요. 좋아요·싫어요는 그대로예요."));
+        detail.setText(notice+(hiddenTracks.isEmpty()?"":"\n이번 결과만 수정했어요. 좋아요·싫어요는 그대로예요."));
         detail.setVisibility(!picks.isEmpty()&&!detail.getText().toString().isEmpty()?View.VISIBLE:View.GONE);
         List<String> conditions=new ArrayList<>();
         for (String tag:resultConditions.tags) conditions.add(Recommender.label(tag));
         for (String tag:resultConditions.excludedTags) conditions.add(Recommender.label(tag)+" 제외");
         if(!resultConditions.language.isEmpty()&&!(resultConditions.language.equals("none")&&resultConditions.tags.contains("instrumental")))conditions.add(Recommender.languageLabel(resultConditions.language));
+        // 연대는 실제로 거르는 조건이라 칩에 보인다. 반영하지 않는 지역은 칩에 넣지 않는다.
+        if(!resultConditions.decades.isEmpty())conditions.add(Recommender.decadeLabel(resultConditions.decades));
         ((TextView)findViewById(R.id.condition_summary)).setText(conditions.isEmpty() ? "다양한 음악" : android.text.TextUtils.join(" · ",conditions));
         findViewById(R.id.condition_summary).setContentDescription("추천 조건: "+((TextView)findViewById(R.id.condition_summary)).getText());
         pager.setVisibility(picks.isEmpty() ? View.GONE : View.VISIBLE);
@@ -642,10 +663,17 @@ public class MainActivity extends AppCompatActivity {
             recommendation.start(prompt.getText().toString(),api,new ArrayList<>(conversation),kept,new ArrayList<>(excluded),resultConditions);
             return;
         }
+        hideTracks(java.util.Collections.singletonList(track));
+    }
+
+    /** 이번 결과에서만 숨긴다. 싫어요로 기록하지 않는다. */
+    private void hideTracks(List<Track> tracks) {
+        Set<String> ids=new HashSet<>();for(Track track:tracks)ids.add(track.id);
         List<Recommender.Pick> before=picks, changed=new ArrayList<>(picks);
         Set<String> beforeHidden=new HashSet<>(hiddenTracks); int beforeIndex=pager.getCurrentItem();
-        changed.remove(index);
-        stopPlayer(); picks=changed; hiddenTracks.add(track.id); showResults();
+        changed.removeIf(pick->ids.contains(pick.track.id));
+        if(changed.size()==before.size())return;
+        stopPlayer(); picks=changed; hiddenTracks.addAll(ids); showResults();
         pager.setCurrentItem(Math.max(0, Math.min(beforeIndex, picks.size()-1)), false);
         snackbar("이번 추천에서 제외했어요.", Snackbar.LENGTH_LONG)
             .setAction("되돌리기", v -> {

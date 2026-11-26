@@ -10,6 +10,11 @@ public class Track {
     public String title = "";
     public String artist = "";
     public String language = "";
+    /**
+     * MusicBrainz 녹음 검색의 발매일에서 얻은 발매 연도. AI가 붙인 값이 아니라 확인된 값이다.
+     * 0 은 모름. 연도 판정은 ReleaseYear 에 모여 있다.
+     */
+    public int releaseYear;
     public List<String> tags = new ArrayList<>();
     public String youtubeVideoId = "";
     public String artworkUrl = "";

@@ -30,28 +30,32 @@ public final class RecommendationRequest extends ViewModel {
     private String lastPrompt;
     private String lastBase="",lastIdentity="";
     private Recommender.Conditions lastPrevious;
+    /** false면 이전 요청을 다시 보내는 것이라 대화 기록에 또 쌓지 않는다("첫 곡만 남겨줘"). */
+    private boolean lastRecord=true;
     private List<String> lastHistory=List.of(),lastKept=List.of(),lastExcluded=List.of();
     LiveData<State> states(){return state;}
     State current(){return state.getValue();}
     void consume(State delivered){if(current()==delivered)state.setValue(new State("","",false,null,null));}
-    void discard(){lastPrompt=null;lastPrevious=null;lastHistory=List.of();lastKept=List.of();lastExcluded=List.of();lastBase="";lastIdentity="";state.setValue(new State("","",false,null,null));}
+    void discard(){lastPrompt=null;lastPrevious=null;lastHistory=List.of();lastKept=List.of();lastExcluded=List.of();lastRecord=true;lastBase="";lastIdentity="";state.setValue(new State("","",false,null,null));}
     static String identity(ApiClient api){return api==null?"local":api.identity();}
     boolean retry(ApiClient api){
         if(lastPrompt==null||!lastBase.equals(api==null?"":api.base)||!lastIdentity.equals(identity(api)))return false;
-        start(lastPrompt,api,lastHistory,lastKept,lastExcluded,lastPrevious);return true;
+        start(lastPrompt,api,lastHistory,lastKept,lastExcluded,lastPrevious,lastRecord);return true;
     }
     JSONObject snapshot() {
         if(lastPrompt==null)return null;
-        try{return new JSONObject().put("prompt",lastPrompt).put("history",new JSONArray(lastHistory))
+        // record는 false일 때만 쓴다. 평소 요청의 저장 형식을 예전과 같게 두어 이전에 저장된 값과 호환된다.
+        try{JSONObject saved=new JSONObject().put("prompt",lastPrompt).put("history",new JSONArray(lastHistory))
             .put("keptTrackIds",new JSONArray(lastKept)).put("excludedTrackIds",new JSONArray(lastExcluded))
-            .put("previousConditions",lastPrevious==null?JSONObject.NULL:TrackJson.conditions(lastPrevious));}
+            .put("previousConditions",lastPrevious==null?JSONObject.NULL:TrackJson.conditions(lastPrevious));
+            return lastRecord?saved:saved.put("record",false);}
         catch(Exception error){throw new IllegalStateException(error);}
     }
     void restore(JSONObject request,ApiClient api) throws Exception {
         if(current().loading)return;
         String prompt=request.getString("prompt");List<String> history=strings(request.getJSONArray("history"));
         com.mptaptap.core.Conversation.requests(history,prompt);
-        lastPrompt=prompt;lastHistory=history;lastKept=strings(request.getJSONArray("keptTrackIds"));lastExcluded=strings(request.getJSONArray("excludedTrackIds"));
+        lastPrompt=prompt;lastHistory=history;lastKept=strings(request.getJSONArray("keptTrackIds"));lastExcluded=strings(request.getJSONArray("excludedTrackIds"));lastRecord=request.optBoolean("record",true);
         lastPrevious=request.isNull("previousConditions")?null:TrackJson.conditions(request.getJSONObject("previousConditions"));
         lastBase=api==null?"":api.base;lastIdentity=identity(api);
     }
@@ -66,8 +70,12 @@ public final class RecommendationRequest extends ViewModel {
     }
     void start(String prompt, ApiClient api,
             List<String> history, List<String> kept, List<String> excluded, Recommender.Conditions previous) {
+        start(prompt,api,history,kept,excluded,previous,true);
+    }
+    void start(String prompt, ApiClient api,
+            List<String> history, List<String> kept, List<String> excluded, Recommender.Conditions previous, boolean record) {
         if(current().loading)return;
-        lastPrompt=prompt;lastHistory=new ArrayList<>(history);lastKept=new ArrayList<>(kept);lastExcluded=new ArrayList<>(excluded);
+        lastPrompt=prompt;lastRecord=record;lastHistory=new ArrayList<>(history);lastKept=new ArrayList<>(kept);lastExcluded=new ArrayList<>(excluded);
         try{lastPrevious=previous==null?null:TrackJson.conditions(TrackJson.conditions(previous));}catch(Exception error){throw new IllegalArgumentException(error);}
         lastBase=api==null?"":api.base;lastIdentity=identity(api);
         State pending=new State(lastBase,lastIdentity,true,null,null);
@@ -83,7 +91,7 @@ public final class RecommendationRequest extends ViewModel {
                     .put("history",new JSONArray(requestHistory)).put("keptTrackIds",new JSONArray(requestKept)).put("excludedTrackIds",new JSONArray(requestExcluded))
                     .put("previousConditions",requestPrevious==null?JSONObject.NULL:TrackJson.conditions(requestPrevious)));
                 result=new Object[]{TrackJson.picks(value.getJSONArray("tracks")),value.getString("mode"),value.optString("notice"),TrackJson.conditions(value.getJSONObject("conditions"))};
-                List<String> conversation=new ArrayList<>(requestHistory);conversation.add(prompt);
+                List<String> conversation=new ArrayList<>(requestHistory);if(record)conversation.add(prompt);
                 while(conversation.size()>8)conversation.remove(0);
                 result=new Object[]{result[0],result[1],result[2],result[3],conversation};
             } catch(Exception failure){error=failure;}

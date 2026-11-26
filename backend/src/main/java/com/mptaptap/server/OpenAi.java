@@ -37,7 +37,8 @@ public class OpenAi {
 
     boolean available() { return !key.isBlank(); }
 
-    record Plan(Recommender.Conditions conditions, List<Suggestion> candidates) {}
+    /** keptExclusions 는 AI가 원했지만 앞선 제외 조건 때문에 뺀 태그다. 안내에만 쓴다. */
+    record Plan(Recommender.Conditions conditions, List<Suggestion> candidates, List<String> keptExclusions) {}
     record Suggestion(String title, String artist, List<String> tags, String language) {}
 
     Recommender.Conditions extract(String prompt) throws Exception {
@@ -52,6 +53,9 @@ public class OpenAi {
     Plan plan(String prompt, List<String> history, Recommender.Conditions previousConditions, Map<String,Integer> likedTags) throws Exception {
         return request(prompt,history,previousConditions,likedTags,true);
     }
+    Plan plan(String prompt,List<String> history,Recommender.Conditions previousConditions,Map<String,Integer> likedTags,Duration timeout) throws Exception {
+        return request(prompt,history,previousConditions,likedTags,true,List.of(),timeout);
+    }
     Plan supplement(String prompt,List<String> history,Recommender.Conditions conditions,Map<String,Integer> likedTags,List<Suggestion> previous,Duration timeout) throws Exception {
         return request(prompt,history,conditions,likedTags,true,previous,timeout);
     }
@@ -64,12 +68,13 @@ public class OpenAi {
                 +json.writeValueAsString(Conversation.copyConditions(previousConditions))
                 +". This snapshot already includes the historical requests; apply only the latest request to it. "
                 +"Keep snapshot constraints unless the latest request changes, removes or resets them. "
-                +"Explicitly excluding instrumental/no vocals also removes a prior language none constraint.";
+                +"Explicitly excluding instrumental/no vocals also removes a prior language none constraint. "
+                +"The snapshot origin is an unsupported region mention kept only for a notice; never treat it as a constraint.";
         Map<String,Object> tag=Map.of("type","string","pattern","^(?:"+String.join("|",Recommender.LABELS.keySet().stream().filter(key->!key.equals("unsupported_genre")).toList())+"|genre:[a-z0-9][a-z0-9_-]{0,63})$");
         Map<String, Object> tagArray = Map.of("type", "array", "maxItems",64,"items",tag);
         String languagePattern="^(?:|none|[a-z]{2,3}(?:-[a-z0-9]{2,8})*)$";
         Map<String, Object> properties = new LinkedHashMap<>(Map.of(
-                    "tags", Map.of("type","array","maxItems",64,"items",tag,"description","Exact requested genres and traits. First identify the specific genre by translating or transliterating its name into canonical English. Preserve that exact genre using genre:<slug> when absent from the alias dictionary. Never substitute a related listed genre."), "excludedTags", Map.of("type", "array", "maxItems",64,"items", tagArray.get("items"), "description",
+                    "tags", Map.of("type","array","maxItems",64,"items",tag,"description","Exact directly requested genres and traits, never ones inferred only from a referenced song or artist. First identify the specific genre by translating or transliterating its name into canonical English. Preserve that exact genre using genre:<slug> when absent from the alias dictionary. Never substitute a related listed genre."), "excludedTags", Map.of("type", "array", "maxItems",64,"items", tagArray.get("items"), "description",
                         "Only directly requested negatives or unchanged explicit snapshot exclusions. Never expand only or a requested genre into a complement of other tags."),
                     "language", Map.of("type", "string", "pattern",languagePattern,
                         "description", "Requested vocal language only. Never infer it from input text language, genre, a requested artist or that artist's nationality. Keep the prior value when unchanged; use empty when unspecified without a prior constraint, or after reset."),
@@ -78,8 +83,10 @@ public class OpenAi {
                     "excludedArtists", Map.of("type","array","maxItems",16,
                         "items", Map.of("type","string","maxLength",160,
                             "description","Official artist credit, in its original release spelling, that the user directly asked to exclude."),
-                        "description","Only artists the user directly asked to exclude, in their original credit spelling, such as BTS 말고 or 아이유 빼줘. Never infer an exclusion from a genre, a mood, a language or a negative mood statement. Keep an exclusion from the snapshot when the latest request does not change or reset it. Empty array when none.")));
-        List<String> required = new ArrayList<>(List.of("tags", "excludedTags", "language", "languageSpecified","excludedArtists"));
+                        "description","Only artists the user directly asked to exclude, in their original credit spelling, such as BTS 말고 or 아이유 빼줘. Never infer an exclusion from a genre, a mood, a language or a negative mood statement. Keep an exclusion from the snapshot when the latest request does not change or reset it. Empty array when none."),
+                    "inferredTags", Map.of("type","array","maxItems",16,"items",tag,
+                        "description","Genres and traits inferred only from a song or artist given as a style reference, such as 밤편지 같은 느낌. Preferences, not requirements. Omit only tags that are in excludedTags; keep the reference's other genres and traits. Empty array only when no style reference is given.")));
+        List<String> required = new ArrayList<>(List.of("tags", "excludedTags", "language", "languageSpecified","excludedArtists","inferredTags"));
         String candidateInstructions="";
         if(includeCandidates) {
             Map<String,Integer> preferences=new LinkedHashMap<>();
@@ -119,6 +126,11 @@ public class OpenAi {
                     "A reason clause that names an unwanted state states an avoidance, never a preference: 너무 조용하면 졸려 means exclude calm and never select calm; 너무 처지지 않게 excludes sad. Put the negated trait in excludedTags, not tags. " +
                     "가사ㄴㄴ, 보컬ㄴㄴ, 노래방ㄴㄴ, 가사 no and similar chat abbreviations mean no vocals, so they set language none with instrumental in tags. " +
                     "A requested artist is not a requested genre; never infer a genre constraint from an artist name or the artist's nationality. Preserve genres directly requested by the user. " +
+                    "A song or artist given as a style reference, such as 밤편지 같은 느낌 or X 같은 노래, is a song name, not a genre, mood or time-of-day request. Put genres and traits inferred from it only in inferredTags, never in tags. " +
+                    "Decades such as 90년대, 1990s or 80~2000년대 are read by the app outside this schema: never encode a decade or era as a genre or any tag. " +
+                    "When the latest request or the snapshot decades name decades, suggest only recordings first released in one of those decades. " +
+                    "Only when a song or artist is given as a style reference, always infer its characteristic genres and traits into inferredTags. Drop only the inferred tags that are themselves in excludedTags; keep every other inferred tag. " +
+                    "For example, with calm excluded, 밤편지 같은 느낌 drops calm but keeps ballad or sad. An exclusion never empties inferredTags by itself. Keep snapshot inferredTags unless the latest request changes or resets them; a genre the user names directly goes in tags. " +
                     "Use excludedTags only for directly requested negatives or unchanged explicit snapshot exclusions; never expand only or a requested genre into a complement of other tags. " +
                     "Keep explicitly requested genres even when this catalogue has no matching songs; never replace it with a different genre or silently remove it. " +
                     "J-pop/제이팝 is jpop; Japanese lyrics use language ja. City pop/시티팝 is citypop, bossa nova/보사노바 is bossa_nova. " +
@@ -151,30 +163,41 @@ public class OpenAi {
                     JsonNode payload=json.readTree(content.path("text").asString());
                     if(!(payload instanceof ObjectNode object)||!object.path("languageSpecified").isBoolean())throw new IllegalStateException("AI_LANGUAGE_UNCONFIRMED");
                     JsonNode candidates=object.remove("candidates");
-                    Recommender.Conditions conditions=conditions(object,prompt,history,previousConditions,requests);
-                    return new Plan(conditions,includeCandidates?suggestions(candidates):List.of());
+                    // 보충 요청은 조건을 쓰지 않으므로 원본 조건 로그를 남기지 않는다.
+                    Recommender.Conditions conditions=conditions(object,prompt,history,previousConditions,requests,priorProposals.isEmpty());
+                    return new Plan(conditions,includeCandidates?suggestions(candidates):List.of(),keptExclusions(object,conditions));
                 }
             }
         }
         throw new IllegalStateException("AI_EMPTY");
     }
 
-    private Recommender.Conditions conditions(ObjectNode object,String prompt,List<String> history,Recommender.Conditions previousConditions,List<String> requests) {
-        if(object.size()!=5||!object.path("tags").isArray()||!object.path("excludedTags").isArray()||!object.path("language").isString()
+    private Recommender.Conditions conditions(ObjectNode object,String prompt,List<String> history,Recommender.Conditions previousConditions,List<String> requests,boolean logRaw) {
+        // inferredTags 가 없는 응답은 추론 값이 없는 것으로 본다.
+        if(!object.has("inferredTags"))object.putArray("inferredTags");
+        if(object.size()!=6||!object.path("inferredTags").isArray()||!object.path("tags").isArray()||!object.path("excludedTags").isArray()||!object.path("language").isString()
                 ||!object.path("excludedArtists").isArray())
             throw new IllegalStateException("AI_CONDITIONS_INVALID");
-        for(String field:List.of("tags","excludedTags"))for(JsonNode tag:object.path(field))
+        for(String field:List.of("tags","excludedTags","inferredTags"))for(JsonNode tag:object.path(field))
             if(!tag.isString())throw new IllegalStateException("AI_CONDITIONS_INVALID");
         for(JsonNode artist:object.path("excludedArtists"))
             if(!artist.isString()||artist.asString().strip().isEmpty()||artist.asString().strip().length()>160)
                 throw new IllegalStateException("AI_CONDITIONS_INVALID");
         boolean languageSpecified=object.remove("languageSpecified").asBoolean();
         Recommender.Conditions raw=json.treeToValue(object,Recommender.Conditions.class);
+        // validate 가 겹치는 태그를 조용히 지우므로 원본을 먼저 복사해 둔다.
+        List<String> rawTags=List.copyOf(raw.tags),rawExcluded=List.copyOf(raw.excludedTags),rawInferred=List.copyOf(raw.inferredTags);
+        String rawLanguage=raw.language;int rawArtists=raw.excludedArtists==null?0:raw.excludedArtists.size();
+        // 연대는 사전이 decades 로 읽는다. AI가 연대를 장르로 만든 값(genre:korean_1990s)은 버린다.
+        raw.tags.removeIf(OpenAi::decadeGenre);raw.inferredTags.removeIf(OpenAi::decadeGenre);
+        // 추론 값도 조건에 들어가되 validate 에서 선호로만 분류된다.
+        for(String inferred:raw.inferredTags)if(!raw.tags.contains(inferred))raw.tags.add(inferred);
         boolean positiveUnknown=raw!=null&&raw.tags!=null&&raw.tags.contains("unsupported_genre");
         boolean conflictingUnknown=positiveUnknown&&raw.excludedTags!=null&&raw.excludedTags.contains("unsupported_genre");
         boolean genreComplement=positiveUnknown&&raw.excludedTags!=null&&Recommender.GENRES.stream()
                 .filter(tag->!tag.equals("unsupported_genre")).allMatch(raw.excludedTags::contains);
         Recommender.Conditions interpreted=Recommender.validate(raw);
+        if(logRaw)org.slf4j.LoggerFactory.getLogger(OpenAi.class).info(rawConditionsLog(rawTags,rawExcluded,rawInferred,rawLanguage,languageSpecified,rawArtists));
         if(genreComplement) {
             // Normalize only a complete supported-genre complement, preserving direct/history and snapshot exclusions.
             interpreted.excludedTags=Conversation.parse(previousConditions,history,prompt).excludedTags;
@@ -199,9 +222,9 @@ public class OpenAi {
                     ?Conversation.parse(previousConditions,history,prompt)
                     :Conversation.parse(interpreted,List.of(),prompt);
             // 부정 표현이 결과에서 사라졌다면 AI 해석을 유지한다.
-            if(missingNegation(interpreted,known))return interpreted;
+            if(missingNegation(interpreted,known))return settled(interpreted,previousConditions,history,prompt,rawTags,rawInferred);
             affected(known,interpreted);
-            return known;
+            return settled(known,previousConditions,history,prompt,rawTags,rawInferred);
         }
         // The model already interpreted reset; replay explicit overrides without erasing its new semantic tags.
         String explicit=prompt.replaceAll("(?i)(처음부터|새로 시작|조건 초기화|start over|reset)","").trim();
@@ -212,7 +235,80 @@ public class OpenAi {
         if(interpretedGenres.stream().anyMatch(value->value.startsWith("genre:"))){resolved.tags.removeIf(Recommender::genre);resolved.tags.addAll(interpretedGenres);}
         if(unlisted&&!resolved.tags.contains("unsupported_genre"))resolved.tags.add("unsupported_genre");
         affected(resolved,interpreted);
-        return Recommender.validate(resolved);
+        return settled(Recommender.validate(resolved),previousConditions,history,prompt,rawTags,rawInferred);
+    }
+
+    /**
+     * 모든 반환 경로의 마무리. AI 응답에는 지역이 없으므로 지역 표시는 사전 규칙으로만 정한다.
+     * 이어받기·덮어쓰기·"말고"·"상관없이" 해제·처음부터 초기화가 core 와 같게 동작한다.
+     */
+    private static Recommender.Conditions settled(Recommender.Conditions target,Recommender.Conditions previousConditions,List<String> history,String prompt,
+            List<String> rawTags,List<String> rawInferred) {
+        Recommender.Conditions result=inferred(target,previousConditions,history,prompt,rawTags,rawInferred);
+        Recommender.Conditions direct=Conversation.parse(previousConditions,history,prompt);
+        result.origin=direct.origin;
+        // 연대도 직접 말한 표현만 조건이 된다. AI 응답에는 연대 칸이 없다.
+        result.decades=new ArrayList<>(direct.decades);
+        return result;
+    }
+
+    /** AI 원본의 tags 와 inferredTags 중 최종 조건에서 제외로 남은 태그. 모순 조합을 안내 없이 만들지 않게 한다. */
+    private static List<String> keptExclusions(ObjectNode object,Recommender.Conditions conditions) {
+        List<String> kept=new ArrayList<>();
+        for(String field:List.of("tags","inferredTags"))for(JsonNode tag:object.path(field)) {
+            String value=tag.asString();
+            if(conditions.excludedTags.contains(value)&&!kept.contains(value))kept.add(value);
+        }
+        return kept;
+    }
+
+    /** AI 원본 조건 한 줄. 가수 이름은 사용자가 쓴 값이라 개수만 남기고, 검증 어휘가 아닌 태그는 가린다. */
+    static String rawConditionsLog(List<String> tags,List<String> excludedTags,List<String> inferredTags,String language,boolean languageSpecified,int excludedArtists) {
+        java.util.function.Function<List<String>,String> safe=values->values.stream().map(tag->Recommender.validTag(tag)?tag:"<invalid>").toList().toString();
+        return "AI conditions: tags="+safe.apply(tags)+", excludedTags="+safe.apply(excludedTags)+", inferredTags="+safe.apply(inferredTags)
+            +", language="+(Recommender.validLanguage(language)?language:"<invalid>")+", languageSpecified="+languageSpecified+", excludedArtists="+excludedArtists;
+    }
+
+    /**
+     * 이번 턴에 참고 곡·가수가 있는가: (a) AI가 inferredTags 를 냈거나 (b) 같은·처럼·스타일 바로 앞 말을 사전이 못 읽었다.
+     * 누락: "BTS 노래 같은"처럼 앞말이 사전이 지우는 일반어이고 AI도 inferredTags 를 비우면 놓친다.
+     * 오탐: "카페 같은 느낌"처럼 곡이 아닌 말을 사전이 못 읽으면 참고 곡으로 본다.
+     * 오탐이어도 사용자가 말하지 않은 사전 장르가 필수에서 선호로 내려갈 뿐이라 결과가 좁아지지는 않는다.
+     */
+    private static boolean styleReference(String prompt,List<String> rawInferred) {
+        if(!rawInferred.isEmpty())return true;
+        String input=Normalizer.normalize(prompt,Normalizer.Form.NFKC).toLowerCase(Locale.ROOT);
+        for(String word:Recommender.parse(prompt).unread)
+            if(word.matches(".+(?:같은|처럼|스타일).*")||input.matches("(?s).*"+java.util.regex.Pattern.quote(word)+"\\s*(?:같은|처럼|스타일).*"))return true;
+        return false;
+    }
+
+    private static boolean decadeGenre(String tag){return tag!=null&&tag.matches("genre:(?:.*[_-])?[0-9]{2,4}s(?:[_-].*)?");}
+
+    /**
+     * 참고 곡에서 추론한 값은 AI가 tags 로 내도, 사용자가 직접 말하지 않았다면 선호로 남긴다.
+     * 후보는 이전 턴의 inferredTags 와, 참고 곡이 있는 턴에서 AI가 tags 에만 넣은 사전 장르·연주곡이다.
+     * 동적 장르(genre:)는 직접 말해도 사전이 읽지 못하므로 옮기지 않는다. 분위기는 원래 선호라 옮길 필요가 없다.
+     * 이전 턴에 직접 말한 태그(이전 턴의 추론이 아닌 tags)는 AI가 inferredTags 에 넣어도 빼서 필수로 남긴다.
+     * 이번 문장에서 직접 말한 태그는 Conversation.parse 가 이미 inferredTags 에서 뺀다.
+     */
+    private static Recommender.Conditions inferred(Recommender.Conditions target,Recommender.Conditions previousConditions,List<String> history,String prompt,
+            List<String> rawTags,List<String> rawInferred) {
+        List<String> direct=new ArrayList<>(Recommender.parse(prompt).tags);
+        if(history!=null)for(String request:history)direct.addAll(Recommender.parse(request).tags);
+        List<String> previousInferred=previousConditions==null||previousConditions.inferredTags==null?List.of():previousConditions.inferredTags;
+        List<String> previousDirect=previousConditions==null||previousConditions.tags==null?List.of()
+                :previousConditions.tags.stream().filter(tag->!previousInferred.contains(tag)).toList();
+        List<String> candidates=new ArrayList<>(previousInferred);
+        if(styleReference(prompt,rawInferred))for(String tag:rawTags)
+            if(!rawInferred.contains(tag)&&!previousDirect.contains(tag)&&(tag.equals("instrumental")||Recommender.GENRES.contains(tag)&&!tag.equals("unsupported_genre")))
+                candidates.add(tag);
+        boolean changed=target.inferredTags.removeIf(previousDirect::contains);
+        for(String tag:candidates)
+            if(target.tags.contains(tag)&&!direct.contains(tag)&&!target.inferredTags.contains(tag)){target.inferredTags.add(tag);changed=true;}
+        if(!changed)return target;
+        target.hardTags=null;target.softTags=null;
+        return Recommender.validate(target);
     }
 
     /** 사전 해석에 부정 조건이 빠져 있으면 AI 해석을 버리지 않는다. */
@@ -237,10 +333,12 @@ public class OpenAi {
     private List<Suggestion> suggestions(JsonNode candidates) {
         // ponytail: legacy condition-only responses remain valid but cannot expand the catalogue.
         if(candidates==null)return List.of();
-        if(!candidates.isArray()||candidates.size()>12)throw new IllegalStateException("AI_CANDIDATES_INVALID");
+        if(!candidates.isArray())throw new IllegalStateException("AI_CANDIDATES_INVALID");
+        // 12곡을 넘긴 답은 앞의 12곡만 쓴다. 초과분 때문에 추천 전체를 실패시키지 않는다.
+        if(candidates.size()>12)org.slf4j.LoggerFactory.getLogger(OpenAi.class).warn("AI proposed {} songs; using the first 12",candidates.size());
         List<Suggestion> result=new ArrayList<>();int skipped=0;
-        for(JsonNode row:candidates) {
-            Suggestion song=suggestion(row);
+        for(int i=0;i<Math.min(12,candidates.size());i++) {
+            Suggestion song=suggestion(candidates.get(i));
             // One malformed suggestion is left out instead of failing the whole recommendation.
             if(song==null)skipped++;else result.add(song);
         }
