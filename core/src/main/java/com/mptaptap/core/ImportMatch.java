@@ -40,6 +40,8 @@ public final class ImportMatch {
     /** Featured-artist credits ("(feat. X)", "[ft. X]", " feat. X") name collaborators, not a different song. */
     private static final Pattern FEATURE=Pattern.compile("(?i)^[(\\[]?\\s*(?:feat\\.?|ft\\.?|featuring)\\s");
     private static final Pattern TRAILING_FEATURE=Pattern.compile("(?i)\\s(?:feat\\.?|ft\\.?|featuring)\\s.+$");
+    private static final Pattern VIDEO_LABEL=Pattern.compile("(?i)\\s*[(\\[][^)\\]]*(?:official|video|lyrics?|audio|visuali[sz]er|\\bm/?v\\b|가사|뮤직\\s*비디오)[^)\\]]*[)\\]]");
+    private static final Pattern ACT_PREFIX=Pattern.compile("^(.+?)\\s+[-–—]\\s+(.+)$"),CHANNEL_SUFFIX=Pattern.compile("(?i)\\s*(?:-\\s*topic|vevo|official)$");
     private static final Pattern CREDIT_SPLIT=Pattern.compile("(?i)\\s*(?:,|&|/|;|\\bfeat\\.?|\\bft\\.?|\\bfeaturing\\b|\\bwith\\b|\\bx\\b)\\s*");
     private ImportMatch() {}
 
@@ -64,6 +66,7 @@ public final class ImportMatch {
 
     private static Candidate score(PlatformTrack source,PlatformTrack track) {
         Candidate candidate=new Candidate();candidate.track=track;
+        PlatformTrack original=source;source=asSong(source,track.artist);track=asSong(track,original.artist);
         String sourceIsrc=isrc(source.isrc),targetIsrc=isrc(track.isrc);
         boolean external=!clean(source.platform).isEmpty()&&clean(source.platform).equals(clean(track.platform))
                 &&!value(source.externalId).isEmpty()&&value(source.externalId).equals(value(track.externalId));
@@ -91,6 +94,20 @@ public final class ImportMatch {
             else if(difference>10000){candidate.conflict=true;if(!candidate.identity)candidate.score-=100;candidate.reasons.add("재생 시간 차이 확인 필요");}
         }
         return candidate;
+    }
+    /** A YouTube video named "Act - Song (Official Video)" on channel "Act Official", read as the song "Song" by "Act". */
+    private static PlatformTrack asSong(PlatformTrack track,String otherAct) {
+        if(!clean(track.platform).equals("youtube"))return track;
+        String artist=CHANNEL_SUFFIX.matcher(value(track.artist)).replaceAll(""),title=VIDEO_LABEL.matcher(value(track.title)).replaceAll("").trim();
+        Matcher named=ACT_PREFIX.matcher(title);
+        if(named.matches()) {
+            java.util.Set<String> act=credits(named.group(1));
+            if(!credits(artist).isEmpty()&&act.containsAll(credits(artist))||!credits(otherAct).isEmpty()&&act.containsAll(credits(otherAct)))title=named.group(2);
+        }
+        PlatformTrack song=new PlatformTrack();
+        song.platform=track.platform;song.externalId=track.externalId;song.isrc=track.isrc;song.title=title;song.artist=artist;
+        song.version=track.version;song.album=track.album;song.sourceUrl=track.sourceUrl;song.artworkUrl=track.artworkUrl;song.durationMs=track.durationMs;
+        return song;
     }
     private static String version(PlatformTrack track) {
         StringBuilder key=new StringBuilder(clean(track.version));Matcher qualifier=QUALIFIER.matcher(value(track.title));
