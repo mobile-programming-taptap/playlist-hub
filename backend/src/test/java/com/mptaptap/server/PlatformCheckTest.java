@@ -677,6 +677,7 @@ class PlatformCheckTest {
         private Map<String,Object> spotifyTrack(String id){return Map.of("id",id,"type","track","name","Song","artists",List.of(Map.of("name","Artist")),"duration_ms",180000,"external_ids",Map.of("isrc","USABC1234567"),"album",Map.of("name","Album","images",List.of(Map.of("url","https://untrusted.invalid/image","width",1024),
                 Map.of("url","https://i.scdn.co/image/"+"b".repeat(40),"width",64),Map.of("url",ARTWORK,"width",640))));}
         private Map<String,Object> youtubeRow(int position,String id,String title,String artist){return Map.of("contentDetails",Map.of("videoId",id),"snippet",Map.of("position",position,"title",title,"videoOwnerChannelTitle",artist));}
+        private boolean assertSearchWidth(HttpExchange exchange){assertTrue(exchange.getRequestURI().getRawQuery().contains("maxResults=25"),exchange.getRequestURI().getRawQuery());return true;}
         private void serve(HttpExchange exchange) {
             try {
                 String path=exchange.getRequestURI().getPath(),method=exchange.getRequestMethod();
@@ -705,7 +706,8 @@ class PlatformCheckTest {
                 else if(path.equals("/spotify/playlists/"+TARGET+"/items")&&method.equals("GET"))response=Map.of("items",remoteItems.stream().map(id->Map.of("item",spotifyTrack(id))).toList());
                 else if(path.equals("/spotify/playlists/"+TARGET+"/items")&&method.equals("POST")){String uri=value.path("uris").get(0).asString();assertEquals("spotify:track:"+SONG,uri);remoteItems.add(SONG);if(adds.incrementAndGet()==1){lost(exchange);return;}response=Map.of("snapshot_id","snapshot");}
                 else if(path.equals("/youtube/channels"))response=Map.of("items",noYoutubeChannel.get()?List.of():List.of(Map.of("id","channel-owner")));
-                else if(path.equals("/youtube/search"))response=Map.of("items",List.of(Map.of("id",Map.of("videoId",VIDEO),"snippet",Map.of("title","Song","channelTitle","Artist"))));
+                // One search costs the same quota for 5 or 25 results; the wider list keeps the official video in reach.
+                else if(path.equals("/youtube/search")&&assertSearchWidth(exchange))response=Map.of("items",List.of(Map.of("id",Map.of("videoId",VIDEO),"snippet",Map.of("title","Song","channelTitle","Artist"))));
                 else if(path.equals("/youtube/playlists")&&method.equals("POST")){assertEquals("private",value.path("status").path("privacyStatus").asString());marker=value.path("snippet").path("description").asString();creates.incrementAndGet();lost(exchange);return;}
                 else if(browsePlaylists.get()&&path.equals("/youtube/playlists")&&method.equals("GET")&&query(exchange.getRequestURI(),"mine").equals("true")){
                     assertEquals("Bearer google-access",exchange.getRequestHeaders().getFirst("Authorization"));assertEquals("snippet,status,contentDetails",query(exchange.getRequestURI(),"part"));assertEquals("50",query(exchange.getRequestURI(),"maxResults"));assertEquals("",query(exchange.getRequestURI(),"id"));assertFalse(exchange.getRequestURI().getRawQuery().contains("&mine=false"));

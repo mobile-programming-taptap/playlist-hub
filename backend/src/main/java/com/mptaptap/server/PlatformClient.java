@@ -324,7 +324,7 @@ public class PlatformClient {
             if(source.isrc!=null&&!source.isrc.isEmpty())query="isrc:"+source.isrc;
             for(JsonNode row:api(provider,"GET","/search?type=track&limit=10&q="+encode(query),tokens.accessToken(),null).path("tracks").path("items"))result.add(spotifyTrack(row));
         }else {
-            for(JsonNode row:youtubeLookup("/search?part=snippet&type=video&maxResults=5&q="+encode(query),tokens==null?null:tokens.accessToken()).path("items")) {
+            for(JsonNode row:youtubeLookup("/search?part=snippet&type=video&maxResults=25&q="+encode(query),tokens==null?null:tokens.accessToken()).path("items")) {
                 String id=row.path("id").path("videoId").asString("");if(id.matches("[A-Za-z0-9_-]{11}"))result.add(track(provider,id,org.springframework.web.util.HtmlUtils.htmlUnescape(row.path("snippet").path("title").asString("")),org.springframework.web.util.HtmlUtils.htmlUnescape(row.path("snippet").path("channelTitle").asString("")),0,"",""));
             }
         }

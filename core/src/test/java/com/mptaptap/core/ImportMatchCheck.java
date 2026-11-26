@@ -108,6 +108,9 @@ public final class ImportMatchCheck {
         source=track("youtube","","Bohemian Rhapsody","Queen");
         video=ImportMatch.match(source,List.of(track("youtube","yDDDDDDDDDD","Queen – Bohemian Rhapsody (Official Video)","Queen Official")));
         assert video.status==ImportMatch.Status.MATCHED:video.status;
+        source=track("youtube","","Blinding Lights","The Weeknd");
+        video=ImportMatch.match(source,List.of(track("youtube","yFFFFFFFFFF","The Weeknd - Blinding Lights (Official Video)","TheWeekndVEVO")));
+        assert video.status==ImportMatch.Status.MATCHED:video.status;
         // A song whose own title contains " - " is not cut when the part before it is not the act.
         source=track("youtube","","Yellow","Coldplay");
         video=ImportMatch.match(source,List.of(track("youtube","yEEEEEEEEEE","Mellow - Yellow (Official Video)","Coldplay")));

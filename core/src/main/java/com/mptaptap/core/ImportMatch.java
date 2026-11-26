@@ -99,6 +99,8 @@ public final class ImportMatch {
     private static PlatformTrack asSong(PlatformTrack track,String otherAct) {
         if(!clean(track.platform).equals("youtube"))return track;
         String artist=CHANNEL_SUFFIX.matcher(value(track.artist)).replaceAll(""),title=VIDEO_LABEL.matcher(value(track.title)).replaceAll("").trim();
+        // Channels often drop spaces: "TheWeekndVEVO" is "The Weeknd".
+        if(!clean(otherAct).isEmpty()&&clean(artist).replace(" ","").equals(clean(otherAct).replace(" ","")))artist=otherAct;
         Matcher named=ACT_PREFIX.matcher(title);
         if(named.matches()) {
             java.util.Set<String> act=credits(named.group(1));
