@@ -283,10 +283,11 @@ public class PlatformApi {
         try{job=store.document(u,id,"transfer");}catch(ResponseStatusException removed){return;}if("COMPLETED".equals(job.get("status")))return;job.put("status","RUNNING");store.update(u,id,"transfer",job);String p=(String)job.get("provider");
         try{
             PlatformClient.Tokens token=token(u,p);String playlist=(String)job.get("externalPlaylistId");if(!store.exists(u,id,"transfer"))return;
+            boolean created=false;
             if(playlist.isEmpty()){
                 String found=remote.findCreated(p,"TapTap transfer "+id,token);if(!found.isEmpty())playlist=found;
                 else if(Boolean.TRUE.equals(job.get("createStarted"))){job.put("status","UNKNOWN");job.put("notice","목록 생성 결과를 확인하지 못했어요. 새 목록을 중복 생성하지 않고 원격 상태 확인을 기다립니다.");store.update(u,id,"transfer",counted(job));return;}
-                else{job.put("createStarted",true);store.update(u,id,"transfer",job);if(!store.exists(u,id,"transfer"))return;playlist=remote.createPrivate(p,(String)job.get("title"),"TapTap transfer "+id,token);}
+                else{job.put("createStarted",true);store.update(u,id,"transfer",job);if(!store.exists(u,id,"transfer"))return;playlist=remote.createPrivate(p,(String)job.get("title"),"TapTap transfer "+id,token);created=true;}
                 job.put("externalPlaylistId",playlist);job.put("playlistUrl",PlatformClient.playlistUrl(p,playlist));store.update(u,id,"transfer",job);
             }
             if(!remote.ensurePrivate(p,playlist,token)){
@@ -294,7 +295,8 @@ public class PlatformApi {
                 org.slf4j.LoggerFactory.getLogger(PlatformApi.class).warn("Transfer {}: playlist stayed public; no songs added",id);
                 store.update(u,id,"transfer",counted(job));return;
             }
-            List<String> existing=remote.existingIds(p,playlist,token);List<Map<String,Object>> rows=items(job,"items");
+            // A playlist made in this run is empty, and YouTube may not list it yet (404 playlistNotFound).
+            List<String> existing=created?List.of():remote.existingIds(p,playlist,token);List<Map<String,Object>> rows=items(job,"items");
             boolean prefix=existing.size()<=rows.size();for(int i=0;prefix&&i<existing.size();i++)prefix=existing.get(i).equals(rows.get(i).get("targetId"));
             if(!prefix){job.put("status","UNKNOWN");job.put("notice","원격 목록의 순서가 바뀌었어요. 항목을 중복 추가하거나 덮어쓰지 않고 확인을 기다립니다.");store.update(u,id,"transfer",counted(job));return;}
             for(int i=0;i<existing.size();i++){rows.get(i).put("status","ADDED");rows.get(i).put("message","");}
@@ -306,7 +308,10 @@ public class PlatformApi {
                 store.update(u,id,"transfer",counted(job));
             }
             boolean complete=rows.stream().allMatch(r->"ADDED".equals(r.get("status")));job.put("status",complete?"COMPLETED":rows.stream().anyMatch(r->"UNKNOWN".equals(r.get("status")))?"UNKNOWN":"PARTIAL");job.put("notice",complete?"플랫폼 목록에 저장했어요.":"항목별 상태를 확인하세요. 응답이 유실된 항목은 원격 조회로 확인하며 중복 전송하지 않습니다. 한 번에 최대 20곡을 처리합니다.");
-        }catch(PlatformClient.Failure failure){if(failure.status>=400&&failure.status<500&&((String)job.get("externalPlaylistId")).isEmpty())job.put("createStarted",false);job.put("status","PARTIAL");job.put("notice",failure.getMessage());}
+        }catch(PlatformClient.Failure failure){
+            StackTraceElement at=java.util.Arrays.stream(failure.getStackTrace()).filter(frame->frame.getClassName().startsWith("com.mptaptap")).findFirst().orElse(null);
+            org.slf4j.LoggerFactory.getLogger(PlatformApi.class).warn("Transfer {}: stopped with status {} at {}",id,failure.status,at);
+            if(failure.status>=400&&failure.status<500&&((String)job.get("externalPlaylistId")).isEmpty())job.put("createStarted",false);job.put("status","PARTIAL");job.put("notice",failure.getMessage());}
         catch(RuntimeException error){job.put("status","UNKNOWN");job.put("notice","원격 상태를 확인하지 못했어요. 같은 작업으로 다시 상태를 확인해 주세요.");}
         List<Map<String,Object>> outcome=items(job,"items");
         org.slf4j.LoggerFactory.getLogger(PlatformApi.class).info("Transfer {}: provider={}, status={}, added={}/{}, failed={}, notice={}",id,job.get("provider"),job.get("status"),
