@@ -623,6 +623,27 @@ public class HubFlowCheckTest {
         });
     }
 
+    @Test public void aTransferRejectedBeforeItStartsReturnsToTheSendButton() throws Exception {
+        AtomicInteger posts=new AtomicInteger();
+        exportFixture((method,path,body,status)->{
+            if(path.equals("/connections"))return new JSONArray().put(new JSONObject().put("provider","spotify").put("connected",true));
+            if(path.equals("/imports/playlists"))return exportImport(body);
+            if(path.equals("/matches"))return exportMatches(body,-1);
+            if(path.startsWith("/matches/")&&method.equals("PUT")){JSONObject review=exportMatches(new JSONObject().put("importId",path.substring(9)),-1);JSONArray rows=review.getJSONArray("items");for(int i=0;i<rows.length();i++)rows.getJSONObject(i).put("approved",true);return review;}
+            if(path.equals("/transfers")){posts.incrementAndGet();status[0]=409;return new JSONObject().put("message","음악 서비스 인증이 만료됐어요. 계정 메뉴에서 Spotify를 다시 연결해 주세요.");}
+            return null;
+        },app->{
+            onView(withText("다른 플랫폼으로 보내기")).perform(scrollTo(),click());ready(app);
+            onView(withText("Spotify로 3곡 보내기")).perform(click());ready(app);
+            onView(withText("전송")).perform(click());ready(app);
+            assertEquals(1,posts.get());
+            // No job exists on the server, so a status check would only answer "not found".
+            onView(withText("전송 상태 확인")).check(doesNotExist());
+            onView(withText("Spotify로 3곡 보내기")).check(matches(isDisplayed()));
+            onView(withText("음악 서비스 다시 연결")).perform(scrollTo()).check(matches(isDisplayed()));
+        });
+    }
+
     @Test public void titleOnlyTimelineSavesAndFindsCandidatesInTheExportScreen() throws Exception {
         AtomicReference<String> id=new AtomicReference<>();AtomicInteger saves=new AtomicInteger(),matches=new AtomicInteger();AtomicReference<JSONArray> savedEntries=new AtomicReference<>();
         String url="https://www.youtube.com/watch?v=0Y41XMkfROU";

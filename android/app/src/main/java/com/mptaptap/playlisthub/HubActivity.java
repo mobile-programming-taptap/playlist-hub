@@ -896,7 +896,7 @@ public final class HubActivity extends AppCompatActivity {
                 put("saveId",value.optString("id"));setResult(RESULT_OK,new Intent().putExtra("playlistId",value.optString("id")));put("selections",new JSONArray());if(exportMatching())return;send("review","POST","/matches",json("importId",value("importId"),"targetProvider",provider("targetProvider")));return;
             case "reviewSaved":
                 put("review",value);dialog().setTitle("확인한 곡을 전송할까요?").setMessage("선택한 곡으로 "+providerName(provider("targetProvider"))+"에 ‘"+value("listTitle").trim()+"’ 목록을 만들어요. 제외한 곡은 보내지 않아요."+(value("screen").equals("export")?"\n자동 선택 "+ExportReview.autoCount(array("selections"))+"곡 포함":""))
-                    .setPositiveButton("전송",(d,w)->{String key=transferKey();if(!key.equals(value("transferKey"))||value("transferId").isEmpty()){put("transferKey",key);put("transferId",UUID.randomUUID().toString());}transferPolls=0;put("screen","transfer");render();send("transfer","POST","/transfers",json("id",value("transferId"),"importId",value("importId"),"targetProvider",provider("targetProvider"),"title",value("listTitle").trim(),"confirmed",true));}).setNegativeButton("취소",null).show();return;
+                    .setPositiveButton("전송",(d,w)->{String key=transferKey();if(!key.equals(value("transferKey"))||value("transferId").isEmpty()){put("transferKey",key);put("transferId",UUID.randomUUID().toString());}transferPolls=0;put("transferFrom",value("screen"));put("screen","transfer");render();send("transfer","POST","/transfers",json("id",value("transferId"),"importId",value("importId"),"targetProvider",provider("targetProvider"),"title",value("listTitle").trim(),"confirmed",true));}).setNegativeButton("취소",null).show();return;
             case "transfer":put("transfer",value);put("screen","transfer");scheduleTransferRefresh();break;
             case "sync":put("sync",value);put("screen","sync");break;
             case "syncApplied":put("imported",value);put("screen","preview");put("edits",new JSONArray());break;
@@ -932,6 +932,8 @@ public final class HubActivity extends AppCompatActivity {
         if(route.equals("historyDeleted")&&error instanceof ApiClient.ApiError&&((ApiClient.ApiError)error).statusCode==404){delivered(route,new JSONObject());return;}
         String message=error instanceof ApiClient.ApiError?error.getMessage():"서버와 연결하지 못했어요. 연결 상태를 확인하고 다시 시도해 주세요.";
         if(route.equals("batchImport")){JSONObject row=find(array("batchImports"),"requestId",value("batchActiveId"));if(row!=null){set(row,"status","FAILED");set(row,"notice",message);}put("screen","batch");render();message("가져오기를 멈췄어요. 저장한 목록은 유지되며 남은 목록만 다시 가져올 수 있어요.");return;}
+        // A rejected start leaves no job to check, so go back to the send button.
+        if(route.equals("transfer")&&requests.data.optJSONObject("transfer")==null&&!value("transferFrom").isEmpty()){put("screen",value("transferFrom"));render();}
         if(error instanceof ApiClient.ApiError&&((ApiClient.ApiError)error).statusCode==409&&message.contains("다시 연결")){message(message);showRecovery("음악 서비스 다시 연결",()->{mode="account";put("screen","account");render();reload();});return;}
         if(route.equals("library")){put("screen","library");render();message(message);return;}
         if(route.equals("individualMatch")||route.equals("individualRestore")){put("exportStopped","true");render();message(message);return;}

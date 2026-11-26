@@ -88,7 +88,7 @@ public class PlatformApi {
     private PlatformClient.Tokens token(String u,String p){synchronized(users.ownerLock(u)){
         p=provider(p);
         PlatformClient.Tokens token=store.tokens(u,p);
-        if(!token.expiresAt().isAfter(Instant.now().plusSeconds(30))){try{token=remote.refresh(p,token);store.connection(u,p,token);}catch(PlatformClient.Failure failure){if(failure.status==400||failure.status==401)throw new ResponseStatusException(HttpStatus.CONFLICT,"음악 서비스 인증이 만료됐어요. 계정 메뉴에서 "+(p.equals("youtube")?"YouTube Music":"Spotify")+"을 다시 연결해 주세요.");throw failure;}}return token;
+        if(!token.expiresAt().isAfter(Instant.now().plusSeconds(30))){try{token=remote.refresh(p,token);store.connection(u,p,token);}catch(PlatformClient.Failure failure){if(failure.status==400||failure.status==401)throw new ResponseStatusException(HttpStatus.CONFLICT,"음악 서비스 인증이 만료됐어요. 계정 메뉴에서 "+(p.equals("youtube")?"YouTube Music을":"Spotify를")+" 다시 연결해 주세요.");throw failure;}}return token;
     }}
     public record Conversion(String id,String url,String timeline,Integer durationSeconds){}
     @PostMapping("/conversions/youtube") public Map<String,Object> conversion(@RequestHeader(value="Authorization",required=false)String auth,@RequestBody Conversion body){return withOwner(auth,u->{
