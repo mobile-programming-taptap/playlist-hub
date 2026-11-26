@@ -50,6 +50,14 @@ public final class ImportMatchCheck {
         timeline=VideoTimeline.parse(description.toString(),"",10000);
         assert timeline.entries.size()==100&&timeline.truncated&&timeline.entries.get(99).endSeconds==-1;
         assert VideoTimeline.parse("No timestamps, no invented tracks.","").entries.isEmpty();
+        // Descriptions and comments often put the time after the song; automatic parsing must read that layout too.
+        timeline=VideoTimeline.parseAutomatic("Coldplay - Yellow 0:00\nAdele - Hello 4:30\n3. Queen - Bohemian Rhapsody (9:10)","12345678901",1200);
+        assert timeline.entries.size()==3&&timeline.entries.get(0).title.equals("Yellow")&&timeline.entries.get(2).seconds==550:timeline.entries.size();
+        // A stray time line before a leading-time list must not win over that list.
+        timeline=VideoTimeline.parseAutomatic("광고 제거 2:59\n0:00 Artist - First\n1:00 Artist - Second","12345678901",600);
+        assert timeline.entries.size()==2&&timeline.entries.get(0).title.equals("First"):timeline.entries.size();
+        // A time inside a sentence is not a track.
+        assert VideoTimeline.parseAutomatic("광고 제거 2:59 리플레이 버튼을 눌러주세요","12345678901",600).entries.isEmpty();
         expectInvalid(()->VideoTimeline.parse("x".repeat(65537),""));
         expectInvalid(()->VideoTimeline.parse("00:00 "+"x".repeat(2000),""));
         expectInvalid(()->VideoTimeline.parse("00:00 Track","bad&video=1"));

@@ -15,6 +15,8 @@ public final class VideoTimeline {
     private static final Pattern TIME=Pattern.compile("(?<![\\d:])\\d{1,4}(?:[\\p{Z}\\t]*:[\\p{Z}\\t]*\\d{1,3}){1,3}(?![\\d:])");
     private static final Pattern ROW_PREFIX=Pattern.compile("[\\[({#*•·-]*\\s*(?:\\d{1,3}[.)]?)?\\s*");
     private static final Pattern RANGE_SEPARATOR=Pattern.compile("[\\p{Z}\\s\\]}):]*[~～∼–—-][\\p{Z}\\s]*");
+    private static final Pattern TRAILING_CLOSE=Pattern.compile("[\\p{Z}\\s\\])}.,;]*"),TRAILING_NUMBER=Pattern.compile("^[\\[({#*•·-]*\\s*\\d{1,3}[.)]\\s*"),
+            TRAILING_OPEN=Pattern.compile("[\\p{Z}\\s\\[({|:;,–—-]+$");
     private static final Pattern SEPARATOR=Pattern.compile("\\s*[–—|]\\s*|\\s+[-/]\\s+|\\s+(?i:by)\\s+");
     private static final Pattern TITLE_FIRST=Pattern.compile("(?i)^(?:title|곡명|제목)\\s*:\\s*(.+?)\\s*[|;/]\\s*(?:artist|아티스트|가수)\\s*:\\s*(.+)$");
     private static final Pattern ARTIST_FIRST=Pattern.compile("(?i)^(?:artist|아티스트|가수)\\s*:\\s*(.+?)\\s*[|;/]\\s*(?:title|곡명|제목)\\s*:\\s*(.+)$");
@@ -33,13 +35,15 @@ public final class VideoTimeline {
     }
 
     public static Result parse(String description,String videoId) { return parse(description,videoId,-1); }
+    /** Reads lists with the time first ("0:00 Song") or last ("Song 0:00") and keeps whichever finds more songs. */
     public static Result parseAutomatic(String description,String videoId,int durationSeconds) {
-        return parse(description,videoId,durationSeconds,true);
+        Result leading=parse(description,videoId,durationSeconds,true,false),trailing=parse(description,videoId,durationSeconds,true,true);
+        return trailing.entries.size()>leading.entries.size()?trailing:leading;
     }
     public static Result parse(String description,String videoId,int durationSeconds) {
-        return parse(description,videoId,durationSeconds,false);
+        return parse(description,videoId,durationSeconds,false,false);
     }
-    private static Result parse(String description,String videoId,int durationSeconds,boolean automatic) {
+    private static Result parse(String description,String videoId,int durationSeconds,boolean automatic,boolean trailing) {
         if(description==null||description.length()>MAX_DESCRIPTION_CHARS||durationSeconds< -1
                 ||videoId==null||(!videoId.isEmpty()&&!videoId.matches("[A-Za-z0-9_-]{11}")))
             throw new IllegalArgumentException("영상 ID와 설명 길이를 확인해 주세요.");
@@ -53,9 +57,15 @@ public final class VideoTimeline {
             int begin=time.start(),end=time.end();
             String before=normalized.substring(0,begin).trim();
             if(ROW_PREFIX.matcher(before).matches()&&!(begin>0&&normalized.charAt(begin-1)=='-'))before="";
-            if(automatic&&(!before.isEmpty()||row.length()>MAX_ROW_CHARS))continue;
+            if(automatic&&(trailing==before.isEmpty()||row.length()>MAX_ROW_CHARS))continue;
             Entry entry=new Entry();entry.sourceRow=row;entry.sourceLine=lineNumber;entry.timestamp=time.group();
             entry.seconds=seconds(entry.timestamp);entry.startSeconds=entry.seconds;
+            if(trailing) {
+                // The time must close the row: "Artist - Title 0:00" or "3. Artist - Title (0:00)".
+                if(time.find()||!TRAILING_CLOSE.matcher(normalized.substring(end)).matches())continue;
+                parseSong(entry,spaces(TRAILING_OPEN.matcher(TRAILING_NUMBER.matcher(before).replaceFirst("")).replaceFirst("")));
+                if(entry.title.isEmpty()||entry.seconds<=previous||durationSeconds>=0&&entry.seconds>=durationSeconds)continue;
+            } else {
             if(begin>0&&normalized.charAt(begin-1)=='-')entry.seconds=entry.startSeconds=-1;
             if(entry.seconds<0)entry.review("시간 형식 확인");
             if(time.find()) {
@@ -70,6 +80,7 @@ public final class VideoTimeline {
             String after=normalized.substring(end).replaceFirst("^[\\p{Z}\\s\\]})|:;,-]+","").trim();
             parseSong(entry,spaces(before+" "+after));
             if(automatic&&(entry.title.isEmpty()||entry.seconds<=previous||durationSeconds>=0&&entry.seconds>=durationSeconds))continue;
+            }
             if(result.entries.size()==MAX_ENTRIES) { result.truncated=true; break; }
             if(entry.title.isEmpty())entry.review("곡명 누락");
             if(entry.artist.isEmpty())entry.review("아티스트 누락");
